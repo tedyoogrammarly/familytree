@@ -1804,7 +1804,6 @@ const Drawer = {
       ? eth.map(c => `<span class="kv-eth"><span class="kv-flag">${flagFor(c) || '🏳️'}</span> ${escape(ETH_BY_CODE[c]?.name || c)}</span>`).join('')
       : '—';
     $('#kv-role').textContent = capitalize(m.role);
-    $('#kv-username').textContent = m.username;
 
     // relations
     const rels = Tree.relations(m);
@@ -2441,14 +2440,7 @@ const AdminView = {
               </div>
             </div>
           </td>
-          <td>
-            <span class="username-cell">
-              <code data-username-display>${escape(m.username)}</code>
-              <button class="username-edit" data-action="edit-username" title="Edit username">
-                <svg viewBox="0 0 16 16" width="11" height="11" fill="none"><path d="M11 2l3 3-9 9H2v-3l9-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-              </button>
-            </span>
-          </td>
+          <td>${m.email ? `<code>${escape(m.email)}</code>` : '<span class="muted">—</span>'}</td>
           <td><span class="role-pill ${m.role}">${m.role}</span></td>
           <td>${m.group ? escape(m.group) : '—'}</td>
           <td>${m.birthday ? formatDate(m.birthday) : '—'}</td>
@@ -2471,13 +2463,11 @@ const AdminView = {
         if (action === 'edit')          { Drawer.open(id); setTimeout(() => Drawer.startEdit(), 50); }
         else if (action === 'reset')    { await this.resetPassword(m); }
         else if (action === 'delete')   { this.deleteMember(m); }
-        else if (action === 'edit-username') { this.editUsername(tr, m); }
       });
     });
     $('#admin-rows').querySelectorAll('tr').forEach(tr => {
       tr.addEventListener('click', (e) => {
         if (e.target.closest('button')) return;
-        if (e.target.closest('.username-cell input')) return;
         if (tr.dataset.id) Drawer.open(tr.dataset.id);
       });
     });
@@ -2589,39 +2579,6 @@ const AdminView = {
     Tree.remove(m.id);
     this.render();
     Canvas.renderAll();
-  },
-  editUsername(tr, m) {
-    const cell = tr.querySelector('.username-cell');
-    if (!cell || cell.querySelector('input')) return;
-    const code = cell.querySelector('code');
-    const editBtn = cell.querySelector('.username-edit');
-    code.hidden = true;
-    if (editBtn) editBtn.hidden = true;
-    const input = document.createElement('input');
-    input.className = 'input';
-    input.value = m.username;
-    input.style.maxWidth = '180px';
-    cell.appendChild(input);
-    input.focus();
-    input.select();
-    const finish = (commit) => {
-      const next = input.value.trim().toLowerCase();
-      if (!commit) { this.render(); return; }
-      if (!next) { toast('Username cannot be empty.', 'warn'); return; }
-      if (!/^[a-z0-9._-]+$/.test(next)) { toast('Only lowercase letters, digits, dot, underscore, dash.', 'warn'); return; }
-      if (next === m.username) { this.render(); return; }
-      const taken = Store.membersList().some(x => x.id !== m.id && x.username === next);
-      if (taken || next === 'admin') { toast('That username is taken.', 'warn'); return; }
-      m.username = next;
-      Store.save();
-      toast('Username updated.');
-      this.render();
-    };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter')  { e.preventDefault(); finish(true); }
-      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    });
-    input.addEventListener('blur', () => finish(true));
   },
   exportCSV() {
     const list = this.visibleMembers();
@@ -5948,21 +5905,58 @@ const UserChip = {
   },
 };
 
-// Admin path: trigger Supabase to email the member a password reset link.
-// We can't set another user's password from the anon client (that needs the
-// service_role secret), but resetPasswordForEmail works with the anon key —
-// the user clicks the link in their inbox and lands back on the site, where
-// ChangePasswordModal's recovery mode picks up the token.
+// Admin "Reset PW" button. Behaves intelligently based on whether the member
+// actually has a Supabase Auth user yet:
+//   - has login → send a password reset email
+//   - no login  → offer to create the login (otherwise resetPasswordForEmail
+//                 silently no-ops for unknown emails, which is what was
+//                 happening before — Supabase deliberately doesn't reveal
+//                 whether an email is registered, so we have to detect this
+//                 ourselves via member_accounts).
 async function sendAdminResetEmail(m) {
   if (!Auth.isAdmin()) return;
   if (!m) return;
   if (!m.email) {
-    toast('Add an email to this member first — the reset link is sent there.', 'warn');
+    toast('Add an email to this member first — accounts are tied to email.', 'warn');
     return;
   }
-  if (!confirm(`Send a password reset email to ${m.email}?\n\nThey'll get a link to set a new password.`)) return;
+  // Probe member_accounts to see whether this member has an auth user linked.
+  const { data: link, error } = await Backend.client
+    .from('member_accounts')
+    .select('user_id')
+    .eq('member_id', m.id)
+    .maybeSingle();
+  if (error) { toast('Could not check login state: ' + error.message, 'warn'); return; }
+
+  if (!link) {
+    // No login yet — pre-existing member from before the auto-mirror feature.
+    if (!confirm(`${m.firstName} doesn't have a Supabase login yet.\n\nCreate one now with email ${m.email}? A password will be generated and shown for you to share.`)) return;
+    const password = randomPassword();
+    const r = await Backend.createMemberAccount({
+      email: m.email,
+      password,
+      memberId: m.id,
+      isAdmin: false,
+    });
+    if (r.ok) {
+      showCredentials({
+        email: m.email,
+        password,
+        title: 'Login created',
+        note: r.needsConfirmation
+          ? 'They must click the confirmation link in their email before signing in. Share the password too — they’ll need it after confirming.'
+          : 'Share these with the family member. They can change their password after signing in.',
+      });
+    } else {
+      toast('Could not create login: ' + r.reason, 'warn');
+    }
+    return;
+  }
+
+  // Has login — send the reset email.
+  if (!confirm(`Send a password reset email to ${m.email}?`)) return;
   const r = await Backend.sendPasswordReset(m.email);
-  if (r.ok) toast(`Reset link sent to ${m.email}.`);
+  if (r.ok) toast(`Reset link sent to ${m.email}. (Tell them to check spam if it doesn't arrive in a minute.)`);
   else      toast('Could not send reset: ' + r.reason, 'warn');
 }
 
