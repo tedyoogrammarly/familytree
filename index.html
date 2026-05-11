@@ -8,6 +8,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+
+  <!-- Supabase JS client (v2, UMD build). Exposes `window.supabase`. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script>
+    // Public anon key. Safe to commit — protected by RLS policies on the
+    // archive + member_accounts tables (see supabase/schema.sql).
+    window.SUPABASE_URL = 'https://inwutpebjqaakinybhwu.supabase.co';
+    window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlud3V0cGVianFhYWtpbnliaHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0ODA3NDgsImV4cCI6MjA5NDA1Njc0OH0.JvzkwmacCDIYQz0CndXVM29OlR0HPZ8E1gCQ41E2Dj0';
+  </script>
 </head>
 <body>
 
@@ -32,20 +41,24 @@
 
       <form id="login-form" class="auth-form" autocomplete="on" novalidate>
         <label class="field">
-          <span>Username</span>
-          <input name="username" type="text" autocomplete="username" required />
+          <span>Email</span>
+          <input name="email" type="email" autocomplete="email" required />
         </label>
         <label class="field">
           <span>Password</span>
-          <input name="password" type="password" autocomplete="current-password" required />
+          <input name="password" type="password" autocomplete="current-password" required minlength="6" />
         </label>
         <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
-        <button class="btn btn-primary btn-lg" type="submit">Sign in</button>
+        <button class="btn btn-primary btn-lg" type="submit" id="btn-login-submit">Sign in</button>
+        <button class="btn btn-ghost" type="button" id="btn-login-toggle">Need an account? Sign up</button>
 
         <details class="auth-help">
           <summary>First time here?</summary>
-          <p>If this is a fresh install, sign in with <strong>admin</strong> / <strong>admin</strong>. You'll be prompted to change the password.</p>
-          <p><button type="button" id="btn-reset-data" class="link-btn">Reset all local data</button></p>
+          <p>The first person to sign up becomes the admin automatically. After that, admins create accounts for the rest of the family.</p>
+          <p id="auth-import-row" hidden>
+            <button type="button" id="btn-import-local" class="link-btn">Import data from this browser</button>
+            <span class="muted small" style="display:block; margin-top:4px;">One-time: copies the family data already in this browser into the database.</span>
+          </p>
         </details>
       </form>
     </div>

@@ -4,6 +4,139 @@
 
 const STORAGE_KEY = 'family-archive-v1';
 
+// -------------------- SUPABASE BACKEND --------------------
+// Single source of truth lives in a JSONB blob in the `archive` table on
+// Supabase. localStorage is kept as a warm cache so the UI can render
+// instantly on boot before the network round-trip resolves.
+const Backend = {
+  client: null,
+  user: null,
+  account: null,        // row from member_accounts for the logged-in user
+  saveTimer: null,
+  saveInFlight: null,
+  lastWriteAt: 0,
+  subscribed: false,
+  onRemoteChange: null, // set by init() once UI is wired
+
+  init() {
+    if (!window.supabase || !window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
+      console.warn('Supabase not configured — falling back to local-only mode.');
+      return false;
+    }
+    this.client = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    });
+    return true;
+  },
+
+  async session() {
+    if (!this.client) return null;
+    const { data } = await this.client.auth.getSession();
+    return data?.session || null;
+  },
+
+  async signUp(email, password) {
+    if (!this.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await this.client.auth.signUp({ email, password });
+    if (error) return { ok: false, reason: error.message };
+    // If email confirmation is off, the user is signed in immediately.
+    this.user = data.user;
+    return { ok: true, user: data.user, session: data.session };
+  },
+
+  async signIn(email, password) {
+    if (!this.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await this.client.auth.signInWithPassword({ email, password });
+    if (error) return { ok: false, reason: error.message };
+    this.user = data.user;
+    return { ok: true, user: data.user, session: data.session };
+  },
+
+  async signOut() {
+    if (!this.client) return;
+    await this.client.auth.signOut();
+    this.user = null;
+    this.account = null;
+  },
+
+  // Promote the very first signed-in user to admin. No-op if any admin exists.
+  async claimFirstAdmin() {
+    if (!this.client) return null;
+    const { error } = await this.client.rpc('claim_first_admin');
+    if (error) console.warn('claim_first_admin:', error.message);
+    return await this.loadMyAccount();
+  },
+
+  // Load member_accounts row for the logged-in user (admin flag + member id).
+  async loadMyAccount() {
+    if (!this.client || !this.user) return null;
+    const { data, error } = await this.client
+      .from('member_accounts')
+      .select('user_id, member_id, is_admin')
+      .eq('user_id', this.user.id)
+      .maybeSingle();
+    if (error) { console.warn('loadMyAccount:', error.message); return null; }
+    this.account = data;
+    return data;
+  },
+
+  // Fetch the archive row. Returns the JSONB state or null on miss/error.
+  async fetchArchive() {
+    if (!this.client) return null;
+    const { data, error } = await this.client
+      .from('archive')
+      .select('state, updated_at')
+      .eq('id', 1)
+      .maybeSingle();
+    if (error) { console.warn('fetchArchive:', error.message); return null; }
+    return data || null;
+  },
+
+  // Push the in-memory state up. Debounced — many Store.save() calls in a
+  // single tick coalesce into one network round-trip.
+  queueSaveArchive(state) {
+    if (!this.client) return;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.flushSaveArchive(state), 500);
+  },
+
+  async flushSaveArchive(state) {
+    if (!this.client) return;
+    this.saveTimer = null;
+    this.saveInFlight = (async () => {
+      const now = Date.now();
+      const { error } = await this.client
+        .from('archive')
+        .upsert({ id: 1, state, updated_at: new Date().toISOString(), updated_by: this.user?.id || null });
+      if (error) {
+        console.warn('saveArchive:', error.message);
+      } else {
+        this.lastWriteAt = now;
+      }
+    })();
+    return this.saveInFlight;
+  },
+
+  // Realtime: re-hydrate Store.state when another device updates the row.
+  // We ignore our own echoes by checking updated_by.
+  subscribeArchive() {
+    if (!this.client || this.subscribed) return;
+    this.subscribed = true;
+    this.client
+      .channel('archive-changes')
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'archive', filter: 'id=eq.1' },
+        (payload) => {
+          const row = payload.new;
+          if (!row) return;
+          if (row.updated_by && row.updated_by === this.user?.id) return; // our own write echoing back
+          if (this.onRemoteChange) this.onRemoteChange(row.state);
+        }
+      )
+      .subscribe();
+  },
+};
+
 // -------------------- ethnicities --------------------
 // Common ethnicities + ISO 3166 country code → flag emoji (regional indicators).
 const ETHNICITIES = [
@@ -367,20 +500,36 @@ const Store = {
       },
     };
   },
+  // Sync load: pull a snapshot from localStorage so the UI can render
+  // immediately. The backend hydrate happens after login (async).
   load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       this.state = raw ? JSON.parse(raw) : null;
     } catch { this.state = null; }
     if (!this.state) { this.bootstrap(); return; }
-    // self-heal: merge any missing default keys so older saves keep working
+    this.healMissingKeys();
+  },
+  // Replace state wholesale (used when hydrating from Supabase or on realtime).
+  // Keeps the localStorage cache in sync but skips the remote upsert to avoid
+  // an echo loop.
+  hydrate(state) {
+    this.state = state || this.defaults();
+    this.healMissingKeys();
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state)); } catch {}
+  },
+  healMissingKeys() {
     const def = this.defaults();
     for (const k of Object.keys(def)) {
       if (this.state[k] === undefined) this.state[k] = def[k];
     }
-    this.save();
   },
-  save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state)); },
+  // Save: write through to localStorage (cache) AND queue a debounced upsert
+  // to Supabase. Sync to all existing callers — no awaiting required.
+  save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state)); } catch {}
+    Backend.queueSaveArchive(this.state);
+  },
   bootstrap() { this.state = this.defaults(); this.save(); },
   reset() { localStorage.removeItem(STORAGE_KEY); this.bootstrap(); },
   membersList() { return Object.values(this.state.members); },
@@ -407,68 +556,51 @@ function uid(prefix = 'm') {
 function slug(s) { return s.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
 // -------------------- AUTH --------------------
+// All authentication goes through Supabase. The legacy username/passwordHash
+// fields on member records still exist for back-compat data (and so we can
+// map a member to a Supabase account by editing member_accounts in the dashboard)
+// but they're no longer used to validate logins.
 const Auth = {
   current: null,                                 // 'admin-bootstrap' marker or member object
   isAdmin() {
     if (!this.current) return false;
     if (this.current === 'admin-bootstrap') return true;
-    return this.current.role === 'admin';
+    return Backend.account?.is_admin || this.current.role === 'admin';
   },
   isSelf(memberId) {
     return this.current && this.current !== 'admin-bootstrap' && this.current.id === memberId;
   },
-  async login(username, password) {
-    const u = (username || '').trim().toLowerCase();
-    const p = password || '';
-    if (u === 'admin') {
-      const expected = Store.state.bootstrapAdminPassword ?? 'admin';
-      if (p === expected) {
-        this.current = 'admin-bootstrap';
-        Store.state.currentUserId = 'admin-bootstrap';
-        Store.save();
-        return { ok: true, mustChangePassword: !!Store.state.bootstrapAdminMustChange };
-      }
-      return { ok: false, reason: 'Incorrect password.' };
+
+  // Resolve who the logged-in Supabase user *is* in family terms. Reads
+  // member_accounts.member_id, then looks that member up in Store.state.
+  // 'admin-bootstrap' is a sentinel for the first signed-up user before any
+  // real member records have been claimed.
+  applyAccount() {
+    if (!Backend.account) { this.current = null; return; }
+    const mid = Backend.account.member_id;
+    if (!mid || mid === 'admin-bootstrap') {
+      this.current = 'admin-bootstrap';
+      return;
     }
-    const member = Store.membersList().find(m => m.username === u);
-    if (!member) return { ok: false, reason: 'Unknown account.' };
-    const hash = await hashPassword(p);
-    if (member.passwordHash !== hash) return { ok: false, reason: 'Incorrect password.' };
-    this.current = member;
-    Store.state.currentUserId = member.id;
-    Store.save();
-    return { ok: true, mustChangePassword: !!member.mustChangePassword };
+    const m = Store.byId(mid);
+    this.current = m || (Backend.account.is_admin ? 'admin-bootstrap' : null);
   },
-  logout() {
+
+  async logout() {
+    await Backend.signOut();
     this.current = null;
-    Store.state.currentUserId = null;
-    Store.save();
   },
+
   async setPassword(newPw) {
-    if (this.current === 'admin-bootstrap') {
-      Store.state.bootstrapAdminPassword = newPw;
-      Store.state.bootstrapAdminMustChange = false;
-    } else if (this.current) {
-      this.current.passwordHash = await hashPassword(newPw);
-      this.current.mustChangePassword = false;
-    }
-    Store.save();
+    if (!Backend.client) return;
+    const { error } = await Backend.client.auth.updateUser({ password: newPw });
+    if (error) throw new Error(error.message);
   },
-  async checkCurrentPassword(pw) {
-    if (this.current === 'admin-bootstrap') {
-      return pw === Store.state.bootstrapAdminPassword;
-    }
-    return (await hashPassword(pw)) === this.current.passwordHash;
-  },
-  resume() {
-    const id = Store.state.currentUserId;
-    if (!id) return false;
-    if (id === 'admin-bootstrap') { this.current = 'admin-bootstrap'; return true; }
-    const m = Store.byId(id);
-    if (!m) return false;
-    this.current = m;
-    return true;
-  },
+
+  // Kept as a no-op stub for legacy call sites (e.g. ChangePasswordModal
+  // confirming the current password). Supabase doesn't require it; we trust
+  // the active session.
+  async checkCurrentPassword(_pw) { return true; },
 };
 
 // -------------------- USERNAME GENERATION --------------------
@@ -5705,7 +5837,7 @@ const UserChip = {
     on($('#user-menu'), 'click', (e) => {
       const action = e.target.dataset?.action; if (!action) return;
       $('#user-menu').setAttribute('hidden', '');
-      if (action === 'logout') { Auth.logout(); location.reload(); }
+      if (action === 'logout') { (async () => { await Auth.logout(); location.reload(); })(); }
       if (action === 'my-profile') {
         if (Auth.current === 'admin-bootstrap') {
           toast('The admin account is not on the tree. Add or promote a member.', 'warn');
@@ -5758,17 +5890,18 @@ const ChangePasswordModal = {
       if (next !== confirm) { $('#cpw-error').textContent = 'The two passwords do not match.'; return; }
 
       if (this.targetMemberId) {
-        // admin-reset path
-        if (!Auth.isAdmin()) { $('#cpw-error').textContent = 'Admin only.'; return; }
-        const m = Store.byId(this.targetMemberId);
-        if (!m) { $('#cpw-error').textContent = 'Account not found.'; return; }
-        m.passwordHash = await hashPassword(next);
-        m.mustChangePassword = false;
-        Store.save();
-        toast(`Password set for ${m.firstName} ${m.lastName}.`);
-      } else {
+        // Admin reset path. With Supabase Auth, password lives on the Auth
+        // user, not the member record. We can't reset someone else's password
+        // from the anon client — direct the admin to the Supabase dashboard.
+        $('#cpw-error').textContent = 'To reset another user\'s password, use Supabase Auth → Users in the dashboard.';
+        return;
+      }
+      try {
         await Auth.setPassword(next);
         toast('Password updated.');
+      } catch (err) {
+        $('#cpw-error').textContent = err.message || 'Could not update password.';
+        return;
       }
       $('#cpw-error').textContent = '';
       f.reset();
@@ -5851,11 +5984,11 @@ const IdleMonitor = {
     $('#idle-modal').setAttribute('aria-hidden', 'true');
     toast('Welcome back.');
   },
-  signOut() {
+  async signOut() {
     this.stopCountdown();
     this.warning = false;
     $('#idle-modal').setAttribute('aria-hidden', 'true');
-    Auth.logout();
+    await Auth.logout();
     location.reload();
   },
 };
@@ -5876,24 +6009,95 @@ function bindCredsModal() {
 }
 
 // -------------------- LOGIN BIND --------------------
+// Toggle the login form between "sign in" and "sign up" modes. Sign-up uses
+// the same email + password fields; we just flip the submit handler.
+let _loginMode = 'signin';
+function setLoginMode(mode) {
+  _loginMode = mode;
+  $('#btn-login-submit').textContent = (mode === 'signin') ? 'Sign in' : 'Create account';
+  $('#btn-login-toggle').textContent = (mode === 'signin') ? 'Need an account? Sign up' : 'Have an account? Sign in';
+  $('#login-error').textContent = '';
+}
+
 function bindLogin() {
   on($('#login-form'), 'submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const result = await Auth.login(fd.get('username'), fd.get('password'));
-    if (!result.ok) { $('#login-error').textContent = result.reason; return; }
-    $('#login-error').textContent = '';
-    enterApp();
-    if (result.mustChangePassword) {
-      toast('Welcome — please change your password.');
-      ChangePasswordModal.open();
+    const email = (fd.get('email') || '').toString().trim();
+    const password = (fd.get('password') || '').toString();
+    const errEl = $('#login-error');
+    errEl.textContent = '';
+    const submitBtn = $('#btn-login-submit');
+    submitBtn.disabled = true;
+    const result = (_loginMode === 'signup')
+      ? await Backend.signUp(email, password)
+      : await Backend.signIn(email, password);
+    submitBtn.disabled = false;
+    if (!result.ok) { errEl.textContent = result.reason; return; }
+    if (_loginMode === 'signup' && !result.session) {
+      errEl.textContent = 'Account created. Check your inbox to confirm before signing in.';
+      setLoginMode('signin');
+      return;
     }
+    await onSignedIn();
   });
-  on($('#btn-reset-data'), 'click', () => {
-    if (!confirm('This will erase all family members, accounts, and groups stored in this browser. Continue?')) return;
-    Store.reset();
-    location.reload();
+  on($('#btn-login-toggle'), 'click', () => {
+    setLoginMode(_loginMode === 'signin' ? 'signup' : 'signin');
   });
+  on($('#btn-import-local'), 'click', async () => {
+    if (!confirm('Copy the family data already saved in this browser into the database? This overwrites anything currently in the database.')) return;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const local = raw ? JSON.parse(raw) : null;
+      if (!local) { toast('Nothing to import.', 'warn'); return; }
+      await Backend.flushSaveArchive(local);
+      toast('Imported into database.');
+    } catch (e) { toast('Import failed: ' + e.message, 'warn'); }
+  });
+}
+
+// Re-hydrate the in-memory state when another device updates the archive row.
+// Triggers a full UI re-render so anything that depends on `Store.state` reflects
+// the change.
+function applyRemoteState(state) {
+  Store.hydrate(state);
+  Auth.applyAccount();
+  document.body.classList.toggle('is-admin', Auth.isAdmin());
+  if (Canvas?.renderAll) Canvas.renderAll();
+  if (Views?.current === 'admin')    AdminView.render();
+  if (Views?.current === 'events')   EventsView.render();
+  if (Views?.current === 'calendar') CalendarView.render();
+  if (Views?.current === 'gifts')    GiftsView.render();
+  if (Views?.current === 'myfamily') MyFamilyView.render();
+  refreshEventsNav();
+  toast('Updated from another device.');
+}
+
+// Common post-login flow: claim first-admin if needed, hydrate archive,
+// resolve which member the logged-in account is, and enter the app.
+async function onSignedIn() {
+  const session = await Backend.session();
+  Backend.user = session?.user || null;
+  if (!Backend.user) { $('#login-error').textContent = 'Sign-in failed.'; return; }
+
+  // Promote first user to admin if none exists yet.
+  await Backend.claimFirstAdmin();
+
+  // Pull the canonical state. Empty row → use whatever's in localStorage
+  // (lets the user "import" later) or defaults.
+  const remote = await Backend.fetchArchive();
+  if (remote?.state && Object.keys(remote.state).length > 0) {
+    Store.hydrate(remote.state);
+  } else if (Store.state) {
+    Store.healMissingKeys();
+  } else {
+    Store.bootstrap();
+  }
+
+  Auth.applyAccount();
+  Backend.onRemoteChange = applyRemoteState;
+  Backend.subscribeArchive();
+  enterApp();
 }
 
 // -------------------- TREE TOOLBAR --------------------
@@ -6276,8 +6480,12 @@ function enterApp() {
   setTimeout(() => { if (Store.membersList().length) Canvas.fit(); }, 60);
 }
 
-function init() {
+async function init() {
+  // Cache-first: render whatever's in localStorage immediately while we wait
+  // for the network. The remote hydrate (after sign-in) overwrites this.
   Store.load();
+  const backendOk = Backend.init();
+
   Drawer.init();
   MemberModal.init();
   UserChip.init();
@@ -6292,8 +6500,30 @@ function init() {
   bindLogin();
   bindTreeToolbar();
   bindCredsModal();
+  setLoginMode('signin');
 
-  if (Auth.resume()) enterApp();
+  // Show the "Import data from this browser" button only when localStorage
+  // has data to import.
+  try {
+    const localRaw = localStorage.getItem(STORAGE_KEY);
+    const localState = localRaw ? JSON.parse(localRaw) : null;
+    const hasLocalData = localState && (
+      Object.keys(localState.members || {}).length > 0 ||
+      (localState.events || []).length > 0 ||
+      (localState.gifts || []).length > 0
+    );
+    $('#auth-import-row').hidden = !hasLocalData;
+  } catch {}
+
+  // If we have a live Supabase session from a previous visit, skip the login
+  // screen and head straight in.
+  if (backendOk) {
+    const session = await Backend.session();
+    if (session) {
+      Backend.user = session.user;
+      await onSignedIn();
+    }
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
