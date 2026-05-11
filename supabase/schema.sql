@@ -32,6 +32,28 @@ create table if not exists public.member_accounts (
 );
 
 -- =============================================================
+-- Admin-check helper
+-- =============================================================
+-- SECURITY DEFINER so the function bypasses RLS when reading member_accounts.
+-- If we instead embedded `exists (select … from member_accounts …)` directly
+-- in a policy on member_accounts, every SELECT would re-trigger that policy
+-- and Postgres bails out with "infinite recursion detected". Wrapping the
+-- check in a definer function breaks the cycle.
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce(
+    (select is_admin from public.member_accounts where user_id = auth.uid()),
+    false
+  );
+$$;
+grant execute on function public.is_admin() to authenticated;
+
+-- =============================================================
 -- Row-level security
 -- =============================================================
 alter table public.archive         enable row level security;
@@ -42,32 +64,28 @@ drop policy if exists "auth read archive" on public.archive;
 create policy "auth read archive" on public.archive
   for select using (auth.role() = 'authenticated');
 
--- Only admins can update the archive. "Admin" = has a member_accounts row
--- with is_admin = true.
+-- Only admins can update the archive row.
 drop policy if exists "admin write archive" on public.archive;
 create policy "admin write archive" on public.archive
-  for update using (
-    exists (
-      select 1 from public.member_accounts ma
-      where ma.user_id = auth.uid() and ma.is_admin = true
-    )
-  );
+  for update using (public.is_admin()) with check (public.is_admin());
 
--- Any authenticated user can read all member_accounts rows (needed to look
--- up "who am I" after login).
+-- Any authenticated user can read member_accounts (needed to map auth → member).
 drop policy if exists "auth read accounts" on public.member_accounts;
 create policy "auth read accounts" on public.member_accounts
   for select using (auth.role() = 'authenticated');
 
--- Only admins can insert / update / delete account mappings.
-drop policy if exists "admin write accounts" on public.member_accounts;
-create policy "admin write accounts" on public.member_accounts
-  for all using (
-    exists (
-      select 1 from public.member_accounts ma
-      where ma.user_id = auth.uid() and ma.is_admin = true
-    )
-  );
+-- Admins can write member_accounts. Split per operation so SELECT is never
+-- gated by an additional USING clause that would re-trigger the policy.
+drop policy if exists "admin write accounts"  on public.member_accounts;
+drop policy if exists "admin insert accounts" on public.member_accounts;
+drop policy if exists "admin update accounts" on public.member_accounts;
+drop policy if exists "admin delete accounts" on public.member_accounts;
+create policy "admin insert accounts" on public.member_accounts
+  for insert with check (public.is_admin());
+create policy "admin update accounts" on public.member_accounts
+  for update using (public.is_admin()) with check (public.is_admin());
+create policy "admin delete accounts" on public.member_accounts
+  for delete using (public.is_admin());
 
 -- =============================================================
 -- Bootstrap: first user becomes admin
