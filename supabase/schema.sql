@@ -64,8 +64,13 @@ drop policy if exists "auth read archive" on public.archive;
 create policy "auth read archive" on public.archive
   for select using (auth.role() = 'authenticated');
 
--- Only admins can update the archive row.
-drop policy if exists "admin write archive" on public.archive;
+-- Only admins can write the archive. Both INSERT and UPDATE are needed
+-- because PostgREST .upsert() emits INSERT ... ON CONFLICT DO UPDATE and
+-- the INSERT path is checked even when the row already exists.
+drop policy if exists "admin insert archive" on public.archive;
+drop policy if exists "admin write archive"  on public.archive;
+create policy "admin insert archive" on public.archive
+  for insert with check (public.is_admin());
 create policy "admin write archive" on public.archive
   for update using (public.is_admin()) with check (public.is_admin());
 
