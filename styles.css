@@ -450,6 +450,34 @@ code {
   font-size: 14px;
   box-shadow: var(--shadow-soft);
 }
+.tree-filter {
+  height: 36px;
+  padding: 0 28px 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ink-200);
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(10px);
+  font-size: 13px;
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+}
+.tree-filter:focus { outline: 2px solid var(--brand-300); outline-offset: 2px; }
+.tree-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.tree-filter-btn .myfam-label { white-space: nowrap; }
+.tree-filter-btn[aria-pressed="true"],
+.tree-filter-btn.is-active {
+  background: var(--brand-100);
+  border-color: var(--brand-300);
+  color: var(--brand-800);
+}
 
 /* theme picker swatch + popover */
 #btn-theme { position: relative; }
@@ -569,6 +597,11 @@ code {
   stroke-width: 2;
   shape-rendering: auto;
   opacity: .9;
+}
+/* Past-marriage line: longer dashes + lower opacity so exes read as muted */
+.tree-edges .edge.spouse.ex {
+  stroke-dasharray: 6 6;
+  opacity: .55;
 }
 .tree-edges .edge.sibling {
   stroke: var(--ink-400);

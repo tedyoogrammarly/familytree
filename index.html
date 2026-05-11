@@ -158,6 +158,13 @@
           </div>
         </div>
         <div class="tree-toolbar-group">
+          <select id="tree-filter-group" class="tree-filter" title="Show only members of one group" aria-label="Filter by group">
+            <option value="">All groups</option>
+          </select>
+          <button class="icon-btn tree-filter-btn" id="btn-filter-myfamily" title="Show just my family (parents, spouse, kids, siblings & their kids, grandparents, grandchildren)" aria-pressed="false">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 14s-5-3-5-7a3 3 0 0 1 5-2 3 3 0 0 1 5 2c0 4-5 7-5 7z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+            <span class="myfam-label">My family</span>
+          </button>
           <input id="tree-search" class="tree-search" type="search" placeholder="Search family…" />
         </div>
       </div>
@@ -616,6 +623,7 @@
                   Upload photo
                   <input type="file" accept="image/*" id="photo-input" hidden />
                 </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="photo-recrop" hidden>Crop photo</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="photo-clear">Use silhouette</button>
               </div>
             </div>

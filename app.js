@@ -603,6 +603,28 @@ const Store = {
     for (const k of Object.keys(def)) {
       if (this.state[k] === undefined) this.state[k] = def[k];
     }
+    // Per-member migrations:
+    //   1. Ensure exSpouseIds[] exists on every member (new in multi-spouse model).
+    //   2. Migrate legacy "divorced flag on a current spouse" pairs into the
+    //      exSpouseIds model: move spouseId → exSpouseIds on both sides and
+    //      clear the divorced flag. Idempotent — re-running is safe.
+    const members = this.state.members || {};
+    for (const m of Object.values(members)) {
+      if (!Array.isArray(m.exSpouseIds)) m.exSpouseIds = [];
+    }
+    for (const m of Object.values(members)) {
+      if (m.spouseId && m.divorced) {
+        const s = members[m.spouseId];
+        m.exSpouseIds = [...new Set([...(m.exSpouseIds || []), m.spouseId])];
+        if (s) {
+          s.exSpouseIds = [...new Set([...(s.exSpouseIds || []), m.id])];
+          s.spouseId = null;
+          s.divorced = false;
+        }
+        m.spouseId = null;
+        m.divorced = false;
+      }
+    }
   },
   // Save: write through to localStorage (cache) AND queue a debounced upsert
   // to Supabase. Sync to all existing callers — no awaiting required.
@@ -732,20 +754,18 @@ const Tree = {
       spouseId: null,
       childrenIds: [],
       siblingLinkIds: [],
+      exSpouseIds: [],
       x: 0, y: 0,
       createdAt: Date.now(),
     };
     Store.state.members[id] = m;
 
-    // wire relationship
+    // wire relationship. For a spouse with the divorced flag, we route through
+    // exSpouseIds so the rest of the model treats it as a past marriage.
     if (input.relType && input.relTargetId) {
-      this.connect(m, input.relType, input.relTargetId, input.relSecondId);
-      // If creating a spouse and the user marked it divorced, set the flag on both.
-      if (input.relType === 'spouse' && input.relDivorced) {
-        m.divorced = true;
-        const t = Store.byId(input.relTargetId);
-        if (t) t.divorced = true;
-      }
+      this.connect(m, input.relType, input.relTargetId, input.relSecondId, {
+        divorced: input.relType === 'spouse' && !!input.relDivorced,
+      });
     }
     // Children inherit ethnicities from their parents.
     inheritEthnicities();
@@ -754,9 +774,10 @@ const Tree = {
     Store.save();
     return { member: m, password };
   },
-  connect(member, relType, targetId, secondId) {
+  connect(member, relType, targetId, secondId, opts = {}) {
     const target = Store.byId(targetId);
     if (!target) return;
+    const divorced = !!opts.divorced;
     const second = secondId ? Store.byId(secondId) : null;
     if (relType === 'child') {
       member.parentIds = [targetId, ...(second ? [secondId] : [])];
@@ -773,23 +794,40 @@ const Tree = {
       });
       member.childrenIds = unique([...(member.childrenIds || []), ...group]);
     } else if (relType === 'spouse') {
-      // Detach any prior spouse on either side and clear the lingering
-      // `divorced` flag so a fresh marriage starts with a solid heart.
-      const detach = (personId) => {
-        const p = Store.byId(personId);
-        if (!p) return;
-        const oldId = p.spouseId;
-        if (oldId && oldId !== member.id && oldId !== target.id) {
-          const old = Store.byId(oldId);
-          if (old) { old.spouseId = null; old.divorced = false; }
-        }
-        p.spouseId = null;
-        p.divorced = false;
-      };
-      detach(target.id);
-      detach(member.id);
-      member.spouseId = target.id;
-      target.spouseId = member.id;
+      member.exSpouseIds = member.exSpouseIds || [];
+      target.exSpouseIds = target.exSpouseIds || [];
+      if (divorced) {
+        // Past marriage. Record on both sides; don't touch the current spouse.
+        member.exSpouseIds = unique([...member.exSpouseIds, target.id].filter(x => x !== member.id));
+        target.exSpouseIds = unique([...target.exSpouseIds, member.id].filter(x => x !== target.id));
+        // If the pair is somehow also the current spouse, demote it.
+        if (member.spouseId === target.id) member.spouseId = null;
+        if (target.spouseId === member.id) target.spouseId = null;
+      } else {
+        // New current marriage. Demote any existing current spouse to an ex
+        // on each side so we don't lose history.
+        const demote = (person) => {
+          const oldId = person.spouseId;
+          if (oldId && oldId !== member.id && oldId !== target.id) {
+            const old = Store.byId(oldId);
+            if (old) {
+              old.exSpouseIds = unique([...(old.exSpouseIds || []), person.id]);
+              old.spouseId = null;
+              old.divorced = false;
+            }
+            person.exSpouseIds = unique([...(person.exSpouseIds || []), oldId]);
+          }
+          person.spouseId = null;
+          person.divorced = false;
+        };
+        demote(member);
+        demote(target);
+        // If these two were exes before, remove that history — they're back together.
+        member.exSpouseIds = (member.exSpouseIds || []).filter(x => x !== target.id);
+        target.exSpouseIds = (target.exSpouseIds || []).filter(x => x !== member.id);
+        member.spouseId = target.id;
+        target.spouseId = member.id;
+      }
     } else if (relType === 'sibling') {
       // Share parents with target (if known)
       member.parentIds = [...(target.parentIds || [])];
@@ -817,6 +855,10 @@ const Tree = {
     if (m.spouseId) {
       const s = Store.byId(m.spouseId); if (s) s.spouseId = null;
     }
+    (m.exSpouseIds || []).forEach(eid => {
+      const ex = Store.byId(eid);
+      if (ex) ex.exSpouseIds = (ex.exSpouseIds || []).filter(x => x !== id);
+    });
     (m.parentIds || []).forEach(pid => {
       const p = Store.byId(pid);
       if (p) p.childrenIds = (p.childrenIds || []).filter(x => x !== id);
@@ -865,6 +907,10 @@ const Tree = {
       const s = Store.byId(member.spouseId);
       if (s) out.push({ label: 'Spouse', member: s });
     }
+    (member.exSpouseIds || []).forEach(eid => {
+      const ex = Store.byId(eid);
+      if (ex) out.push({ label: 'Previous spouse', member: ex });
+    });
     (member.parentIds || []).forEach(pid => {
       const p = Store.byId(pid); if (p) out.push({ label: 'Parent', member: p });
     });
@@ -918,6 +964,7 @@ function computeVisibleIds() {
     seen.add(id);
     const m = Store.byId(id); if (!m) continue;
     if (m.spouseId && !seen.has(m.spouseId)) queue.push(m.spouseId);
+    (m.exSpouseIds || []).forEach(eid => { if (!seen.has(eid)) queue.push(eid); });
     if (m.collapsed) continue;
     (m.childrenIds || []).forEach(cid => queue.push(cid));
   }
@@ -1227,22 +1274,37 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     const m = Store.byId(memberId);
     if (!m) return 0;
     const spouse = m.spouseId && !placed.has(m.spouseId) ? Store.byId(m.spouseId) : null;
+    // Ex-spouses join the cluster as additional slots beside the current
+    // spouse. Each unplaced ex slots in once per anchor. Children of any
+    // marriage hang centered below the whole cluster.
+    const exes = (m.exSpouseIds || [])
+      .filter(eid => !placed.has(eid))
+      .map(eid => Store.byId(eid))
+      .filter(Boolean);
     placed.add(m.id);
     if (spouse) placed.add(spouse.id);
+    exes.forEach(ex => placed.add(ex.id));
 
-    // When the couple is collapsed, treat them as a leaf for layout purposes
+    // Partners ordered: current spouse first (closest to anchor), then exes.
+    const partners = [spouse, ...exes].filter(Boolean);
+    const slotCount = 1 + partners.length;
+
+    // When the cluster is collapsed, treat it as a leaf for layout purposes
     // so the tree compresses around the hidden subtree.
-    const isCollapsed = m.collapsed || (spouse && spouse.collapsed);
+    const isCollapsed = m.collapsed || partners.some(p => p.collapsed);
     const childIds = isCollapsed ? [] : unique([
       ...(m.childrenIds || []),
-      ...(spouse?.childrenIds || []),
+      ...partners.flatMap(p => p.childrenIds || []),
     ]).filter(cid => !placed.has(cid) && Store.byId(cid));
 
-    const coupleSize = spouse ? (2 * SIBLING_SIZE + SIBLING_GAP) : SIBLING_SIZE;
+    const coupleSize = slotCount * SIBLING_SIZE + Math.max(0, slotCount - 1) * SIBLING_GAP;
+    const placePartners = (anchorStart) => {
+      placeAt(m, anchorStart, depth);
+      partners.forEach((p, i) => placeAt(p, anchorStart + (i + 1) * (SIBLING_SIZE + SIBLING_GAP), depth));
+    };
 
     if (!childIds.length) {
-      placeAt(m, start, depth);
-      if (spouse) placeAt(spouse, start + SIBLING_SIZE + SIBLING_GAP, depth);
+      placePartners(start);
       return coupleSize;
     }
 
@@ -1254,8 +1316,7 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     const childrenTotal = cursor - start - SIBLING_GAP;
     const span = Math.max(coupleSize, childrenTotal);
     const coupleStart = start + Math.max(0, (childrenTotal - coupleSize) / 2);
-    placeAt(m, coupleStart, depth);
-    if (spouse) placeAt(spouse, coupleStart + SIBLING_SIZE + SIBLING_GAP, depth);
+    placePartners(coupleStart);
     return span;
   };
 
@@ -1551,47 +1612,64 @@ const Canvas = {
       groupIds.forEach(id => handled.add(id));
     });
 
-    // spouse connectors + heart marker
-    const drawnSpouse = new Set();
-    visibleMembers.forEach(m => {
-      if (!m.spouseId || drawnSpouse.has(m.id)) return;
-      if (!visibleIds.has(m.spouseId)) return;
-      const s = Store.byId(m.spouseId); if (!s) return;
-      drawnSpouse.add(m.id); drawnSpouse.add(s.id);
-      const divorced = !!(m.divorced || s.divorced);
-
+    // spouse + ex-spouse connectors. Pairs are drawn once each — keyed by
+    // the sorted (id, id) tuple — so multi-spouse clusters don't duplicate.
+    const drawnPair = new Set();
+    const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+    const drawPair = (m, s, divorced) => {
       let mx, my;
       if (orientation === 'vertical') {
         const left = m.x < s.x ? m : s, right = m.x < s.x ? s : m;
         const y = Math.max(left.y, right.y) + NODE_H * 0.5;
-        lines.push(`<path class="edge spouse" d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
+        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
+        lines.push(`<path class="${cls}" d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
         mx = (left.x + NODE_W + right.x) / 2;
         my = y;
       } else {
         const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
         const x = Math.max(top.x, bot.x) + NODE_W * 0.5;
-        lines.push(`<path class="edge spouse" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
+        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
+        lines.push(`<path class="${cls}" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
         mx = x;
         my = (top.y + NODE_H + bot.y) / 2;
       }
       lines.push(heartMarker(mx, my, divorced));
+      return { mx, my };
+    };
 
-      // "X yrs" chip near the heart for current couples with an anniversary on file.
-      const aniso = m.anniversary || s.anniversary || '';
-      if (!divorced && aniso) {
-        const yrs = yearsTogether(aniso);
-        if (yrs != null) {
-          // Position the label just to the right of the heart for vertical
-          // spouse rows, or just below it for horizontal stacks.
-          const isVertical = orientation === 'vertical';
-          const lx = isVertical ? mx + 16 : mx;
-          const ly = isVertical ? my + 4  : my + 22;
-          const anchor = isVertical ? 'start' : 'middle';
-          lines.push(
-            `<text class="spouse-years" x="${lx}" y="${ly}" text-anchor="${anchor}">${yrs} yr${yrs === 1 ? '' : 's'}</text>`
-          );
+    visibleMembers.forEach(m => {
+      // current spouse (solid heart)
+      if (m.spouseId && visibleIds.has(m.spouseId)) {
+        const s = Store.byId(m.spouseId);
+        const key = pairKey(m.id, m.spouseId);
+        if (s && !drawnPair.has(key)) {
+          drawnPair.add(key);
+          const { mx, my } = drawPair(m, s, false);
+          // "X yrs" chip near the heart for current couples with an anniversary on file.
+          const aniso = m.anniversary || s.anniversary || '';
+          if (aniso) {
+            const yrs = yearsTogether(aniso);
+            if (yrs != null) {
+              const isVertical = orientation === 'vertical';
+              const lx = isVertical ? mx + 16 : mx;
+              const ly = isVertical ? my + 4  : my + 22;
+              const anchor = isVertical ? 'start' : 'middle';
+              lines.push(
+                `<text class="spouse-years" x="${lx}" y="${ly}" text-anchor="${anchor}">${yrs} yr${yrs === 1 ? '' : 's'}</text>`
+              );
+            }
+          }
         }
       }
+      // ex-spouses (broken heart, one per pair)
+      (m.exSpouseIds || []).forEach(eid => {
+        if (!visibleIds.has(eid)) return;
+        const ex = Store.byId(eid); if (!ex) return;
+        const key = pairKey(m.id, eid);
+        if (drawnPair.has(key)) return;
+        drawnPair.add(key);
+        drawPair(m, ex, true);
+      });
     });
 
     this.edges.innerHTML = lines.join('');
@@ -1723,6 +1801,7 @@ const Drawer = {
     on($('#drawer-edit'),    'submit', (e) => { e.preventDefault(); this.saveEdit(); });
     on($('#photo-input'),    'change', (e) => this.onPhoto(e));
     on($('#photo-clear'),    'click',  () => this.clearPhoto());
+    on($('#photo-recrop'),   'click',  () => this.recropPhoto());
     on($('#drawer-pwd-btn'), 'click',  () => this.resetPassword());
     on($('#drawer-delete-btn'), 'click', () => this.deleteMember());
     on($('#drawer-divorce-btn'), 'click', () => this.toggleDivorce());
@@ -1929,6 +2008,9 @@ const Drawer = {
     if (m.photo) { preview.style.backgroundImage = `url('${m.photo}')`; preview.innerHTML = ''; }
     else { preview.style.backgroundImage = ''; preview.innerHTML = Silhouettes.for(m); }
     f.dataset.tempPhoto = '';
+    // The Crop button only makes sense when there's a photo to crop. It tracks
+    // both the saved photo and any in-flight tempPhoto from this edit session.
+    $('#photo-recrop').hidden = !m.photo;
 
     $('#drawer-view').hidden = true;
     $('#drawer-edit').hidden = false;
@@ -2005,8 +2087,27 @@ const Drawer = {
       const preview = $('#photo-preview');
       preview.innerHTML = '';
       preview.style.backgroundImage = `url('${cropped}')`;
+      $('#photo-recrop').hidden = false;
     };
     reader.readAsDataURL(file);
+  },
+  // Re-crop the photo currently on display (saved or in-flight). The cropper
+  // outputs a fixed-size JPEG, so re-cropping a previously-cropped image is
+  // still useful for repositioning but won't recover detail outside the
+  // earlier crop. That's a reasonable trade-off for not storing two copies.
+  async recropPhoto() {
+    const f = $('#drawer-edit');
+    const m = Store.byId(this.currentId);
+    const source = (f.dataset.tempPhoto && f.dataset.tempPhoto !== 'cleared')
+      ? f.dataset.tempPhoto
+      : m?.photo;
+    if (!source) return;
+    const cropped = await CropModal.open(source, { size: 480 });
+    if (!cropped) return; // user cancelled
+    f.dataset.tempPhoto = cropped;
+    const preview = $('#photo-preview');
+    preview.innerHTML = '';
+    preview.style.backgroundImage = `url('${cropped}')`;
   },
   clearPhoto() {
     const f = $('#drawer-edit');
@@ -2015,6 +2116,7 @@ const Drawer = {
     const preview = $('#photo-preview');
     preview.style.backgroundImage = '';
     preview.innerHTML = Silhouettes.for({ gender: f.gender.value, ageGroup: f.ageGroup.value });
+    $('#photo-recrop').hidden = true;
   },
   async resetPassword() {
     if (!Auth.isAdmin()) return;
@@ -2035,13 +2137,20 @@ const Drawer = {
     if (!Auth.isAdmin()) return;
     const m = Store.byId(this.currentId); if (!m || !m.spouseId) return;
     const s = Store.byId(m.spouseId);
-    // Read the joint state: if EITHER is marked divorced, the couple reads as divorced.
-    const currentlyDivorced = !!(m.divorced || s?.divorced);
-    const next = !currentlyDivorced;
-    m.divorced = next;
-    if (s) s.divorced = next;
+    // One-way: move the current spouse into both sides' exSpouseIds and
+    // clear spouseId. To "restore" later, the admin re-links via Link to
+    // family. This keeps the data model simple now that exSpouseIds can hold
+    // multiple past spouses.
+    if (s) {
+      s.exSpouseIds = unique([...(s.exSpouseIds || []), m.id]);
+      s.spouseId = null;
+      s.divorced = false;
+    }
+    m.exSpouseIds = unique([...(m.exSpouseIds || []), m.spouseId]);
+    m.spouseId = null;
+    m.divorced = false;
     Store.save();
-    toast(next ? 'Marked as divorced.' : 'Marked as married.');
+    toast(s ? `Marked as divorced from ${s.firstName} ${s.lastName}.` : 'Marked as divorced.');
     Canvas.renderAll();
     this.renderView();
   },
@@ -2072,6 +2181,9 @@ function unlinkRelation(aId, bId, relLabel) {
   if (r === 'spouse') {
     a.spouseId = null; a.divorced = false;
     b.spouseId = null; b.divorced = false;
+  } else if (r === 'previous spouse') {
+    a.exSpouseIds = (a.exSpouseIds || []).filter(x => x !== b.id);
+    b.exSpouseIds = (b.exSpouseIds || []).filter(x => x !== a.id);
   } else if (r === 'parent') {
     // b is a's parent → drop b from a.parentIds, drop a from b.childrenIds
     a.parentIds = (a.parentIds || []).filter(x => x !== b.id);
@@ -5871,11 +5983,8 @@ const LinkFamilyModal = {
     if (!target) { $('#link-error').textContent = 'Target not found.'; return; }
     // disallow self-loop or pre-existing identical link
     if (target.id === member.id) { $('#link-error').textContent = 'Pick a different person.'; return; }
-    Tree.connect(member, relType, target.id);
-    if (relType === 'spouse' && fd.get('divorced')) {
-      member.divorced = true;
-      target.divorced = true;
-    }
+    const divorced = relType === 'spouse' && !!fd.get('divorced');
+    Tree.connect(member, relType, target.id, undefined, { divorced });
     inheritEthnicities();
     autoLayout();
     Store.save();
@@ -6196,6 +6305,9 @@ function bindLogin() {
 function applyRemoteState(state) {
   Store.hydrate(state);
   Auth.applyAccount();
+  if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
+    TreeFilters.refreshGroupOptions();
+  }
   document.body.classList.toggle('is-admin', Auth.isAdmin());
   if (Canvas?.renderAll) Canvas.renderAll();
   if (Views?.current === 'admin')    AdminView.render();
@@ -6229,6 +6341,9 @@ async function onSignedIn() {
   }
 
   Auth.applyAccount();
+  if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
+    TreeFilters.refreshGroupOptions();
+  }
   Backend.onRemoteChange = applyRemoteState;
   Backend.subscribeArchive();
   enterApp();
@@ -6298,6 +6413,117 @@ function bindTreeToolbar() {
       n.classList.toggle('is-faded', q && !matches.has(id));
     });
   });
+
+  TreeFilters.init();
+}
+
+// -------------------- TREE FILTERS --------------------
+// Two mutually-exclusive filters that operate by toggling .collapsed on members.
+// Members in the "keep set" stay expanded (their children render); everyone
+// else is collapsed (their children hide). Picking either filter cancels the
+// other so we don't have to reason about a 2D combination.
+const TreeFilters = {
+  group: '',
+  myFamily: false,
+
+  init() {
+    this.refreshGroupOptions();
+    on($('#tree-filter-group'), 'change', (e) => {
+      this.group = e.target.value;
+      if (this.group) this.myFamily = false;
+      this.apply();
+    });
+    on($('#btn-filter-myfamily'), 'click', () => {
+      this.myFamily = !this.myFamily;
+      if (this.myFamily) this.group = '';
+      this.apply();
+    });
+  },
+
+  refreshGroupOptions() {
+    const sel = $('#tree-filter-group'); if (!sel) return;
+    const groups = (Store.state && Store.state.groups) || [];
+    sel.innerHTML = '<option value="">All groups</option>' +
+      groups.map(g => `<option value="${escape(g)}">${escape(g)}</option>`).join('');
+    sel.value = this.group;
+  },
+
+  syncToolbar() {
+    const sel = $('#tree-filter-group'); if (sel) sel.value = this.group;
+    const btn = $('#btn-filter-myfamily');
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(this.myFamily));
+      btn.classList.toggle('is-active', this.myFamily);
+    }
+  },
+
+  // Recompute and apply. Called when a filter changes OR when the underlying
+  // data changes (members added/removed/regrouped, sign-in, etc.).
+  apply() {
+    const keep = this.computeKeepSet();
+    if (keep) {
+      Store.membersList().forEach(m => { m.collapsed = !keep.has(m.id); });
+    } else {
+      // No filter active — release everyone. We deliberately blow away any
+      // pre-existing collapse state too; mixing manual collapse with filter
+      // collapse made the toolbar feel unpredictable.
+      Store.membersList().forEach(m => { m.collapsed = false; });
+    }
+    Store.save();
+    autoLayout();
+    Canvas.renderAll();
+    Canvas.fit();
+    this.syncToolbar();
+  },
+
+  computeKeepSet() {
+    if (this.group) {
+      const ids = Store.membersList()
+        .filter(m => m.group === this.group)
+        .map(m => m.id);
+      if (!ids.length) {
+        toast(`No one is in group "${this.group}".`, 'warn');
+        return null;
+      }
+      return new Set(ids);
+    }
+    if (this.myFamily) {
+      const me = Auth.current;
+      if (!me || me === 'admin-bootstrap') {
+        toast('Sign in as a family member to use My Family filter.', 'warn');
+        this.myFamily = false;
+        return null;
+      }
+      return myFamilyIdSet(me.id);
+    }
+    return null;
+  },
+};
+
+// "My Family" scope: me + spouse(s) (current + ex) + children + grandchildren
+// + parents + grandparents + siblings + nieces/nephews.
+function myFamilyIdSet(meId) {
+  const ids = new Set([meId]);
+  const me = Store.byId(meId); if (!me) return ids;
+  if (me.spouseId) ids.add(me.spouseId);
+  (me.exSpouseIds || []).forEach(id => ids.add(id));
+  (me.childrenIds || []).forEach(cid => {
+    ids.add(cid);
+    const c = Store.byId(cid); if (!c) return;
+    (c.childrenIds || []).forEach(gc => ids.add(gc));   // grandchildren
+  });
+  (me.parentIds || []).forEach(pid => {
+    ids.add(pid);
+    const p = Store.byId(pid); if (!p) return;
+    (p.parentIds || []).forEach(gp => ids.add(gp));     // grandparents
+    (p.childrenIds || []).forEach(sid => {              // siblings via shared parent
+      if (sid === meId) return;
+      ids.add(sid);
+      const sib = Store.byId(sid); if (!sib) return;
+      (sib.childrenIds || []).forEach(nn => ids.add(nn));// nieces/nephews
+    });
+  });
+  return ids;
 }
 
 // -------------------- HELPERS --------------------
@@ -6552,6 +6778,10 @@ function refreshGroupSelect(sel, current = '', allowAll = false) {
 function refreshAllGroupSelects() {
   refreshGroupSelect($('#modal-group'), $('#modal-group')?.value || '');
   refreshGroupSelect($('#edit-group'), $('#edit-group')?.value || '');
+  // Keep the tree-view group filter in sync when groups are added/removed.
+  if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
+    TreeFilters.refreshGroupOptions();
+  }
 }
 
 // Build a CSV from a 2D array (rows of cells), trigger browser download.
