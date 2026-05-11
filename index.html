@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>The Yoo Family</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ============== LOGIN ============== -->
+  <section id="login-view" class="auth-shell">
+    <div class="auth-bg" aria-hidden="true">
+      <div class="auth-bg-blob a"></div>
+      <div class="auth-bg-blob b"></div>
+      <div class="auth-bg-grain"></div>
+    </div>
+
+    <div class="auth-card">
+      <div class="auth-brand">
+        <svg class="auth-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <path d="M32 8c-3 6-3 10 0 14m0 0c-5-3-9-3-14 0m14 0c5-3 9-3 14 0M32 22v34M14 56h36" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+          <circle cx="32" cy="22" r="3.2" fill="currentColor" />
+        </svg>
+        <p class="auth-eyebrow">Family Archive</p>
+        <h1 class="auth-title">Welcome home.</h1>
+        <p class="auth-sub">Sign in to view the family tree, profiles, and shared history.</p>
+      </div>
+
+      <form id="login-form" class="auth-form" autocomplete="on" novalidate>
+        <label class="field">
+          <span>Username</span>
+          <input name="username" type="text" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
+        <button class="btn btn-primary btn-lg" type="submit">Sign in</button>
+
+        <details class="auth-help">
+          <summary>First time here?</summary>
+          <p>If this is a fresh install, sign in with <strong>admin</strong> / <strong>admin</strong>. You'll be prompted to change the password.</p>
+          <p><button type="button" id="btn-reset-data" class="link-btn">Reset all local data</button></p>
+        </details>
+      </form>
+    </div>
+  </section>
+
+
+  <!-- ============== APP SHELL ============== -->
+  <div id="app-view" hidden>
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="brand" id="brand-btn" type="button">
+          <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+            <path d="M32 8c-3 6-3 10 0 14m0 0c-5-3-9-3-14 0m14 0c5-3 9-3 14 0M32 22v34M14 56h36" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+            <circle cx="32" cy="22" r="3.2" fill="currentColor" />
+          </svg>
+          <div>
+            <span class="brand-eyebrow">Family</span>
+            <span class="brand-name">Archive</span>
+          </div>
+        </button>
+        <nav class="nav" role="tablist">
+          <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
+          <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
+          <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
+          <button class="nav-tab" data-view="calendar" data-admin-only role="tab">Calendar</button>
+          <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
+          <button class="nav-tab" data-view="admin" data-admin-only role="tab">Admin</button>
+        </nav>
+      </div>
+      <div class="topbar-right">
+        <button class="btn btn-ghost btn-sm" id="btn-add-member" data-admin-only>+ Add Member</button>
+        <div class="user-chip" id="user-chip">
+          <div class="user-chip-avatar" id="user-chip-avatar"></div>
+          <div class="user-chip-text">
+            <span id="user-chip-name"></span>
+            <span class="user-chip-role" id="user-chip-role"></span>
+          </div>
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+          <div class="user-menu" id="user-menu" hidden>
+            <button data-action="my-profile">My profile</button>
+            <button data-action="change-password">Change password</button>
+            <hr />
+            <button data-action="logout">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===== TREE VIEW ===== -->
+    <main id="view-tree" class="view view-tree">
+      <div class="tree-toolbar">
+        <div class="tree-toolbar-group">
+          <button class="icon-btn" id="btn-zoom-out" title="Zoom out (−)">
+            <svg viewBox="0 0 16 16"><path d="M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-zoom-reset" title="Reset view">
+            <span id="zoom-label">100%</span>
+          </button>
+          <button class="icon-btn" id="btn-zoom-in" title="Zoom in (+)">
+            <svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="btn-fit" title="Fit to screen">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-auto-layout" title="Auto-arrange">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 2v4M8 10v4M2 8h4M10 8h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-expand-all" title="Expand all">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 6l5-3 5 3M3 10l5 3 5-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-collapse-all" title="Collapse all">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 5l5 3 5-3M3 11l5-3 5 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="btn-orientation" title="Switch to horizontal view">
+            <svg id="orient-icon-vertical" viewBox="0 0 16 16" fill="none"><rect x="6" y="1.5" width="4" height="3" rx=".6" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="11.5" width="4" height="3" rx=".6" stroke="currentColor" stroke-width="1.4"/><rect x="10" y="11.5" width="4" height="3" rx=".6" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.5v3M4 11.5V8.5h8v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <svg id="orient-icon-horizontal" viewBox="0 0 16 16" fill="none" hidden><rect x="1.5" y="6" width="3" height="4" rx=".6" stroke="currentColor" stroke-width="1.4"/><rect x="11.5" y="2" width="3" height="4" rx=".6" stroke="currentColor" stroke-width="1.4"/><rect x="11.5" y="10" width="3" height="4" rx=".6" stroke="currentColor" stroke-width="1.4"/><path d="M4.5 8h3M11.5 4v8M7.5 4h4M7.5 12h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-theme" title="Theme colors" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="1" opacity=".5"/></svg>
+            <span class="theme-swatch" id="theme-swatch" aria-hidden="true"></span>
+          </button>
+          <div class="theme-popover" id="theme-popover" hidden>
+            <p class="popover-title">Generation colors</p>
+            <p class="muted small">Each generation gets a hue derived from this color.</p>
+            <input type="color" id="theme-color" />
+            <div class="theme-presets">
+              <button data-hue="205" class="preset" style="--p: hsl(205 55% 52%)" title="Ocean"></button>
+              <button data-hue="155" class="preset" style="--p: hsl(155 45% 45%)" title="Forest"></button>
+              <button data-hue="25"  class="preset" style="--p: hsl(25 70% 55%)"  title="Copper"></button>
+              <button data-hue="285" class="preset" style="--p: hsl(285 40% 55%)" title="Plum"></button>
+              <button data-hue="0"   class="preset" style="--p: hsl(0 60% 55%)"   title="Rose"></button>
+            </div>
+            <p class="muted small">Preview</p>
+            <div class="theme-preview" id="theme-preview"></div>
+          </div>
+        </div>
+        <div class="tree-toolbar-group">
+          <input id="tree-search" class="tree-search" type="search" placeholder="Search family…" />
+        </div>
+      </div>
+
+      <div id="tree-canvas" class="tree-canvas">
+        <div id="tree-world" class="tree-world">
+          <svg id="tree-edges" class="tree-edges" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="tree-nodes" class="tree-nodes"></div>
+        </div>
+        <div id="tree-empty" class="tree-empty" hidden>
+          <div class="tree-empty-card">
+            <h3>No family members yet</h3>
+            <p>Start the tree by adding the first person.</p>
+            <button class="btn btn-primary" id="btn-add-first" data-admin-only>+ Add the first member</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== MY FAMILY VIEW ===== -->
+    <main id="view-myfamily" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2 id="myfamily-title">My Family</h2>
+            <p id="myfamily-sub" class="muted">Your parents, spouse, and children at a glance.</p>
+          </div>
+          <div class="myfamily-tools" id="myfamily-tools" data-admin-only>
+            <label class="field" style="flex-direction:row; align-items:center; gap:8px;">
+              <span style="font-weight:600;">Viewing from</span>
+              <select class="input" id="myfamily-picker" aria-label="Pick a family member"></select>
+            </label>
+          </div>
+        </div>
+        <div class="myfamily-stage" id="myfamily-stage">
+          <div class="myfamily-empty" id="myfamily-empty" hidden></div>
+          <div class="myfamily-world" id="myfamily-world">
+            <svg id="myfamily-edges" class="myfamily-edges" xmlns="http://www.w3.org/2000/svg"></svg>
+            <div id="myfamily-nodes" class="myfamily-nodes"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== ADMIN VIEW ===== -->
+    <main id="view-admin" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2>Admin</h2>
+            <p>Manage members, groups, and accounts.</p>
+          </div>
+          <button class="btn btn-secondary" id="btn-admin-export">Export to Excel</button>
+        </div>
+
+        <div class="admin-grid">
+          <section class="panel">
+            <header class="panel-head">
+              <h3>Groups</h3>
+              <form id="group-form" class="inline-form">
+                <input class="input" id="group-input" placeholder="New group name" />
+                <button class="btn btn-primary btn-sm" type="submit">Add</button>
+              </form>
+            </header>
+            <ul id="group-list" class="chip-list"></ul>
+            <p class="muted small" style="padding: 0 18px 14px; margin: 0;">Click a group to filter the members table or manage its membership.</p>
+          </section>
+
+          <section class="panel" id="group-membership" hidden></section>
+
+          <section class="panel">
+            <header class="panel-head">
+              <div>
+                <h3>Members &amp; accounts</h3>
+                <p class="muted small" id="admin-filter-note" style="margin:2px 0 0;">Showing all members</p>
+              </div>
+              <div class="panel-head-tools">
+                <div class="seg" role="tablist" aria-label="View mode">
+                  <button class="seg-btn is-active" id="btn-admin-view-table" data-mode="table" type="button" title="Table view">
+                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                    Table
+                  </button>
+                  <button class="seg-btn" id="btn-admin-view-cards" data-mode="cards" type="button" title="Card view">
+                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
+                    Cards
+                  </button>
+                </div>
+                <button class="btn btn-primary btn-sm" id="btn-admin-add">+ Add member</button>
+              </div>
+            </header>
+            <div id="admin-content">
+              <div class="table-wrap" id="admin-table-wrap">
+                <table class="table" id="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Username</th>
+                      <th>Role</th>
+                      <th>Group</th>
+                      <th>Birthday</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="admin-rows"></tbody>
+                </table>
+              </div>
+              <div class="admin-cards" id="admin-cards" hidden></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== EVENTS VIEW (admin only) ===== -->
+    <main id="view-events" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2>Events</h2>
+            <p>Plan family gatherings and track who showed up.</p>
+          </div>
+          <button class="btn btn-primary" id="btn-event-add" data-admin-only>+ New event</button>
+        </div>
+        <div class="event-grid">
+          <aside class="event-list" id="event-list"></aside>
+          <section class="event-detail panel" id="event-detail"></section>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== CALENDAR VIEW (admin only) ===== -->
+    <main id="view-calendar" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2>Calendar</h2>
+            <p>Family events, birthdays, and US holidays in one view.</p>
+          </div>
+          <div class="cal-toolbar">
+            <button class="icon-btn" id="cal-prev" title="Previous month" aria-label="Previous month">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M10 3l-5 5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="cal-label" id="cal-label"></div>
+            <button class="icon-btn" id="cal-next" title="Next month" aria-label="Next month">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <select class="input" id="cal-year" aria-label="Year"></select>
+            <button class="btn btn-secondary btn-sm" id="cal-today">Today</button>
+            <button class="btn btn-secondary btn-sm" id="cal-google-btn" title="Sync Google Calendar">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.19 3.32v2.77h3.55c2.08-1.92 3.28-4.74 3.28-8.1Z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.65l-3.55-2.77c-.98.66-2.24 1.05-3.73 1.05-2.86 0-5.29-1.93-6.15-4.53H2.18v2.84A11 11 0 0 0 12 23Z"/>
+                <path fill="#FBBC05" d="M5.85 14.1A6.55 6.55 0 0 1 5.5 12c0-.73.13-1.43.35-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.78.43 3.46 1.18 4.94l3.67-2.84Z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.07.56 4.21 1.65l3.15-3.15C17.45 2.12 14.97 1 12 1A11 11 0 0 0 2.18 7.07L5.85 9.9C6.71 7.31 9.14 5.38 12 5.38Z"/>
+              </svg>
+              <span id="cal-google-label">Google</span>
+              <span class="cal-google-dot" id="cal-google-dot" hidden aria-label="Connected"></span>
+            </button>
+          </div>
+        </div>
+        <div class="cal-legend">
+          <span class="cal-legend-item"><span class="cal-dot is-event"></span>Event</span>
+          <span class="cal-legend-item"><span class="cal-dot is-birthday"></span>Birthday</span>
+          <span class="cal-legend-item"><span class="cal-dot is-holiday"></span>US holiday</span>
+        </div>
+        <div class="panel cal-panel">
+          <div class="cal-weekdays" id="cal-weekdays"></div>
+          <div class="cal-grid" id="cal-grid"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== GIFTS VIEW (admin only) ===== -->
+    <main id="view-gifts" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2>Gifts</h2>
+            <p>What we gave, what we received — keep the record straight.</p>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="btn btn-secondary" id="btn-gift-export">Export to Excel</button>
+            <button class="btn btn-primary" id="btn-gift-add">+ Log a gift</button>
+          </div>
+        </div>
+        <div class="gift-tabs" role="tablist">
+          <button class="gift-tab is-active" data-direction="received" role="tab">Received</button>
+          <button class="gift-tab" data-direction="given" role="tab">Given</button>
+          <button class="gift-tab" data-direction="both" role="tab">Both</button>
+        </div>
+        <div class="panel">
+          <div class="table-wrap">
+            <table class="table" id="gift-table">
+              <thead>
+                <tr>
+                  <th style="width:40px;"></th>
+                  <th>Date</th>
+                  <th>Item</th>
+                  <th id="gift-th-amount">Amount</th>
+                  <th id="gift-th-from">From</th>
+                  <th id="gift-th-to">To</th>
+                  <th>Occasion</th>
+                  <th>Notes</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="gift-rows"></tbody>
+              <tfoot id="gift-foot"></tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== LINK FAMILY MODAL ===== -->
+    <div id="link-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3>Link to family</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="link-form" class="modal-body">
+          <p class="muted small" id="link-subject">Connect this person to someone already in the tree.</p>
+          <label class="field">
+            <span>Relationship</span>
+            <select name="relType" id="link-rel-type">
+              <option value="spouse">Spouse of…</option>
+              <option value="child">Child of…</option>
+              <option value="parent">Parent of…</option>
+              <option value="sibling">Sibling of…</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Family member</span>
+            <select name="targetId" id="link-target"></select>
+          </label>
+          <label class="checkbox-row" id="link-divorce-wrap" hidden>
+            <input type="checkbox" name="divorced" id="link-divorced" />
+            <span>Mark as divorced</span>
+          </label>
+          <p class="form-error" id="link-error" role="alert"></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Link</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== EVENT MODAL ===== -->
+    <div id="event-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="event-modal-title">New event</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="event-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field">
+              <span>Icon</span>
+              <div class="emoji-input">
+                <input name="icon" id="event-icon" placeholder="🎉" maxlength="4" />
+                <button type="button" class="emoji-input-browse" id="event-icon-browse" data-emoji-trigger title="Browse emojis">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="1.4"/><circle cx="6" cy="7" r=".9" fill="currentColor"/><circle cx="10" cy="7" r=".9" fill="currentColor"/><path d="M5.5 10c.6 1 1.5 1.5 2.5 1.5s1.9-.5 2.5-1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+            </label>
+            <label class="field"><span>Event name *</span><input name="name" required /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Date</span><input name="date" type="date" /></label>
+            <label class="field"><span>Location</span><input name="location" /></label>
+          </div>
+          <label class="field"><span>Description</span><textarea name="description" rows="3"></textarea></label>
+          <div class="field">
+            <span>Cover photo</span>
+            <div class="cover-row">
+              <div class="cover-preview" id="event-cover-preview"></div>
+              <div class="cover-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="event-cover-file" hidden />
+                </label>
+                <input type="url" name="coverUrl" id="event-cover-url" placeholder="Or paste an image URL…" />
+                <button type="button" class="btn btn-ghost btn-sm" id="event-cover-clear">Remove cover</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save event</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== GIFT MODAL ===== -->
+    <div id="gift-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="gift-modal-title">Log a gift</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="gift-form" class="modal-body">
+          <label class="field"><span>Direction</span>
+            <select name="direction" id="gift-direction">
+              <option value="received">Received (someone gave it to us)</option>
+              <option value="given">Given (we gave it to someone)</option>
+            </select>
+          </label>
+          <div class="grid-2">
+            <label class="field"><span>Item</span><input name="item" /></label>
+            <label class="field"><span>Amount ($)</span><input name="amount" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+          </div>
+          <label class="field"><span>Date</span><input name="date" type="date" /></label>
+          <div class="grid-2">
+            <label class="field"><span id="gift-from-label">From</span><input name="fromText" placeholder="Free text or pick below" /></label>
+            <label class="field"><span id="gift-to-label">To</span><input name="toText" placeholder="Free text or pick below" /></label>
+          </div>
+          <label class="field">
+            <span>From (family members — pick one or more)</span>
+            <div class="member-picker" data-picker="gift-from-members"></div>
+          </label>
+          <label class="field"><span>To (family member)</span><select name="toMemberId" id="gift-to-member"></select></label>
+          <div class="grid-2">
+            <label class="field">
+              <span>Linked event</span>
+              <select name="eventId" id="gift-event">
+                <option value="">— none —</option>
+              </select>
+            </label>
+            <label class="field"><span>Occasion</span><input name="occasion" placeholder="Christmas, Birthday, Wedding…" /></label>
+          </div>
+          <label class="field"><span>Notes</span><textarea name="notes" rows="3"></textarea></label>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save gift</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== PROFILE DRAWER ===== -->
+    <aside id="drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" data-close></div>
+      <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-name">
+        <button class="drawer-close" data-close aria-label="Close">
+          <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div class="drawer-hero">
+          <div class="drawer-photo" id="drawer-photo"></div>
+          <div class="drawer-id">
+            <p class="drawer-eyebrow" id="drawer-relation"></p>
+            <h2 id="drawer-name"></h2>
+            <p class="drawer-nick" id="drawer-nick"></p>
+          </div>
+        </div>
+
+        <div id="drawer-view" class="drawer-body">
+          <dl class="kv">
+            <div><dt>Birthday</dt><dd id="kv-birthday">—</dd></div>
+            <div><dt>Email</dt><dd id="kv-email">—</dd></div>
+            <div><dt>Phone</dt><dd id="kv-phone">—</dd></div>
+            <div><dt>Address</dt><dd id="kv-address-cell"><span id="kv-address">—</span><button type="button" id="kv-address-copy" class="kv-copy-btn" title="Copy address" hidden>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <span>Copy</span>
+            </button></dd></div>
+            <div><dt>Group</dt><dd id="kv-group">—</dd></div>
+            <div><dt>Ethnicity</dt><dd id="kv-ethnicity">—</dd></div>
+            <div><dt>Role</dt><dd id="kv-role">—</dd></div>
+            <div><dt>Username</dt><dd id="kv-username">—</dd></div>
+          </dl>
+
+          <div class="drawer-section">
+            <h4>Family</h4>
+            <div id="drawer-relations" class="relation-list"></div>
+          </div>
+
+          <div class="drawer-actions">
+            <button class="btn btn-secondary" id="drawer-edit-btn">Edit profile</button>
+            <button class="btn btn-ghost" id="drawer-link-btn" data-admin-only>Link to family</button>
+            <button class="btn btn-ghost" id="drawer-divorce-btn" data-admin-only hidden>Mark as divorced</button>
+            <button class="btn btn-ghost" id="drawer-pwd-btn" data-admin-only>Reset password</button>
+            <button class="btn btn-danger-ghost" id="drawer-delete-btn" data-admin-only>Remove from tree</button>
+          </div>
+        </div>
+
+        <form id="drawer-edit" class="drawer-body" hidden>
+          <div class="grid-2">
+            <label class="field"><span>First name *</span><input name="firstName" required /></label>
+            <label class="field"><span>Last name *</span><input name="lastName" required /></label>
+          </div>
+          <label class="field"><span>Nickname</span><input name="nickname" /></label>
+          <div class="grid-2">
+            <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span>Phone</span><input name="phone" type="tel" /></label>
+          </div>
+          <label class="field"><span>Email</span><input name="email" type="email" /></label>
+          <label class="field"><span>Address</span><textarea name="address" rows="3"></textarea></label>
+          <div class="grid-2">
+            <label class="field"><span>Group</span><select name="group" id="edit-group"></select></label>
+            <label class="field" data-admin-only><span>Role</span>
+              <select name="role"><option value="user">User</option><option value="admin">Admin</option></select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Ethnicity</span>
+            <div class="ethnicity-picker" data-picker="edit-ethnicity"></div>
+          </label>
+          <div class="grid-2">
+            <label class="field" data-admin-only><span>Gender</span>
+              <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
+            </label>
+            <label class="field">
+              <span>Life stage <span class="muted small">(auto from birthday)</span></span>
+              <select name="ageGroup"><option value="adult">Adult</option><option value="child">Child</option><option value="baby">Baby</option></select>
+            </label>
+          </div>
+
+          <div class="field">
+            <span>Photo</span>
+            <div class="photo-row">
+              <div class="photo-preview" id="photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="photo-clear">Use silhouette</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-actions">
+            <button class="btn btn-primary" type="submit">Save changes</button>
+            <button class="btn btn-ghost" type="button" id="drawer-cancel">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </aside>
+
+    <!-- ===== MEMBER MODAL (Add / link) ===== -->
+    <div id="modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header class="modal-head">
+          <h3 id="modal-title">Add family member</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="member-form" class="modal-body">
+          <div id="modal-anchor" class="modal-anchor" hidden>
+            <div class="modal-anchor-avatar" id="modal-anchor-avatar"></div>
+            <div class="modal-anchor-text">
+              <span class="modal-anchor-eyebrow">Linking new member to</span>
+              <strong id="modal-anchor-name"></strong>
+            </div>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>First name *</span><input name="firstName" required /></label>
+            <label class="field"><span>Last name *</span><input name="lastName" required /></label>
+          </div>
+          <label class="field"><span>Nickname</span><input name="nickname" /></label>
+          <div class="grid-2">
+            <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span>Gender</span>
+              <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
+            </label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Life stage</span>
+              <select name="ageGroup"><option value="adult">Adult</option><option value="child">Child</option><option value="baby">Baby</option></select>
+            </label>
+            <label class="field"><span>Group</span><select name="group" id="modal-group"></select></label>
+          </div>
+          <label class="field">
+            <span>Ethnicity</span>
+            <div class="ethnicity-picker" data-picker="modal-ethnicity"></div>
+          </label>
+
+          <fieldset class="rel-fieldset" id="modal-rel-fieldset">
+            <legend id="modal-rel-legend">Relationship to existing family</legend>
+            <div class="grid-2">
+              <label class="field">
+                <span id="modal-rel-type-label">Relationship type</span>
+                <select name="relType" id="modal-rel-type">
+                  <option value="root">Root (no relation yet)</option>
+                  <option value="child">Child of…</option>
+                  <option value="parent">Parent of…</option>
+                  <option value="spouse">Spouse of…</option>
+                  <option value="sibling">Sibling of…</option>
+                </select>
+              </label>
+              <label class="field" id="modal-rel-target-wrap" hidden>
+                <span>Connect to</span>
+                <select name="relTargetId" id="modal-rel-target"></select>
+              </label>
+            </div>
+            <label class="field" id="modal-rel-second-wrap" hidden>
+              <span>Other parent (optional)</span>
+              <select name="relSecondId" id="modal-rel-second"></select>
+            </label>
+            <label class="checkbox-row" id="modal-divorce-wrap" hidden>
+              <input type="checkbox" name="divorced" id="modal-divorced" />
+              <span>Mark as divorced — they share children but are no longer together</span>
+            </label>
+          </fieldset>
+
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Add &amp; create account</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+          <p class="muted small">An account will be created automatically. The username defaults to <code>firstnamelastname</code> with a randomized password shown after creation.</p>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== PASSWORD MODAL ===== -->
+    <div id="pwd-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="pwd-title">Account credentials</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="modal-body">
+          <p class="muted">Share these with the family member. They can change their password later.</p>
+          <div class="cred-block">
+            <div><span>Username</span><code id="pwd-username"></code></div>
+            <div><span>Password</span><code id="pwd-password"></code></div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="pwd-copy">Copy both</button>
+            <button class="btn btn-primary" type="button" data-close>Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PHOTO CROP MODAL ===== -->
+    <div id="crop-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="crop-title">
+        <header class="modal-head">
+          <h3 id="crop-title">Crop photo</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="modal-body">
+          <p class="muted small">Drag to reposition, scroll or use the slider to zoom.</p>
+          <div class="crop-stage" id="crop-stage">
+            <img id="crop-img" alt="" draggable="false" />
+            <div class="crop-mask" aria-hidden="true"></div>
+            <div class="crop-frame" aria-hidden="true"></div>
+          </div>
+          <div class="crop-controls">
+            <span class="muted small">Zoom</span>
+            <input id="crop-zoom" type="range" min="100" max="400" value="100" />
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" id="crop-apply" type="button">Use this crop</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== CHANGE / SET PASSWORD MODAL ===== -->
+    <div id="cpw-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="cpw-title">Change password</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="cpw-form" class="modal-body">
+          <p class="muted small" id="cpw-subject"></p>
+          <label class="field"><span>New password</span><input name="next" type="password" required autocomplete="new-password" /></label>
+          <label class="field"><span>Confirm new password</span><input name="confirm" type="password" required autocomplete="new-password" /></label>
+          <p id="cpw-error" class="form-error" role="alert"></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save password</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== GOOGLE CALENDAR MODAL ===== -->
+    <div id="gcal-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="gcal-title">
+        <header class="modal-head">
+          <h3 id="gcal-title">Google Calendar</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="modal-body" id="gcal-body"></div>
+      </div>
+    </div>
+
+    <!-- ===== IDLE TIMEOUT WARNING ===== -->
+    <div id="idle-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-panel modal-sm" role="alertdialog" aria-modal="true" aria-labelledby="idle-title">
+        <header class="modal-head">
+          <h3 id="idle-title">Are you still there?</h3>
+        </header>
+        <div class="modal-body">
+          <p>You've been idle for an hour. For security, you'll be signed out in <strong><span id="idle-countdown">60</span></strong> seconds unless you continue your session.</p>
+          <div class="idle-bar"><div class="idle-bar-fill" id="idle-bar-fill"></div></div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" id="idle-continue">I'm still here</button>
+            <button class="btn btn-ghost" id="idle-logout-now">Sign out now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- toast -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
