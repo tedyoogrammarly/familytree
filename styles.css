@@ -1166,6 +1166,27 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
   margin: 0;
 }
 .drawer-nick { color: rgba(247,243,236,.72); font-style: italic; margin: 4px 0 0; font-size: 14px; }
+.node-memoriam {
+  position: absolute;
+  top: -10px; left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  background: hsl(220 12% 18%);
+  color: #f7f3ec;
+  border: 1px solid hsl(220 12% 28%);
+  z-index: 2;
+  font-weight: 600;
+  font-family: var(--font-display);
+  pointer-events: none;
+}
+.node.in-memoriam .node-photo {
+  filter: grayscale(.55) brightness(.95);
+}
 .drawer-remembering {
   display: inline-block;
   margin: 0 0 8px;
@@ -2455,6 +2476,84 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   cursor: pointer;
 }
 .admin-email-copy:hover { background: var(--paper-soft); color: var(--ink-800); }
+.th-sort {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: transparent; border: 0; padding: 0;
+  font: inherit; color: inherit; cursor: pointer;
+}
+.th-sort:hover { color: var(--brand-700); }
+.th-sort-arrow { font-size: 11px; opacity: .55; }
+.admin-login-flag {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.admin-login-flag input[type="checkbox"] {
+  width: 14px; height: 14px;
+  accent-color: hsl(145 55% 42%);
+  cursor: not-allowed;
+}
+
+/* ===== Page emoji slot (admin-editable, click to open emoji picker) ===== */
+.page-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  margin-right: 8px;
+  border-radius: 8px;
+  font-size: 22px;
+  line-height: 1;
+  cursor: default;
+  vertical-align: middle;
+  background: transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+  border: 1px dashed transparent;
+}
+body.is-admin .page-emoji {
+  cursor: pointer;
+}
+body.is-admin .page-emoji:hover {
+  background: var(--paper-soft);
+  border-color: var(--ink-200);
+}
+body.is-admin .page-emoji.is-empty::before {
+  content: '＋';
+  font-size: 14px;
+  color: var(--ink-400);
+  font-weight: 400;
+}
+body:not(.is-admin) .page-emoji.is-empty { display: none; }
+
+.page-emoji-floating {
+  position: absolute;
+  top: 84px;
+  left: 24px;
+  z-index: 5;
+  font-size: 28px;
+}
+body:not(.is-admin) .page-emoji-floating { display: none; }
+body.is-admin .page-emoji-floating.is-empty {
+  background: rgba(255,255,255,.85);
+  border: 1px dashed var(--ink-200);
+  width: 36px; height: 36px;
+}
+
+.nav-emoji {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.emoji-clear {
+  display: block; width: calc(100% - 24px); margin: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--ink-200); background: #fff;
+  border-radius: 8px; cursor: pointer;
+  font-size: 13px; color: var(--ink-600);
+}
+.emoji-clear:hover { background: hsl(0 65% 96%); color: hsl(0 65% 38%); border-color: hsl(0 65% 80%); }
 
 /* ===== Trip event styles ===== */
 .trip-badge {
@@ -2626,6 +2725,7 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .dash-up-kind-anniversary { background: hsl(282 50% 94%); color: hsl(282 38% 38%); }
 .dash-up-kind-event       { background: hsl(205 60% 94%); color: hsl(205 60% 30%); }
 .dash-up-kind-reminder    { background: hsl(35 80% 94%);  color: hsl(35 60% 32%); }
+.dash-up-kind-holiday     { background: hsl(0 65% 94%);   color: hsl(0 55% 38%); }
 
 .dash-gifts-list { display: flex; flex-direction: column; gap: 8px; }
 .dash-gift-row {

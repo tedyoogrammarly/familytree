@@ -571,6 +571,7 @@ const Store = {
       gifts: [],
       reminders: [],
       grocery: [],
+      pageEmojis: {},     // { dashboard, tree, myfamily, calendar, events, gifts, admin } → emoji string
       googleCalendar: {
         clientId: '',
         accessToken: '',
@@ -616,6 +617,31 @@ const Store = {
       if (m.dateOfDeath === undefined) m.dateOfDeath = '';
       if (m.plan529      === undefined) m.plan529 = '';
       if (m.notes        === undefined) m.notes = '';
+    }
+    // Heal asymmetric parent/child links: if A says "B is my parent", make
+    // sure B says "A is my child". This fixes profiles where one parent
+    // shows up in the drawer but the other doesn't because childrenIds got
+    // out of sync at some point. Runs every load; idempotent.
+    for (const m of Object.values(members)) {
+      (m.parentIds || []).forEach(pid => {
+        const p = members[pid];
+        if (!p) return;
+        p.childrenIds = p.childrenIds || [];
+        if (!p.childrenIds.includes(m.id)) p.childrenIds.push(m.id);
+      });
+      (m.childrenIds || []).forEach(cid => {
+        const c = members[cid];
+        if (!c) return;
+        c.parentIds = c.parentIds || [];
+        if (!c.parentIds.includes(m.id)) c.parentIds.push(m.id);
+      });
+      // exSpouseIds symmetry too — same fragility applies.
+      (m.exSpouseIds || []).forEach(eid => {
+        const e = members[eid];
+        if (!e) return;
+        e.exSpouseIds = e.exSpouseIds || [];
+        if (!e.exSpouseIds.includes(m.id)) e.exSpouseIds.push(m.id);
+      });
     }
     for (const m of Object.values(members)) {
       if (m.spouseId && m.divorced) {
@@ -919,18 +945,30 @@ const Tree = {
       const ex = Store.byId(eid);
       if (ex) out.push({ label: 'Previous spouse', member: ex });
     });
-    (member.parentIds || []).forEach(pid => {
+    // Parents: union of m.parentIds and anyone whose childrenIds includes m.
+    // The reverse-lookup defends against asymmetric data that healMissingKeys
+    // might miss on the first load.
+    const parentIds = new Set(member.parentIds || []);
+    Store.membersList().forEach(o => {
+      if ((o.childrenIds || []).includes(member.id)) parentIds.add(o.id);
+    });
+    parentIds.forEach(pid => {
       const p = Store.byId(pid); if (p) out.push({ label: 'Parent', member: p });
     });
-    (member.childrenIds || []).forEach(cid => {
+    // Children: same union pattern.
+    const childIds = new Set(member.childrenIds || []);
+    Store.membersList().forEach(o => {
+      if ((o.parentIds || []).includes(member.id)) childIds.add(o.id);
+    });
+    childIds.forEach(cid => {
       const c = Store.byId(cid); if (c) out.push({ label: 'Child', member: c });
     });
-    // siblings
+    // Siblings: anyone who shares a parent with me, computed from the unioned
+    // parent set so we catch siblings reachable through either link direction.
     const sibIds = new Set();
-    (member.parentIds || []).forEach(pid => {
-      (Store.byId(pid)?.childrenIds || []).forEach(cid => {
-        if (cid !== member.id) sibIds.add(cid);
-      });
+    parentIds.forEach(pid => {
+      const p = Store.byId(pid);
+      (p?.childrenIds || []).forEach(cid => { if (cid !== member.id) sibIds.add(cid); });
     });
     sibIds.forEach(sid => {
       const s = Store.byId(sid); if (s) out.push({ label: 'Sibling', member: s });
@@ -1742,7 +1780,8 @@ function nodeHTML(m) {
   const isSelf = Auth.isSelf(m.id) ? ' is-self' : '';
   const relation = Tree.computeRelation(m.id);
   // Age is sensitive — only admins see it on tree cards.
-  const ageStr = Auth.isAdmin() ? ageLabel(m.birthday) : '';
+  const ageStr = Auth.isAdmin() ? ageLabel(m.birthday, m.dateOfDeath) : '';
+  const inMemoriam = !!m.dateOfDeath;
   const gen = ((_gensCache || computeGenerations())[m.id] ?? 0);
 
   const sp = m.spouseId ? Store.byId(m.spouseId) : null;
@@ -1772,9 +1811,10 @@ function nodeHTML(m) {
     : '';
 
   return `
-    <div class="node${isSelf}${collapsedClass}" data-id="${m.id}" data-gen="${gen}" style="${styleVars}">
+    <div class="node${isSelf}${collapsedClass}${inMemoriam ? ' in-memoriam' : ''}" data-id="${m.id}" data-gen="${gen}" style="${styleVars}">
       <div class="node-gen-bar" aria-hidden="true"></div>
       ${selfStar}
+      ${inMemoriam ? '<div class="node-memoriam" title="In loving memory">In loving memory</div>' : ''}
       <div class="node-photo is-${m.gender}" ${photoBg}>${inner}</div>
       <div class="node-body">
         ${relation ? `<div class="node-relation">${relation}</div>` : ''}
@@ -2427,10 +2467,28 @@ const MyFamilyView = {
 
     // Collect the cast.
     const parents = (focus.parentIds || []).map(id => Store.byId(id)).filter(Boolean);
-    const spouse  = focus.spouseId && !focus.divorced ? Store.byId(focus.spouseId) : null;
-    // Children: union of focus's children and (if married) spouse's children, deduped.
-    const childIds = unique([...(focus.childrenIds || []), ...((spouse && spouse.childrenIds) || [])]);
+    const spouse  = focus.spouseId ? Store.byId(focus.spouseId) : null;
+    const exes    = (focus.exSpouseIds || [])
+      .map(id => Store.byId(id))
+      .filter(Boolean);
+    // Children: union from focus + current spouse + every ex. A child from
+    // a previous marriage still belongs in this view — they're family.
+    const allPartners = [...(spouse ? [spouse] : []), ...exes];
+    const childIds = unique([
+      ...(focus.childrenIds || []),
+      ...allPartners.flatMap(p => p.childrenIds || []),
+    ]);
     const children = childIds.map(id => Store.byId(id)).filter(Boolean);
+
+    // For each ex-spouse, figure out which of `children` came from THAT
+    // marriage (parents include both focus and ex). Used to draw a child
+    // → ex connector so the divorced-but-shared-children case visualizes.
+    const childrenByPartnerId = {};
+    allPartners.forEach(p => {
+      childrenByPartnerId[p.id] = children.filter(c =>
+        (c.parentIds || []).includes(focus.id) && (c.parentIds || []).includes(p.id)
+      ).map(c => c.id);
+    });
 
     // Layout: 3 rows. Each row is centered horizontally around x = 0.
     // Card geometry matches the main Family Tree.
@@ -2457,11 +2515,12 @@ const MyFamilyView = {
     const Y_CHILDREN = Y_FOCUS + CH + ROW_GAP;
 
     placeRow(parents, Y_PARENTS);
-    placeRow(spouse ? [focus, spouse] : [focus], Y_FOCUS);
+    // Focus row: [focus, current spouse, ex1, ex2, ...] left-to-right.
+    placeRow([focus, ...allPartners], Y_FOCUS);
     placeRow(children, Y_CHILDREN);
 
     // World bounds — compute min/max so we can center the canvas.
-    const all = [focus, ...parents, ...(spouse ? [spouse] : []), ...children];
+    const all = [focus, ...parents, ...allPartners, ...children];
     let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
     all.forEach(m => {
       const p = rowFor[m.id];
@@ -2483,7 +2542,7 @@ const MyFamilyView = {
     world.style.height = `${worldH + padTop * 2}px`;
 
     // -------- nodes --------
-    const renderableMembers = [focus, ...parents, ...(spouse ? [spouse] : []), ...children];
+    const renderableMembers = [focus, ...parents, ...allPartners, ...children];
     nodes.innerHTML = renderableMembers.map(m => {
       const p = rowFor[m.id]; if (!p) return '';
       const html = nodeHTML(m);
@@ -2543,44 +2602,58 @@ const MyFamilyView = {
       lines.push(`M ${focusTop.x} ${trunkY} V ${focusTop.y}`);
     }
 
-    // Focus + Spouse: spouse line + heart
-    if (spouse) {
+    // Focus + each partner: draw a horizontal line + heart between them.
+    // Current spouse → solid heart; ex-spouses → broken heart.
+    allPartners.forEach(p => {
       const a = rowFor[focus.id];
-      const b = rowFor[spouse.id];
+      const b = rowFor[p.id];
+      if (!a || !b) return;
       const yLine = a.y + CH / 2 + shiftY;
       const leftX  = Math.min(a.x, b.x) + CW + shiftX;
       const rightX = Math.max(a.x, b.x) + shiftX;
       lines.push(`M ${leftX} ${yLine} H ${rightX}`);
       const heartX = (leftX + rightX) / 2;
-      hearts.push(heartMarker(heartX, yLine, false));
-    }
+      const isEx = p.id !== focus.spouseId;
+      hearts.push(heartMarker(heartX, yLine, isEx));
+    });
 
-    // Focus(+Spouse) → Children: drop from couple midpoint (or focus bottom)
-    // to a trunk above the kids, then up into each child.
+    // Focus(+Partners) → Children. Each marriage gets its own trunk so a
+    // child from an ex-marriage visually connects to the (focus, ex) pair,
+    // not to the current spouse. Children whose other parent isn't in the
+    // tree fall back to a focus-only trunk.
     if (children.length) {
-      const focusBottom = ANCHOR_BOTTOM(focus.id);
-      let startX, startY;
-      if (spouse) {
+      const pairMidpoint = (partner) => {
         const a = rowFor[focus.id];
-        const b = rowFor[spouse.id];
+        const b = rowFor[partner.id];
         const yLine = a.y + CH / 2 + shiftY;
-        startX = (Math.min(a.x, b.x) + CW + Math.max(a.x, b.x)) / 2 + shiftX;
-        startY = yLine;
-        // Drop from heart-line down past the bottom of the focus row
-        const dropTo = a.y + CH + shiftY + 4;
-        lines.push(`M ${startX} ${startY} V ${dropTo}`);
-        startY = dropTo;
-      } else {
-        startX = focusBottom.x;
-        startY = focusBottom.y;
-      }
-      const childTops = children.map(c => ANCHOR_TOP(c.id));
-      const trunkY = childTops[0].y - 36;
-      lines.push(`M ${startX} ${startY} V ${trunkY}`);
-      const minCX = Math.min(startX, ...childTops.map(p => p.x));
-      const maxCX = Math.max(startX, ...childTops.map(p => p.x));
-      lines.push(`M ${minCX} ${trunkY} H ${maxCX}`);
-      childTops.forEach(ct => lines.push(`M ${ct.x} ${trunkY} V ${ct.y}`));
+        const midX = (Math.min(a.x, b.x) + CW + Math.max(a.x, b.x)) / 2 + shiftX;
+        return { x: midX, y: yLine };
+      };
+      const groups = [];
+      // One group per partner (current + exes) — only if that pairing has kids.
+      allPartners.forEach(p => {
+        const kids = (childrenByPartnerId[p.id] || []).map(id => Store.byId(id)).filter(Boolean);
+        if (kids.length) groups.push({ start: pairMidpoint(p), kids });
+      });
+      // Solo children: in `children` but not matched to any partner pairing.
+      const matched = new Set(Object.values(childrenByPartnerId).flat());
+      const soloKids = children.filter(c => !matched.has(c.id));
+      if (soloKids.length) groups.push({ start: ANCHOR_BOTTOM(focus.id), kids: soloKids });
+
+      groups.forEach(({ start, kids }) => {
+        const childTops = kids.map(c => ANCHOR_TOP(c.id)).filter(Boolean);
+        if (!childTops.length) return;
+        // Drop from start (heart-line or focus bottom) past the focus-row bottom,
+        // then horizontal trunk above kids, then up into each child.
+        const dropTo = rowFor[focus.id].y + CH + shiftY + 4;
+        lines.push(`M ${start.x} ${start.y} V ${dropTo}`);
+        const trunkY = childTops[0].y - 36;
+        lines.push(`M ${start.x} ${dropTo} V ${trunkY}`);
+        const minCX = Math.min(start.x, ...childTops.map(p => p.x));
+        const maxCX = Math.max(start.x, ...childTops.map(p => p.x));
+        lines.push(`M ${minCX} ${trunkY} H ${maxCX}`);
+        childTops.forEach(ct => lines.push(`M ${ct.x} ${trunkY} V ${ct.y}`));
+      });
     }
 
     edges.setAttribute('width', stageW);
@@ -2609,6 +2682,8 @@ const MyFamilyView = {
 const AdminView = {
   filterGroup: '',                // active group chip; '' means "all"
   viewMode: 'table',              // 'table' | 'cards' — toggle in Members panel
+  nameSort: 'last',               // 'last' | 'first' — toggled by clicking the Name header
+  accountIds: null,               // Set<member_id> known to have a Supabase login (populated async)
   init() {
     on($('#btn-admin-add'), 'click', () => MemberModal.open());
     on($('#btn-admin-export'), 'click', () => this.exportCSV());
@@ -2626,6 +2701,28 @@ const AdminView = {
     });
     on($('#btn-admin-view-table'), 'click', () => this.setViewMode('table'));
     on($('#btn-admin-view-cards'), 'click', () => this.setViewMode('cards'));
+    on($('#admin-name-sort'), 'click', () => {
+      this.nameSort = this.nameSort === 'last' ? 'first' : 'last';
+      this.render();
+    });
+  },
+
+  // Pull every (member_id, user_id) mapping once per render and stash the set
+  // of member_ids that have a Supabase login. The table re-renders when this
+  // resolves so checkmarks fill in. Anon-readable thanks to the RLS policy.
+  async refreshAccountIds() {
+    if (!Backend.client) { this.accountIds = new Set(); return; }
+    try {
+      const { data, error } = await Backend.client
+        .from('member_accounts')
+        .select('member_id');
+      if (error) throw error;
+      this.accountIds = new Set((data || []).map(r => r.member_id).filter(Boolean));
+    } catch (e) {
+      console.warn('refreshAccountIds:', e.message || e);
+      this.accountIds = new Set();
+    }
+    if (Views.current === 'admin') this.render();
   },
   setViewMode(mode) {
     if (mode !== 'table' && mode !== 'cards') return;
@@ -2636,6 +2733,19 @@ const AdminView = {
   visibleMembers() {
     let list = Store.membersList();
     if (this.filterGroup) list = list.filter(m => m.group === this.filterGroup);
+    const norm = (s) => (s || '').toString().trim();
+    if (this.nameSort === 'first') {
+      // Sort by first name, then last. Mirrors sortMembers() but with reversed
+      // priority so admins can find someone when they only remember the first name.
+      return list.slice().sort((a, b) => {
+        const aF = norm(a.firstName), bF = norm(b.firstName);
+        if (!aF && bF) return 1;
+        if (aF && !bF) return -1;
+        const c1 = aF.localeCompare(bF, undefined, { sensitivity: 'base' });
+        if (c1 !== 0) return c1;
+        return norm(a.lastName).localeCompare(norm(b.lastName), undefined, { sensitivity: 'base' });
+      });
+    }
     return sortMembers(list);
   },
   render() {
@@ -2643,6 +2753,11 @@ const AdminView = {
     $('#admin-filter-note').textContent = this.filterGroup
       ? `Showing ${list.length} member${list.length === 1 ? '' : 's'} in “${this.filterGroup}”`
       : `Showing all members (${list.length})`;
+    const sortLabel = $('#admin-name-sort-label');
+    if (sortLabel) sortLabel.textContent = this.nameSort === 'first' ? 'Name (by first)' : 'Name (by last)';
+    // Fire the account-id probe in the background; it'll re-render with checkmarks
+    // when ready. First call only — subsequent renders reuse the cached set.
+    if (this.accountIds === null) this.refreshAccountIds();
 
     // View-mode segmented control
     $('#btn-admin-view-table')?.classList.toggle('is-active', this.viewMode === 'table');
@@ -2699,8 +2814,16 @@ const AdminView = {
     this.renderMembershipEditor();
   },
   renderTable(list) {
+    const accountIds = this.accountIds; // may be null while pending
     const rows = list.map(m => {
       const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+      const hasLogin = accountIds ? accountIds.has(m.id) : null;
+      const loginCell = accountIds == null
+        ? '<span class="muted small">…</span>'
+        : `<span class="admin-login-flag" title="${hasLogin ? 'Has a Supabase login' : 'No Supabase login yet — use Reset PW to create one'}">
+            <input type="checkbox" disabled ${hasLogin ? 'checked' : ''} aria-label="Has Supabase login" />
+            <span class="muted small">${hasLogin ? 'Yes' : 'No'}</span>
+          </span>`;
       return `
         <tr data-id="${m.id}">
           <td>
@@ -2718,6 +2841,7 @@ const AdminView = {
           <td><span class="role-pill ${m.role}">${m.role}</span></td>
           <td>${m.group ? escape(m.group) : '—'}</td>
           <td>${m.birthday ? formatDate(m.birthday) : '—'}</td>
+          <td>${loginCell}</td>
           <td style="text-align:right; white-space:nowrap;">
             <button class="btn btn-ghost btn-sm" data-action="edit">Edit</button>
             <button class="btn btn-ghost btn-sm" data-action="reset">Reset PW</button>
@@ -2725,7 +2849,7 @@ const AdminView = {
           </td>
         </tr>`;
     }).join('');
-    $('#admin-rows').innerHTML = rows || `<tr><td colspan="6" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
+    $('#admin-rows').innerHTML = rows || `<tr><td colspan="7" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
 
     $('#admin-rows').querySelectorAll('button[data-action]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -6183,6 +6307,7 @@ const MemberModal = {
             ? 'They must click the confirmation link in their email before signing in. Share the password too — they’ll need it after confirming.'
             : 'Share these with the family member. They can change their password after signing in.',
         });
+        AdminView.accountIds = null;  // refresh the Login column on next render
       } else {
         toast('Member saved, but the Supabase login could not be created: ' + r.reason, 'warn');
       }
@@ -6333,6 +6458,7 @@ async function sendAdminResetEmail(m) {
           ? 'They must click the confirmation link in their email before signing in. Share the password too — they’ll need it after confirming.'
           : 'Share these with the family member. They can change their password after signing in.',
       });
+      AdminView.accountIds = null;
     } else {
       toast('Could not create login: ' + r.reason, 'warn');
     }
@@ -6558,6 +6684,7 @@ function applyRemoteState(state) {
   if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
     TreeFilters.refreshGroupOptions();
   }
+  if (typeof PageEmojis !== 'undefined' && PageEmojis.applyAll) PageEmojis.applyAll();
   document.body.classList.toggle('is-admin', Auth.isAdmin());
   if (Canvas?.renderAll) Canvas.renderAll();
   if (Views?.current === 'admin')    AdminView.render();
@@ -6729,14 +6856,28 @@ const TreeFilters = {
 
   computeKeepSet() {
     if (this.group) {
-      const ids = Store.membersList()
-        .filter(m => m.group === this.group)
-        .map(m => m.id);
-      if (!ids.length) {
+      const groupMembers = Store.membersList().filter(m => m.group === this.group);
+      if (!groupMembers.length) {
         toast(`No one is in group "${this.group}".`, 'warn');
         return null;
       }
-      return new Set(ids);
+      // Keep set: every group member plus their immediate family (parents,
+      // spouse + exes, siblings, children) so the filtered tree shows real
+      // context instead of a row of disconnected nodes.
+      const keep = new Set();
+      groupMembers.forEach(m => {
+        keep.add(m.id);
+        if (m.spouseId) keep.add(m.spouseId);
+        (m.exSpouseIds || []).forEach(eid => keep.add(eid));
+        (m.parentIds || []).forEach(pid => {
+          keep.add(pid);
+          // siblings via shared parent
+          const p = Store.byId(pid); if (!p) return;
+          (p.childrenIds || []).forEach(sid => keep.add(sid));
+        });
+        (m.childrenIds || []).forEach(cid => keep.add(cid));
+      });
+      return keep;
     }
     if (this.myFamily) {
       const me = Auth.current;
@@ -6790,26 +6931,35 @@ function formatDate(iso) {
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
-function ageParts(iso) {
+// `asOf` lets the caller freeze the age clock — used to stop counting at the
+// date of death so we never show "82 years old" for someone who passed at 75.
+function ageParts(iso, asOf) {
   if (!iso) return null;
   const d = new Date(iso + 'T00:00:00');
   if (isNaN(d.getTime())) return null;
-  const now = new Date();
-  let years  = now.getFullYear() - d.getFullYear();
-  let months = now.getMonth()    - d.getMonth();
-  let days   = now.getDate()     - d.getDate();
+  let stop;
+  if (asOf) {
+    stop = new Date(asOf + 'T00:00:00');
+    if (isNaN(stop.getTime())) stop = new Date();
+  } else {
+    stop = new Date();
+  }
+  let years  = stop.getFullYear() - d.getFullYear();
+  let months = stop.getMonth()    - d.getMonth();
+  let days   = stop.getDate()     - d.getDate();
   if (days < 0) months -= 1;
   if (months < 0) { years -= 1; months += 12; }
   if (years < 0) return null;
   return { years, months };
 }
-function ageLabel(iso) {
-  const a = ageParts(iso); if (!a) return '';
-  if (a.years >= 4) return `${a.years} years old`;
-  if (a.years === 0) return `${a.months} ${a.months === 1 ? 'month' : 'months'} old`;
+function ageLabel(iso, asOf) {
+  const a = ageParts(iso, asOf); if (!a) return '';
+  const suffix = asOf ? '' : ' old'; // "X years" reads better when frozen at DOD
+  if (a.years >= 4) return `${a.years} years${suffix}`;
+  if (a.years === 0) return `${a.months} ${a.months === 1 ? 'month' : 'months'}${suffix}`;
   const yr = `${a.years} ${a.years === 1 ? 'year' : 'years'}`;
   const mo = a.months ? ` ${a.months} ${a.months === 1 ? 'month' : 'months'}` : '';
-  return `${yr}${mo} old`;
+  return `${yr}${mo}${suffix}`;
 }
 function ageGroupForBirthday(iso) {
   const a = ageParts(iso); if (!a) return null;
@@ -7093,6 +7243,8 @@ function enterApp() {
   else { v.hidden = false; h.hidden = true; btn.title = 'Switch to horizontal view'; }
   Canvas.renderAll();
   setTimeout(() => { if (Store.membersList().length) Canvas.fit(); }, 60);
+  // Push stored page emojis into the H2 slots and nav tabs.
+  PageEmojis.applyAll();
   // Admins land on Dashboard; everyone else stays on the tree.
   if (Auth.isAdmin()) Views.show('dashboard');
 }
@@ -7116,6 +7268,7 @@ async function init() {
   GiftsView.init();
   RemindersModal.init();
   DashboardView.init();
+  PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
   bindCredsModal();
@@ -7353,8 +7506,20 @@ const DashboardView = {
   renderUpcoming() {
     const host = $('#dash-upcoming-list'); if (!host) return;
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const horizon = new Date(today); horizon.setDate(horizon.getDate() + 30);
+    const horizon = new Date(today); horizon.setDate(horizon.getDate() + 60);
     const items = [];
+
+    // US holidays — same source the Calendar uses. Pull this year and next
+    // since the 60-day window can straddle a year boundary.
+    [...usHolidaysForYear(today.getFullYear()), ...usHolidaysForYear(today.getFullYear() + 1)].forEach(h => {
+      const d = new Date(h.date + 'T00:00:00');
+      if (d < today || d > horizon) return;
+      items.push({
+        date: d, sort: d.getTime(), kind: 'holiday',
+        title: h.name, sub: 'US holiday', icon: '🇺🇸',
+        onClick: () => Views.show('calendar'),
+      });
+    });
 
     // Birthdays — annual recurrence on MM-DD
     Store.membersList().forEach(m => {
@@ -7419,7 +7584,7 @@ const DashboardView = {
 
     items.sort((a, b) => a.sort - b.sort);
     if (!items.length) {
-      host.innerHTML = '<p class="muted small" style="margin:0;">Nothing in the next 30 days. Quiet stretch.</p>';
+      host.innerHTML = '<p class="muted small" style="margin:0;">Nothing in the next 60 days. Quiet stretch.</p>';
       return;
     }
     host.innerHTML = items.map((it, i) => `
@@ -7441,17 +7606,13 @@ const DashboardView = {
 
   renderGifts() {
     const host = $('#dash-gifts-list'); if (!host) return;
-    const all = (Store.state.gifts || []).slice();
-    // Sort: undone first, then by date desc. Cap to 8 for the tile.
-    all.sort((a, b) => {
-      const aDone = a.purchased && a.sent ? 1 : 0;
-      const bDone = b.purchased && b.sent ? 1 : 0;
-      if (aDone !== bDone) return aDone - bDone;
-      return (b.date || '').localeCompare(a.date || '');
-    });
+    // Once a gift is both purchased AND sent it's "done" — drop it from the
+    // tracker so the list always shows the next thing that needs attention.
+    const all = (Store.state.gifts || []).filter(g => !(g.purchased && g.sent));
+    all.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const top = all.slice(0, 8);
     if (!top.length) {
-      host.innerHTML = '<p class="muted small" style="margin:0;">No gifts logged yet. Click "Log a gift" to add one.</p>';
+      host.innerHTML = '<p class="muted small" style="margin:0;">All caught up — every logged gift is purchased and sent.</p>';
       return;
     }
     const memberName = (id) => { const m = id ? Store.byId(id) : null; return m ? `${m.firstName} ${m.lastName}` : ''; };
@@ -7559,5 +7720,102 @@ function expandReminder(r, today, horizon) {
   }
   return out;
 }
+
+// -------------------- PAGE EMOJIS --------------------
+// Admins can pin an emoji to each page. The emoji shows in the page H2 and
+// gets prepended to the corresponding nav tab so the toolbar stays in sync.
+// Storage: Store.state.pageEmojis = { dashboard, tree, myfamily, calendar,
+// events, gifts, admin }. Empty string clears the emoji.
+const PageEmojis = {
+  // Hidden input the EmojiPicker writes back into; we listen for change and
+  // route the result to whichever page initiated the pick.
+  _picking: null,
+
+  init() {
+    // Click any page-emoji slot → open the existing emoji popover. Capture
+    // phase + stopPropagation so we beat the global "click outside → close"
+    // listener registered inside EmojiPicker, which would otherwise close
+    // the popover the same tick we opened it.
+    document.addEventListener('click', (e) => {
+      const slot = e.target.closest('[data-page-emoji]');
+      if (!slot) return;
+      if (!Auth.isAdmin()) return;
+      e.stopPropagation();
+      const page = slot.dataset.pageEmoji;
+      this.openPickerFor(page, slot);
+    }, true);
+  },
+
+  // Open the EmojiPicker. The picker writes into a sacrificial hidden input
+  // so we can capture the chosen emoji via 'change' without modifying the
+  // picker itself.
+  openPickerFor(page, anchor) {
+    let proxy = document.getElementById('page-emoji-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.id = 'page-emoji-proxy';
+      proxy.type = 'text';
+      proxy.style.position = 'absolute';
+      proxy.style.opacity = '0';
+      proxy.style.pointerEvents = 'none';
+      proxy.style.width = '0';
+      proxy.style.height = '0';
+      document.body.appendChild(proxy);
+      proxy.addEventListener('change', () => {
+        if (this._picking) this.set(this._picking, proxy.value);
+        this._picking = null;
+      });
+    }
+    this._picking = page;
+    proxy.value = '';
+    EmojiPicker.open(proxy, anchor);
+    // Add a small "clear" affordance once per session inside the popover.
+    setTimeout(() => {
+      const pop = EmojiPicker.popover; if (!pop) return;
+      if (!pop.querySelector('.emoji-clear')) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'emoji-clear';
+        btn.textContent = 'Clear emoji';
+        btn.addEventListener('click', () => {
+          if (this._picking) this.set(this._picking, '');
+          this._picking = null;
+          EmojiPicker.close();
+        });
+        pop.appendChild(btn);
+      }
+    }, 0);
+  },
+
+  set(page, emoji) {
+    Store.state.pageEmojis = Store.state.pageEmojis || {};
+    Store.state.pageEmojis[page] = emoji;
+    Store.save();
+    this.applyAll();
+  },
+
+  // Push the current emojis into the DOM: every page slot + every nav tab.
+  applyAll() {
+    const map = (Store.state && Store.state.pageEmojis) || {};
+    document.querySelectorAll('[data-page-emoji]').forEach(el => {
+      const page = el.dataset.pageEmoji;
+      const e = map[page] || '';
+      el.textContent = e;
+      el.classList.toggle('is-empty', !e);
+    });
+    document.querySelectorAll('.nav-tab[data-view]').forEach(tab => {
+      const page = tab.dataset.view;
+      const e = map[page] || '';
+      let prefix = tab.querySelector('.nav-emoji');
+      if (!prefix) {
+        prefix = document.createElement('span');
+        prefix.className = 'nav-emoji';
+        tab.insertBefore(prefix, tab.firstChild);
+      }
+      prefix.textContent = e;
+      prefix.style.marginRight = e ? '6px' : '0';
+    });
+  },
+};
 
 document.addEventListener('DOMContentLoaded', init);

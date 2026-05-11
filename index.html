@@ -114,7 +114,7 @@
         <div class="dash-hero">
           <div class="dash-hero-text">
             <p class="dash-eyebrow" id="dash-greeting">Good morning</p>
-            <h2 id="dash-title">Today at a glance</h2>
+            <h2><span class="page-emoji" data-page-emoji="dashboard"></span><span id="dash-title">Today at a glance</span></h2>
           </div>
           <div class="dash-clock" id="dash-clock">
             <div class="dash-time" id="dash-time">—</div>
@@ -130,8 +130,8 @@
         <div class="dash-grid">
           <section class="panel dash-panel dash-upcoming">
             <header class="dash-panel-head">
-              <h3>Upcoming · next 30 days</h3>
-              <span class="muted small">Birthdays · Anniversaries · Events</span>
+              <h3>Upcoming · next 60 days</h3>
+              <span class="muted small">Birthdays · Anniversaries · Events · Holidays</span>
             </header>
             <div id="dash-upcoming-list" class="dash-upcoming-list"></div>
           </section>
@@ -205,6 +205,7 @@
 
     <!-- ===== TREE VIEW ===== -->
     <main id="view-tree" class="view view-tree">
+      <span class="page-emoji page-emoji-floating" data-page-emoji="tree" data-admin-only></span>
       <div class="tree-toolbar">
         <div class="tree-toolbar-group">
           <button class="icon-btn" id="btn-zoom-out" title="Zoom out (−)">
@@ -285,7 +286,7 @@
       <div class="container">
         <div class="page-head">
           <div>
-            <h2 id="myfamily-title">My Family</h2>
+            <h2><span class="page-emoji" data-page-emoji="myfamily"></span><span id="myfamily-title">My Family</span></h2>
             <p id="myfamily-sub" class="muted">Your parents, spouse, and children at a glance.</p>
           </div>
           <div class="myfamily-tools" id="myfamily-tools" data-admin-only>
@@ -310,7 +311,7 @@
       <div class="container">
         <div class="page-head">
           <div>
-            <h2>Admin</h2>
+            <h2><span class="page-emoji" data-page-emoji="admin"></span>Admin</h2>
             <p>Manage members, groups, and accounts.</p>
           </div>
           <button class="btn btn-secondary" id="btn-admin-export">Export to Excel</button>
@@ -356,11 +357,12 @@
                 <table class="table" id="admin-table">
                   <thead>
                     <tr>
-                      <th>Name</th>
+                      <th><button type="button" id="admin-name-sort" class="th-sort" title="Toggle sort: last name ↔ first name"><span id="admin-name-sort-label">Name (by last)</span> <span class="th-sort-arrow">⇅</span></button></th>
                       <th>Email</th>
                       <th>Role</th>
                       <th>Group</th>
                       <th>Birthday</th>
+                      <th title="Whether this member has a Supabase login linked">Login</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -379,7 +381,7 @@
       <div class="container">
         <div class="page-head">
           <div>
-            <h2>Events</h2>
+            <h2><span class="page-emoji" data-page-emoji="events"></span>Events</h2>
             <p>Plan family gatherings and track who showed up.</p>
           </div>
           <button class="btn btn-primary" id="btn-event-add" data-admin-only>+ New event</button>
@@ -396,7 +398,7 @@
       <div class="container">
         <div class="page-head">
           <div>
-            <h2>Calendar</h2>
+            <h2><span class="page-emoji" data-page-emoji="calendar"></span>Calendar</h2>
             <p>Family events, birthdays, and US holidays in one view.</p>
           </div>
           <div class="cal-toolbar">
@@ -445,7 +447,7 @@
       <div class="container">
         <div class="page-head">
           <div>
-            <h2>Gifts</h2>
+            <h2><span class="page-emoji" data-page-emoji="gifts"></span>Gifts</h2>
             <p>What we gave, what we received — keep the record straight.</p>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
