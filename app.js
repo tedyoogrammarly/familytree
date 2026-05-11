@@ -6615,11 +6615,14 @@ async function init() {
   // Show the "set new password" modal instead of auto-entering the app.
   Backend.onRecovery = () => ChangePasswordModal.open({ mode: 'recovery' });
 
-  // If we have a live Supabase session from a previous visit, skip the login
-  // screen and head straight in — unless this load is a recovery link.
   if (backendOk) {
     const session = await Backend.session();
-    if (session && !Backend.recoveryPending) {
+    // Recovery wins over auto-sign-in. Open the modal directly here too — the
+    // PASSWORD_RECOVERY event can fire before Backend.onRecovery is wired up,
+    // so we can't rely on the listener alone. open() is idempotent.
+    if (Backend.recoveryPending) {
+      ChangePasswordModal.open({ mode: 'recovery' });
+    } else if (session) {
       Backend.user = session.user;
       await onSignedIn();
     }
