@@ -5991,8 +5991,9 @@ async function sendAdminResetEmail(m) {
       note: 'Share this new password with the family member. They can change it after signing in.',
     });
   } else {
-    const hint = /not\s*found|404/i.test(r.reason || '')
-      ? '\n\nTip: deploy the admin-reset-password Edge Function in Supabase first (see supabase/functions/admin-reset-password/index.ts).'
+    const looksLikeMissingFunction = /not\s*found|404|failed to send|fetch/i.test(r.reason || '');
+    const hint = looksLikeMissingFunction
+      ? '\n\nTip: deploy (or redeploy) the admin-reset-password Edge Function in Supabase — see supabase/functions/admin-reset-password/index.ts. Then check Supabase → Edge Functions → Logs for any startup errors.'
       : '';
     toast('Could not reset password: ' + r.reason + hint, 'warn');
   }
