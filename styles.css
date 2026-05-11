@@ -643,7 +643,10 @@ code {
   background: #fff;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft);
-  overflow: hidden;
+  /* overflow stays visible so absolutely-positioned siblings (memoriam
+     badge above, "+" button below) aren't clipped. The photo handles its
+     own corner-rounding below. */
+  overflow: visible;
   border: 1px solid rgba(19,24,38,.06);
   transition:
     transform .25s var(--ease-spring),
@@ -1012,6 +1015,11 @@ body.is-admin .node.is-selected::after {
   aspect-ratio: 1 / 1;
   background-size: cover;
   background-position: center;
+  /* Round only the top so it sits flush with the card's rounded top while
+     the body below keeps a square edge. overflow clips the gradient overlay. */
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+  overflow: hidden;
 }
 .node-photo.is-male   { background-color: var(--rose-male-bg); }
 .node-photo.is-female { background-color: var(--rose-female-bg); }
@@ -1168,24 +1176,22 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
 .drawer-nick { color: rgba(247,243,236,.72); font-style: italic; margin: 4px 0 0; font-size: 14px; }
 .node-memoriam {
   position: absolute;
-  top: -10px; left: 50%;
+  top: -11px; left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
-  padding: 2px 9px;
+  padding: 3px 10px;
   border-radius: 999px;
   font-size: 9px;
+  line-height: 1.2;
   letter-spacing: .12em;
   text-transform: uppercase;
   background: hsl(220 12% 18%);
   color: #f7f3ec;
   border: 1px solid hsl(220 12% 28%);
-  z-index: 2;
+  z-index: 5;
   font-weight: 600;
   font-family: var(--font-display);
   pointer-events: none;
-}
-.node.in-memoriam .node-photo {
-  filter: grayscale(.55) brightness(.95);
 }
 .drawer-remembering {
   display: inline-block;
@@ -2525,19 +2531,13 @@ body.is-admin .page-emoji.is-empty::before {
 }
 body:not(.is-admin) .page-emoji.is-empty { display: none; }
 
-.page-emoji-floating {
-  position: absolute;
-  top: 84px;
-  left: 24px;
-  z-index: 5;
-  font-size: 28px;
+/* Inline emoji slot (used in the Family Tree toolbar where there's no H2). */
+.page-emoji-inline {
+  height: 36px;
+  margin-right: 4px;
+  font-size: 20px;
 }
-body:not(.is-admin) .page-emoji-floating { display: none; }
-body.is-admin .page-emoji-floating.is-empty {
-  background: rgba(255,255,255,.85);
-  border: 1px dashed var(--ink-200);
-  width: 36px; height: 36px;
-}
+body:not(.is-admin) .page-emoji-inline { display: none; }
 
 .nav-emoji {
   display: inline-flex;

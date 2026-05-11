@@ -2480,15 +2480,12 @@ const MyFamilyView = {
     ]);
     const children = childIds.map(id => Store.byId(id)).filter(Boolean);
 
-    // For each ex-spouse, figure out which of `children` came from THAT
-    // marriage (parents include both focus and ex). Used to draw a child
-    // → ex connector so the divorced-but-shared-children case visualizes.
-    const childrenByPartnerId = {};
-    allPartners.forEach(p => {
-      childrenByPartnerId[p.id] = children.filter(c =>
-        (c.parentIds || []).includes(focus.id) && (c.parentIds || []).includes(p.id)
-      ).map(c => c.id);
-    });
+    // Grandchildren: the children of any of the children. Shown so the
+    // logged-in user sees the next generation down (we always include them
+    // when present — the case where this matters most is the user's own
+    // family page, and including them for admins doesn't hurt).
+    const grandIds = unique(children.flatMap(c => c.childrenIds || []));
+    const grandchildren = grandIds.map(id => Store.byId(id)).filter(Boolean);
 
     // Layout: 3 rows. Each row is centered horizontally around x = 0.
     // Card geometry matches the main Family Tree.
@@ -2513,14 +2510,22 @@ const MyFamilyView = {
     const Y_PARENTS  = 0;
     const Y_FOCUS    = parents.length ? CH + ROW_GAP : 0;
     const Y_CHILDREN = Y_FOCUS + CH + ROW_GAP;
+    const Y_GRAND    = Y_CHILDREN + CH + ROW_GAP;
 
     placeRow(parents, Y_PARENTS);
     // Focus row: [focus, current spouse, ex1, ex2, ...] left-to-right.
-    placeRow([focus, ...allPartners], Y_FOCUS);
+    // But put the current spouse to the LEFT of focus and exes to the right —
+    // matches the "current to one side, exes to the other" idea the user asked
+    // for when viewing an ex-spouse layout. Falls back gracefully if no spouse.
+    const focusRow = spouse
+      ? [spouse, focus, ...exes]
+      : [focus, ...exes];
+    placeRow(focusRow, Y_FOCUS);
     placeRow(children, Y_CHILDREN);
+    placeRow(grandchildren, Y_GRAND);
 
     // World bounds — compute min/max so we can center the canvas.
-    const all = [focus, ...parents, ...allPartners, ...children];
+    const all = [focus, ...parents, ...allPartners, ...children, ...grandchildren];
     let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
     all.forEach(m => {
       const p = rowFor[m.id];
@@ -2542,7 +2547,7 @@ const MyFamilyView = {
     world.style.height = `${worldH + padTop * 2}px`;
 
     // -------- nodes --------
-    const renderableMembers = [focus, ...parents, ...allPartners, ...children];
+    const renderableMembers = [focus, ...parents, ...allPartners, ...children, ...grandchildren];
     nodes.innerHTML = renderableMembers.map(m => {
       const p = rowFor[m.id]; if (!p) return '';
       const html = nodeHTML(m);
@@ -2617,34 +2622,50 @@ const MyFamilyView = {
       hearts.push(heartMarker(heartX, yLine, isEx));
     });
 
-    // Focus(+Partners) → Children. Each marriage gets its own trunk so a
-    // child from an ex-marriage visually connects to the (focus, ex) pair,
-    // not to the current spouse. Children whose other parent isn't in the
-    // tree fall back to a focus-only trunk.
+    // Focus(+Partners) → Children. Routed per-child by which of the row's
+    // visible adults are actually in this child's parentIds — so a step-
+    // parent (married to a bio parent but not a parent of the child) does
+    // NOT pick up a child line. Kids with two visible bio parents drop from
+    // the couple midpoint; kids with one drop from that single parent's
+    // bottom; kids with no visible bio parent (rare — wonky data) fall
+    // back to the focus card so they still anchor somewhere.
     if (children.length) {
-      const pairMidpoint = (partner) => {
-        const a = rowFor[focus.id];
-        const b = rowFor[partner.id];
-        const yLine = a.y + CH / 2 + shiftY;
-        const midX = (Math.min(a.x, b.x) + CW + Math.max(a.x, b.x)) / 2 + shiftX;
-        return { x: midX, y: yLine };
-      };
-      const groups = [];
-      // One group per partner (current + exes) — only if that pairing has kids.
-      allPartners.forEach(p => {
-        const kids = (childrenByPartnerId[p.id] || []).map(id => Store.byId(id)).filter(Boolean);
-        if (kids.length) groups.push({ start: pairMidpoint(p), kids });
+      const adultsInRow = new Set([focus.id, ...allPartners.map(p => p.id)]);
+      const groupsByKey = new Map(); // key → { ids: [adultId,...], kids: [] }
+      children.forEach(c => {
+        const bioVisible = (c.parentIds || []).filter(pid => adultsInRow.has(pid));
+        let key;
+        if (bioVisible.length >= 2) {
+          // Use the first two visible bio parents (a child can biologically
+          // have at most two parents in our model).
+          const pair = bioVisible.slice(0, 2).sort();
+          key = 'pair:' + pair.join('|');
+          if (!groupsByKey.has(key)) groupsByKey.set(key, { ids: pair, kids: [] });
+        } else if (bioVisible.length === 1) {
+          key = 'one:' + bioVisible[0];
+          if (!groupsByKey.has(key)) groupsByKey.set(key, { ids: [bioVisible[0]], kids: [] });
+        } else {
+          key = 'focus';
+          if (!groupsByKey.has(key)) groupsByKey.set(key, { ids: [focus.id], kids: [] });
+        }
+        groupsByKey.get(key).kids.push(c);
       });
-      // Solo children: in `children` but not matched to any partner pairing.
-      const matched = new Set(Object.values(childrenByPartnerId).flat());
-      const soloKids = children.filter(c => !matched.has(c.id));
-      if (soloKids.length) groups.push({ start: ANCHOR_BOTTOM(focus.id), kids: soloKids });
 
-      groups.forEach(({ start, kids }) => {
+      groupsByKey.forEach(({ ids, kids }) => {
+        let start;
+        if (ids.length === 2) {
+          // Bio couple — drop from the heart-line midpoint between the two.
+          const a = rowFor[ids[0]], b = rowFor[ids[1]];
+          const yLine = a.y + CH / 2 + shiftY;
+          const midX = (Math.min(a.x, b.x) + CW + Math.max(a.x, b.x)) / 2 + shiftX;
+          start = { x: midX, y: yLine };
+        } else {
+          // Single bio parent visible — drop from their card bottom.
+          const p = rowFor[ids[0]];
+          start = { x: p.x + CW / 2 + shiftX, y: p.y + CH + shiftY };
+        }
         const childTops = kids.map(c => ANCHOR_TOP(c.id)).filter(Boolean);
         if (!childTops.length) return;
-        // Drop from start (heart-line or focus bottom) past the focus-row bottom,
-        // then horizontal trunk above kids, then up into each child.
         const dropTo = rowFor[focus.id].y + CH + shiftY + 4;
         lines.push(`M ${start.x} ${start.y} V ${dropTo}`);
         const trunkY = childTops[0].y - 36;
@@ -2653,6 +2674,25 @@ const MyFamilyView = {
         const maxCX = Math.max(start.x, ...childTops.map(p => p.x));
         lines.push(`M ${minCX} ${trunkY} H ${maxCX}`);
         childTops.forEach(ct => lines.push(`M ${ct.x} ${trunkY} V ${ct.y}`));
+      });
+    }
+
+    // Children → Grandchildren. Same logic, simpler — each grandchild's
+    // parent must be in `children`; drop from that parent's bottom.
+    if (grandchildren.length) {
+      const childrenInRow = new Set(children.map(c => c.id));
+      grandchildren.forEach(gc => {
+        const visibleParents = (gc.parentIds || []).filter(pid => childrenInRow.has(pid));
+        if (!visibleParents.length) return;
+        const parent = rowFor[visibleParents[0]];
+        if (!parent) return;
+        const startX = parent.x + CW / 2 + shiftX;
+        const startY = parent.y + CH + shiftY;
+        const top = ANCHOR_TOP(gc.id);
+        const trunkY = top.y - 28;
+        lines.push(`M ${startX} ${startY} V ${trunkY}`);
+        lines.push(`M ${Math.min(startX, top.x)} ${trunkY} H ${Math.max(startX, top.x)}`);
+        lines.push(`M ${top.x} ${trunkY} V ${top.y}`);
       });
     }
 
@@ -6861,21 +6901,38 @@ const TreeFilters = {
         toast(`No one is in group "${this.group}".`, 'warn');
         return null;
       }
-      // Keep set: every group member plus their immediate family (parents,
-      // spouse + exes, siblings, children) so the filtered tree shows real
-      // context instead of a row of disconnected nodes.
+      // Keep set: every group member, their immediate family, AND every
+      // ancestor up to the root. The ancestor walk is essential — without
+      // it, autoLayout drops anyone whose parent is collapsed into the
+      // "orphan" bucket, which is why a Group filter used to flatten the
+      // tree into a horizontal row.
       const keep = new Set();
+      const walkAncestors = (id) => {
+        const stack = [id];
+        while (stack.length) {
+          const cur = stack.pop();
+          if (keep.has(cur)) continue;
+          keep.add(cur);
+          const m = Store.byId(cur); if (!m) continue;
+          (m.parentIds || []).forEach(pid => stack.push(pid));
+        }
+      };
       groupMembers.forEach(m => {
-        keep.add(m.id);
+        walkAncestors(m.id);
         if (m.spouseId) keep.add(m.spouseId);
         (m.exSpouseIds || []).forEach(eid => keep.add(eid));
+        // siblings (anyone sharing a parent with this group member)
         (m.parentIds || []).forEach(pid => {
-          keep.add(pid);
-          // siblings via shared parent
           const p = Store.byId(pid); if (!p) return;
           (p.childrenIds || []).forEach(sid => keep.add(sid));
         });
         (m.childrenIds || []).forEach(cid => keep.add(cid));
+      });
+      // Keep ancestors' spouses too — otherwise a parent couple visually
+      // splits with one half collapsed mid-tree.
+      [...keep].forEach(id => {
+        const m = Store.byId(id); if (!m) return;
+        if (m.spouseId) keep.add(m.spouseId);
       });
       return keep;
     }
