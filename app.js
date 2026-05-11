@@ -18,15 +18,40 @@ const Backend = {
   subscribed: false,
   onRemoteChange: null, // set by init() once UI is wired
 
+  recoveryPending: false,
+  onRecovery: null,        // set by main init() once UI is wired
+
   init() {
     if (!window.supabase || !window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
       console.warn('Supabase not configured — falling back to local-only mode.');
       return false;
     }
     this.client = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+    // Check the URL synchronously: if it carries a recovery token, suppress
+    // the auto-enter-app flow at boot. Supabase will parse the hash itself
+    // and fire PASSWORD_RECOVERY via onAuthStateChange below.
+    if (window.location.hash.includes('type=recovery')) {
+      this.recoveryPending = true;
+    }
+    this.client.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        this.recoveryPending = true;
+        this.user = session?.user || null;
+        if (typeof this.onRecovery === 'function') this.onRecovery();
+      }
     });
     return true;
+  },
+
+  async sendPasswordReset(email) {
+    if (!this.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { error } = await this.client.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname,
+    });
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true };
   },
 
   async session() {
@@ -1937,10 +1962,10 @@ const Drawer = {
     preview.style.backgroundImage = '';
     preview.innerHTML = Silhouettes.for({ gender: f.gender.value, ageGroup: f.ageGroup.value });
   },
-  resetPassword() {
+  async resetPassword() {
     if (!Auth.isAdmin()) return;
     const m = Store.byId(this.currentId); if (!m) return;
-    ChangePasswordModal.open({ targetMemberId: m.id });
+    await sendAdminResetEmail(m);
   },
   deleteMember() {
     if (!Auth.isAdmin()) return;
@@ -2531,8 +2556,8 @@ const AdminView = {
       refreshAllGroupSelects();
     });
   },
-  resetPassword(m) {
-    ChangePasswordModal.open({ targetMemberId: m.id });
+  async resetPassword(m) {
+    await sendAdminResetEmail(m);
   },
   deleteMember(m) {
     if (!confirm(`Delete ${m.firstName} ${m.lastName}?`)) return;
@@ -5873,12 +5898,33 @@ const UserChip = {
   },
 };
 
+// Admin path: trigger Supabase to email the member a password reset link.
+// We can't set another user's password from the anon client (that needs the
+// service_role secret), but resetPasswordForEmail works with the anon key —
+// the user clicks the link in their inbox and lands back on the site, where
+// ChangePasswordModal's recovery mode picks up the token.
+async function sendAdminResetEmail(m) {
+  if (!Auth.isAdmin()) return;
+  if (!m) return;
+  if (!m.email) {
+    toast('Add an email to this member first — the reset link is sent there.', 'warn');
+    return;
+  }
+  if (!confirm(`Send a password reset email to ${m.email}?\n\nThey'll get a link to set a new password.`)) return;
+  const r = await Backend.sendPasswordReset(m.email);
+  if (r.ok) toast(`Reset link sent to ${m.email}.`);
+  else      toast('Could not send reset: ' + r.reason, 'warn');
+}
+
 // -------------------- CHANGE / SET PASSWORD --------------------
 // Two modes:
-//   default — current user changes their own password (no current-password check).
-//   admin-reset — admin sets a password for another member.
+//   change   — signed-in user changes their own password.
+//   recovery — user arrived via a "reset your password" email link.
+//              Supabase has established a short-lived recovery session; after
+//              they pick a new password, we run the normal post-sign-in flow
+//              to enter the app.
 const ChangePasswordModal = {
-  targetMemberId: null,   // null = current user
+  mode: 'change',
   init() {
     on($('#cpw-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
     on($('#cpw-form'), 'submit', async (e) => {
@@ -5889,35 +5935,37 @@ const ChangePasswordModal = {
       if (!next) { $('#cpw-error').textContent = 'Enter a new password.'; return; }
       if (next !== confirm) { $('#cpw-error').textContent = 'The two passwords do not match.'; return; }
 
-      if (this.targetMemberId) {
-        // Admin reset path. With Supabase Auth, password lives on the Auth
-        // user, not the member record. We can't reset someone else's password
-        // from the anon client — direct the admin to the Supabase dashboard.
-        $('#cpw-error').textContent = 'To reset another user\'s password, use Supabase Auth → Users in the dashboard.';
-        return;
-      }
       try {
         await Auth.setPassword(next);
-        toast('Password updated.');
       } catch (err) {
         $('#cpw-error').textContent = err.message || 'Could not update password.';
         return;
       }
       $('#cpw-error').textContent = '';
       f.reset();
+      const wasRecovery = this.mode === 'recovery';
       this.close();
+
+      if (wasRecovery) {
+        Backend.recoveryPending = false;
+        // Drop the recovery hash so a refresh doesn't loop us back here.
+        try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch {}
+        toast('Password updated. Signing you in…');
+        await onSignedIn();
+      } else {
+        toast('Password updated.');
+      }
     });
   },
   open(opts = {}) {
-    const { targetMemberId = null } = opts;
-    this.targetMemberId = targetMemberId;
+    const { mode = 'change' } = opts;
+    this.mode = mode;
     const f = $('#cpw-form');
     f.reset();
     $('#cpw-error').textContent = '';
-    if (targetMemberId) {
-      const m = Store.byId(targetMemberId);
-      $('#cpw-title').textContent = 'Set password';
-      $('#cpw-subject').textContent = m ? `Set a new password for ${m.firstName} ${m.lastName}.` : '';
+    if (mode === 'recovery') {
+      $('#cpw-title').textContent = 'Set a new password';
+      $('#cpw-subject').textContent = 'You followed a password reset link. Choose a new password to finish signing in.';
     } else {
       $('#cpw-title').textContent = 'Change password';
       $('#cpw-subject').textContent = 'Enter a new password. No need to retype your current one.';
@@ -5925,7 +5973,7 @@ const ChangePasswordModal = {
     $('#cpw-modal').setAttribute('aria-hidden', 'false');
     setTimeout(() => f.next.focus(), 30);
   },
-  close() { $('#cpw-modal').setAttribute('aria-hidden', 'true'); this.targetMemberId = null; },
+  close() { $('#cpw-modal').setAttribute('aria-hidden', 'true'); this.mode = 'change'; },
 };
 
 // -------------------- IDLE TIMEOUT --------------------
@@ -6515,11 +6563,16 @@ async function init() {
     $('#auth-import-row').hidden = !hasLocalData;
   } catch {}
 
+  // When the user lands here via a password-reset email link, Supabase
+  // creates a short-lived recovery session and fires PASSWORD_RECOVERY.
+  // Show the "set new password" modal instead of auto-entering the app.
+  Backend.onRecovery = () => ChangePasswordModal.open({ mode: 'recovery' });
+
   // If we have a live Supabase session from a previous visit, skip the login
-  // screen and head straight in.
+  // screen and head straight in — unless this load is a recovery link.
   if (backendOk) {
     const session = await Backend.session();
-    if (session) {
+    if (session && !Backend.recoveryPending) {
       Backend.user = session.user;
       await onSignedIn();
     }
