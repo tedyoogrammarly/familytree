@@ -667,6 +667,10 @@
             <label class="field"><span>Group</span><select name="group" id="modal-group"></select></label>
           </div>
           <label class="field">
+            <span>Email <span class="muted small">(optional — required to give them a login)</span></span>
+            <input name="email" type="email" placeholder="name@example.com" autocomplete="off" />
+          </label>
+          <label class="field">
             <span>Ethnicity</span>
             <div class="ethnicity-picker" data-picker="modal-ethnicity"></div>
           </label>
@@ -703,7 +707,7 @@
             <button class="btn btn-primary" type="submit">Add &amp; create account</button>
             <button class="btn btn-ghost" type="button" data-close>Cancel</button>
           </div>
-          <p class="muted small">An account will be created automatically. The username defaults to <code>firstnamelastname</code> with a randomized password shown after creation.</p>
+          <p class="muted small">If you provide an email, a login is created in Supabase and a randomized password is shown after saving. Without an email, you can add one later.</p>
         </form>
       </div>
     </div>
@@ -719,9 +723,9 @@
           </button>
         </header>
         <div class="modal-body">
-          <p class="muted">Share these with the family member. They can change their password later.</p>
+          <p class="muted" id="pwd-note">Share these with the family member. They can change their password later.</p>
           <div class="cred-block">
-            <div><span>Username</span><code id="pwd-username"></code></div>
+            <div><span>Email</span><code id="pwd-username"></code></div>
             <div><span>Password</span><code id="pwd-password"></code></div>
           </div>
           <div class="modal-actions">

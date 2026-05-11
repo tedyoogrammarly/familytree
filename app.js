@@ -54,6 +54,31 @@ const Backend = {
     return { ok: true };
   },
 
+  // Create a Supabase Auth user *and* link them to an in-app member record.
+  // Tricky bit: signUp() normally replaces the active session, which would
+  // log the admin out. We sidestep that with a second, session-less client
+  // — it talks to the same project but throws its tokens away.
+  async createMemberAccount({ email, password, memberId, isAdmin = false }) {
+    if (!this.client) return { ok: false, reason: 'Backend unavailable.' };
+    if (!email)    return { ok: false, reason: 'Email is required.' };
+    if (!password) return { ok: false, reason: 'Password is required.' };
+    const temp = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    const { data, error } = await temp.auth.signUp({ email, password });
+    if (error) return { ok: false, reason: error.message };
+    const userId = data.user?.id;
+    if (!userId) return { ok: false, reason: 'Sign-up returned no user.' };
+    // If confirmations are on, signUp returns a user but no session.
+    const needsConfirmation = !data.session;
+    // Map auth user → member. The admin's RLS lets this insert through.
+    const { error: linkErr } = await this.client
+      .from('member_accounts')
+      .insert({ user_id: userId, member_id: memberId, is_admin: isAdmin });
+    if (linkErr) return { ok: false, reason: 'User created, but linking failed: ' + linkErr.message };
+    return { ok: true, userId, needsConfirmation };
+  },
+
   async session() {
     if (!this.client) return null;
     const { data } = await this.client.auth.getSession();
@@ -5777,6 +5802,7 @@ const MemberModal = {
       gender: fd.get('gender'),
       ageGroup: fd.get('ageGroup'),
       group: fd.get('group') || '',
+      email: (fd.get('email') || '').toString().trim(),
       role: 'user',
       relType,
       relTargetId,
@@ -5789,7 +5815,31 @@ const MemberModal = {
     Canvas.fit();
     AdminView.render && AdminView.render();
     this.close();
-    showCredentials(member.username, password, 'Account created');
+
+    // Mirror the new member into Supabase Auth when we have an email to use.
+    // No email → no login (admin can add one later from the drawer).
+    if (member.email) {
+      const r = await Backend.createMemberAccount({
+        email: member.email,
+        password,
+        memberId: member.id,
+        isAdmin: false,
+      });
+      if (r.ok) {
+        showCredentials({
+          email: member.email,
+          password,
+          title: 'Account created',
+          note: r.needsConfirmation
+            ? 'They must click the confirmation link in their email before signing in. Share the password too — they’ll need it after confirming.'
+            : 'Share these with the family member. They can change their password after signing in.',
+        });
+      } else {
+        toast('Member saved, but the Supabase login could not be created: ' + r.reason, 'warn');
+      }
+    } else {
+      toast('Member saved. Add an email later to give them a login.');
+    }
   },
 };
 
@@ -6042,17 +6092,20 @@ const IdleMonitor = {
 };
 
 // -------------------- CREDENTIALS MODAL --------------------
-function showCredentials(username, password, title) {
+// Accepts ({ email, password, title?, note? }) — admin sees this once after
+// creating a new login, copies to share, then it's gone.
+function showCredentials({ email, password, title, note }) {
   $('#pwd-title').textContent = title || 'Account credentials';
-  $('#pwd-username').textContent = username;
-  $('#pwd-password').textContent = password;
+  $('#pwd-username').textContent = email || '';
+  $('#pwd-password').textContent = password || '';
+  $('#pwd-note').textContent = note || 'Share these with the family member. They can change their password later.';
   $('#pwd-modal').setAttribute('aria-hidden', 'false');
 }
 function bindCredsModal() {
   on($('#pwd-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) e.currentTarget.setAttribute('aria-hidden','true'); });
   on($('#pwd-copy'), 'click', async () => {
     const u = $('#pwd-username').textContent, p = $('#pwd-password').textContent;
-    try { await navigator.clipboard.writeText(`Username: ${u}\nPassword: ${p}`); toast('Copied.'); } catch { toast('Copy failed', 'warn'); }
+    try { await navigator.clipboard.writeText(`Email: ${u}\nPassword: ${p}`); toast('Copied.'); } catch { toast('Copy failed', 'warn'); }
   });
 }
 
