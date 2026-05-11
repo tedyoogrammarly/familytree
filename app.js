@@ -496,12 +496,17 @@ const Tree = {
     const m = {
       id,
       firstName: input.firstName.trim(),
+      middleName: (input.middleName || '').trim(),
       lastName: input.lastName.trim(),
       nickname: (input.nickname || '').trim(),
       birthday,
       email: input.email || '',
-      phone: input.phone || '',
+      phone: input.phone ? formatPhoneUS(input.phone) : '',
       address: input.address || '',
+      city: input.city || '',
+      state: (input.state || '').toUpperCase().slice(0, 3),
+      zip: (input.zip || '').toString().slice(0, 10),
+      anniversary: '',
       gender: input.gender || 'female',
       ageGroup: inferredAge || input.ageGroup || 'adult',
       photo: input.photo || null,
@@ -1358,6 +1363,23 @@ const Canvas = {
         my = (top.y + NODE_H + bot.y) / 2;
       }
       lines.push(heartMarker(mx, my, divorced));
+
+      // "X yrs" chip near the heart for current couples with an anniversary on file.
+      const aniso = m.anniversary || s.anniversary || '';
+      if (!divorced && aniso) {
+        const yrs = yearsTogether(aniso);
+        if (yrs != null) {
+          // Position the label just to the right of the heart for vertical
+          // spouse rows, or just below it for horizontal stacks.
+          const isVertical = orientation === 'vertical';
+          const lx = isVertical ? mx + 16 : mx;
+          const ly = isVertical ? my + 4  : my + 22;
+          const anchor = isVertical ? 'start' : 'middle';
+          lines.push(
+            `<text class="spouse-years" x="${lx}" y="${ly}" text-anchor="${anchor}">${yrs} yr${yrs === 1 ? '' : 's'}</text>`
+          );
+        }
+      }
     });
 
     this.edges.innerHTML = lines.join('');
@@ -1443,9 +1465,18 @@ function nodeHTML(m) {
   const ethnicities = (m.ethnicities || []);
   const flagsHTML = ethnicities.length ? `<div class="node-flags" title="${ethnicities.map(c => ETH_BY_CODE[c]?.name || c).join(' · ')}">${ethnicities.slice(0, 4).map(c => `<span class="node-flag">${flagFor(c) || '🏳️'}</span>`).join('')}${ethnicities.length > 4 ? `<span class="node-flag-more">+${ethnicities.length - 4}</span>` : ''}</div>` : '';
 
+  const selfStar = isSelf
+    ? `<span class="node-self-star" aria-label="You" title="This is you">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.5l2.96 6 6.62.96-4.79 4.67 1.13 6.59L12 17.6l-5.92 3.12 1.13-6.59L2.42 9.46l6.62-.96L12 2.5z" fill="currentColor"/>
+        </svg>
+      </span>`
+    : '';
+
   return `
     <div class="node${isSelf}${collapsedClass}" data-id="${m.id}" data-gen="${gen}" style="${styleVars}">
       <div class="node-gen-bar" aria-hidden="true"></div>
+      ${selfStar}
       <div class="node-photo is-${m.gender}" ${photoBg}>${inner}</div>
       <div class="node-body">
         ${relation ? `<div class="node-relation">${relation}</div>` : ''}
@@ -1485,11 +1516,47 @@ const Drawer = {
     on($('#drawer-divorce-btn'), 'click', () => this.toggleDivorce());
     on($('#drawer-link-btn'),    'click', () => LinkFamilyModal.open(this.currentId));
     on($('#kv-address-copy'),    'click', async () => {
-      const m = Store.byId(this.currentId); if (!m || !m.address) return;
+      const m = Store.byId(this.currentId); if (!m) return;
+      const addr = formatPostalAddress(m);
+      if (!addr) return;
       try {
-        await navigator.clipboard.writeText(m.address);
+        await navigator.clipboard.writeText(addr);
         toast('Address copied.');
       } catch { toast('Copy failed.', 'warn'); }
+    });
+    on($('#kv-email-copy'), 'click', async () => {
+      const m = Store.byId(this.currentId); if (!m || !m.email) return;
+      try {
+        await navigator.clipboard.writeText(m.email);
+        toast('Email copied.');
+      } catch { toast('Copy failed.', 'warn'); }
+    });
+
+    // Live phone formatting on the edit form
+    bindPhoneFormat($('#drawer-edit').querySelector('input[name=phone]'));
+
+    on($('#edit-anniversary'), 'input', () => {
+      const yrs = yearsTogether($('#edit-anniversary').value);
+      $('#edit-anniv-years').textContent = yrs != null
+        ? `${yrs} year${yrs === 1 ? '' : 's'} together`
+        : '';
+    });
+
+    // Zip → city/state autofill
+    on($('#edit-zip'), 'blur', async () => {
+      const zip = $('#edit-zip').value.trim();
+      const status = $('#edit-zip-status');
+      if (!zip) { status.hidden = true; return; }
+      if (!/^\d{5}$/.test(zip)) { status.hidden = true; return; }
+      status.hidden = false; status.textContent = 'Looking up zip…';
+      const r = await lookupZipUS(zip);
+      if (r) {
+        $('#edit-city').value  = r.city;
+        $('#edit-state').value = r.state;
+        status.textContent = `Auto-filled from ${zip} — edit if needed.`;
+      } else {
+        status.textContent = `Couldn't find ${zip}. Enter city and state manually.`;
+      }
     });
 
     document.addEventListener('keydown', (e) => {
@@ -1522,13 +1589,33 @@ const Drawer = {
       photo.innerHTML = Silhouettes.for(m);
     }
     $('#drawer-relation').textContent = Tree.computeRelation(m.id) || 'Family';
-    $('#drawer-name').textContent = `${m.firstName} ${m.lastName}`;
+    $('#drawer-name').textContent = fullName(m);
     $('#drawer-nick').textContent = m.nickname ? `"${m.nickname}"` : '';
     $('#kv-birthday').textContent = m.birthday ? formatDate(m.birthday) : '—';
+    $('#kv-lifestage').textContent = m.ageGroup ? capitalize(m.ageGroup) : '—';
     $('#kv-email').textContent = m.email || '—';
-    $('#kv-phone').textContent = m.phone || '—';
-    $('#kv-address').textContent = m.address || '—';
-    $('#kv-address-copy').hidden = !m.address;
+    $('#kv-email-copy').hidden = !m.email;
+    $('#kv-phone').textContent = m.phone ? formatPhoneUS(m.phone) : '—';
+    const fullAddr = formatPostalAddress(m);
+    $('#kv-address').textContent = fullAddr || '—';
+    $('#kv-address').style.whiteSpace = 'pre-line';
+    $('#kv-address-copy').hidden = !fullAddr;
+    // Anniversary row + "years together" — only meaningful if there's a current spouse.
+    const sp = m.spouseId ? Store.byId(m.spouseId) : null;
+    const isMarried = sp && !m.divorced && !sp.divorced;
+    const annivRow = $('#kv-anniv-row');
+    if (annivRow) {
+      if (isMarried && m.anniversary) {
+        annivRow.hidden = false;
+        const yrs = yearsTogether(m.anniversary);
+        const dateText = formatDate(m.anniversary);
+        $('#kv-anniv').textContent = yrs != null
+          ? `${dateText} · ${yrs} year${yrs === 1 ? '' : 's'} together`
+          : dateText;
+      } else {
+        annivRow.hidden = true;
+      }
+    }
     $('#kv-group').textContent = m.group || '—';
     const eth = (m.ethnicities || []);
     $('#kv-ethnicity').innerHTML = eth.length
@@ -1591,12 +1678,17 @@ const Drawer = {
     this.editing = true;
     const f = $('#drawer-edit');
     f.firstName.value = m.firstName;
+    f.middleName.value = m.middleName || '';
     f.lastName.value = m.lastName;
     f.nickname.value = m.nickname || '';
     f.birthday.value = m.birthday || '';
-    f.phone.value = m.phone || '';
+    f.phone.value = formatPhoneUS(m.phone || '');
     f.email.value = m.email || '';
     f.address.value = m.address || '';
+    f.zip.value   = m.zip   || '';
+    f.city.value  = m.city  || '';
+    f.state.value = m.state || '';
+    $('#edit-zip-status').hidden = true;
     f.gender.value = m.gender;
     f.ageGroup.value = m.ageGroup;
     if (f.role) f.role.value = m.role;
@@ -1604,6 +1696,23 @@ const Drawer = {
     const ePicker = $('[data-picker="edit-ethnicity"]');
     EthnicityPicker.mount(ePicker);
     EthnicityPicker.write(ePicker, m.ethnicities || []);
+
+    // Anniversary: only show the field when the focus member has a current spouse.
+    const sp = m.spouseId ? Store.byId(m.spouseId) : null;
+    const married = sp && !m.divorced && !sp.divorced;
+    const annivWrap = $('#edit-anniversary-wrap');
+    if (married) {
+      annivWrap.hidden = false;
+      $('#edit-anniversary').value = m.anniversary || sp.anniversary || '';
+      const yrs = yearsTogether($('#edit-anniversary').value);
+      $('#edit-anniv-years').textContent = yrs != null
+        ? `${yrs} year${yrs === 1 ? '' : 's'} together`
+        : '';
+    } else {
+      annivWrap.hidden = true;
+      $('#edit-anniversary').value = '';
+      $('#edit-anniv-years').textContent = '';
+    }
 
     const preview = $('#photo-preview');
     if (m.photo) { preview.style.backgroundImage = `url('${m.photo}')`; preview.innerHTML = ''; }
@@ -1626,14 +1735,28 @@ const Drawer = {
     const lastName  = (fd.get('lastName')  || '').toString().trim();
     if (!firstName || !lastName) { toast('First and last name are required.', 'warn'); return; }
 
-    m.firstName = firstName;
-    m.lastName  = lastName;
-    m.nickname  = (fd.get('nickname') || '').toString().trim();
-    m.birthday  = (fd.get('birthday') || '').toString();
-    m.phone     = (fd.get('phone') || '').toString().trim();
-    m.email     = (fd.get('email') || '').toString().trim();
-    m.address   = (fd.get('address') || '').toString().trim();
-    m.group     = (fd.get('group') || '').toString();
+    m.firstName  = firstName;
+    m.middleName = (fd.get('middleName') || '').toString().trim();
+    m.lastName   = lastName;
+    m.nickname   = (fd.get('nickname') || '').toString().trim();
+    m.birthday   = (fd.get('birthday') || '').toString();
+    // Normalize phone to a consistent "(XXX) XXX-XXXX" format on save.
+    m.phone      = formatPhoneUS((fd.get('phone') || '').toString());
+    m.email      = (fd.get('email') || '').toString().trim();
+    m.address    = (fd.get('address') || '').toString().trim();
+    m.city       = (fd.get('city')  || '').toString().trim();
+    m.state      = (fd.get('state') || '').toString().trim().toUpperCase().slice(0, 3);
+    m.zip        = (fd.get('zip')   || '').toString().trim().slice(0, 10);
+    m.group      = (fd.get('group') || '').toString();
+    // Anniversary: only meaningful when there's a current spouse; mirror to the
+    // spouse so both records stay in sync.
+    const sp_save = m.spouseId ? Store.byId(m.spouseId) : null;
+    const married_save = sp_save && !m.divorced && !sp_save.divorced;
+    if (married_save) {
+      const aniso = (fd.get('anniversary') || '').toString();
+      m.anniversary = aniso;
+      sp_save.anniversary = aniso;
+    }
 
     if (Auth.isAdmin()) {
       m.gender   = (fd.get('gender') || m.gender).toString();
@@ -3771,8 +3894,21 @@ const EmojiPicker = {
 // -------------------- EVENTS VIEW --------------------
 const MEAL_LABELS = { none: 'No meal', full: 'Full meal', half: 'Half meal', kids: 'Kids meal' };
 
+// Sum-up helper for an event's expenses. Defensive: missing array → zeros.
+function eventExpenseTotals(ev) {
+  const xs = (ev && ev.expenses) || [];
+  let total = 0, paid = 0;
+  xs.forEach(x => {
+    const a = Number(x.amount) || 0;
+    total += a;
+    if (x.paid) paid += a;
+  });
+  return { total, paid, unpaid: total - paid, count: xs.length };
+}
+
 const EventsView = {
   selectedId: null,
+  detailView: 'attendees',           // 'attendees' | 'expenses'
   init() {
     on($('#btn-event-add'), 'click', () => this.openModal());
     on($('#event-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeModal(); });
@@ -3856,11 +3992,22 @@ const EventsView = {
           const icon = ev.icon || '🎉';
           const evDate = ev.date ? new Date(ev.date + 'T00:00:00') : null;
           const isPast = evDate && !isNaN(evDate.getTime()) && evDate < today;
+          // Card net = gifts received − gifts given − paid expenses. Negative
+          // (red) when paid expenses exceed gift income; positive (green)
+          // otherwise. Only paid expenses count — unpaid bills don't affect
+          // the at-a-glance number.
+          const giftNet = eventGiftNet(ev.id);
+          const expTot  = eventExpenseTotals(ev);
+          const cardNet = giftNet.net - expTot.paid;
+          const hasNum  = giftNet.received !== 0 || giftNet.given !== 0 || expTot.paid !== 0;
+          const netChip = hasNum
+            ? `<span class="event-net ${cardNet >= 0 ? 'is-positive' : 'is-negative'}" title="Gifts in $${giftNet.received.toFixed(2)} · Gifts out $${giftNet.given.toFixed(2)} · Paid expenses $${expTot.paid.toFixed(2)}">${cardNet >= 0 ? '+' : '−'}$${Math.abs(cardNet).toFixed(2)}</span>`
+            : '';
           return `
             <button class="event-item${ev.id === this.selectedId ? ' is-active' : ''}${isPast ? ' is-past' : ''}" data-id="${ev.id}">
               <span class="event-item-icon">${escape(icon)}</span>
               <div class="event-item-text">
-                <div class="event-item-name">${escape(ev.name)}</div>
+                <div class="event-item-name">${escape(ev.name)}${netChip}</div>
                 <div class="event-item-meta">
                   <span>${ev.date ? formatDate(ev.date) : 'No date'}</span>
                   <span>·</span>
@@ -3905,6 +4052,23 @@ const EventsView = {
         if (pa !== qa) return pa - qa;
         return p.originalIdx - q.originalIdx;
       });
+
+    // Pre-compute gift totals per attendee for this event so each row can show
+    // "$X" right before the Gift button. Match member attendees by id; custom
+    // attendees by their fromText (case-insensitive name match).
+    const giftTotalForAttendee = (att) => {
+      let total = 0;
+      const allGifts = (Store.state.gifts || []).filter(g => g.eventId === ev.id && g.direction === 'received');
+      allGifts.forEach(g => {
+        const amt = Number(g.amount) || 0;
+        if (att.memberId) {
+          if (Array.isArray(g.fromMemberIds) && g.fromMemberIds.includes(att.memberId)) total += amt;
+        } else if (att.customName) {
+          if ((g.fromText || '').trim().toLowerCase() === (att.customName || '').trim().toLowerCase()) total += amt;
+        }
+      });
+      return total;
+    };
 
     const rowsHtml = attendees.map(({ a, originalIdx: idx }) => {
       const m = a.memberId ? memMap[a.memberId] : null;
@@ -3959,8 +4123,13 @@ const EventsView = {
             ? `<span class="att-readonly">${escape(emailVal || '—')}</span>`
             : `<span class="att-readonly muted">—</span>`);
 
+      const giftAmount = giftTotalForAttendee(a);
+      const giftChip = giftAmount > 0
+        ? `<span class="att-gift-amount" title="Gifts received from this attendee for this event">$${giftAmount.toFixed(2)}</span>`
+        : '';
       const actionsCell = isAdmin
-        ? `<button class="btn btn-ghost btn-sm" data-gift="${idx}" title="Log a gift for this attendee">
+        ? `${giftChip}
+          <button class="btn btn-ghost btn-sm" data-gift="${idx}" title="Log a gift for this attendee">
             <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="6" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.4"/><path d="M2 9h12M8 6v8M5 5a1.5 1.5 0 1 1 3 0M11 5a1.5 1.5 0 1 0-3 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
             Gift
           </button>
@@ -3990,10 +4159,85 @@ const EventsView = {
       : '';
 
     const headerActions = isAdmin ? `
-      <div style="display:flex; gap:6px;">
+      <div class="event-head-tools">
+        <div class="seg" role="tablist" aria-label="Detail view">
+          <button class="seg-btn ${this.detailView === 'attendees' ? 'is-active' : ''}" data-detail="attendees" type="button">Attendees</button>
+          <button class="seg-btn ${this.detailView === 'expenses' ? 'is-active' : ''}" data-detail="expenses" type="button">Expenses</button>
+        </div>
         <button class="btn btn-ghost btn-sm" id="event-edit">Edit</button>
         <button class="btn btn-danger-ghost btn-sm" id="event-delete">Delete</button>
       </div>` : '';
+
+    // Build expenses HTML (admin-only — users don't manage event budgets).
+    const expenseTotals = eventExpenseTotals(ev);
+    const giftNet      = eventGiftNet(ev.id);
+    const fmtMoney = (n) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`;
+    const expenseRows = ((ev.expenses) || []).map((x) => `
+      <tr data-eid="${x.id}" class="${x.paid ? 'is-paid' : ''}">
+        <td><input class="input compact exp-name" data-eid="${x.id}" value="${escape(x.name || '')}" placeholder="Expense" /></td>
+        <td><input class="input compact exp-amount" data-eid="${x.id}" type="number" step="0.01" min="0" value="${Number(x.amount) || 0}" /></td>
+        <td><input class="input compact exp-date" data-eid="${x.id}" type="date" value="${escape(x.date || '')}" /></td>
+        <td>
+          <select class="input compact exp-payment" data-eid="${x.id}">
+            <option value="card"      ${x.paymentType === 'card' ? 'selected' : ''}>Card</option>
+            <option value="cash"      ${x.paymentType === 'cash' ? 'selected' : ''}>Cash</option>
+            <option value="etransfer" ${x.paymentType === 'etransfer' ? 'selected' : ''}>E-transfer</option>
+            <option value="other"     ${x.paymentType === 'other' ? 'selected' : ''}>Other</option>
+          </select>
+        </td>
+        <td class="exp-paid-cell"><label class="exp-paid-toggle"><input type="checkbox" class="exp-paid" data-eid="${x.id}" ${x.paid ? 'checked' : ''}/><span>Paid</span></label></td>
+        <td style="text-align:right;"><button class="btn btn-danger-ghost btn-sm" data-exp-remove="${x.id}">Remove</button></td>
+      </tr>`).join('');
+    const expensesBody = `
+      <div class="event-metric-row">
+        <div class="event-metric">
+          <span class="event-metric-label">Total expenses</span>
+          <span class="event-metric-value">${fmtMoney(expenseTotals.total)}</span>
+          <span class="event-metric-sub">${expenseTotals.count} item${expenseTotals.count === 1 ? '' : 's'}</span>
+        </div>
+        <div class="event-metric is-paid">
+          <span class="event-metric-label">Paid</span>
+          <span class="event-metric-value">${fmtMoney(expenseTotals.paid)}</span>
+        </div>
+        <div class="event-metric ${expenseTotals.unpaid > 0 ? 'is-unpaid' : ''}">
+          <span class="event-metric-label">Unpaid</span>
+          <span class="event-metric-value">${fmtMoney(expenseTotals.unpaid)}</span>
+        </div>
+        <div class="event-metric ${giftNet.net >= 0 ? 'is-positive' : 'is-negative'}">
+          <span class="event-metric-label">Gifts net</span>
+          <span class="event-metric-value">${giftNet.net >= 0 ? '+' : '−'}$${Math.abs(giftNet.net).toFixed(2)}</span>
+          <span class="event-metric-sub">in ${fmtMoney(giftNet.received)} · out ${fmtMoney(giftNet.given)}</span>
+        </div>
+      </div>
+      <div class="expense-add">
+        <input class="input" id="exp-new-name"    placeholder="Expense name" />
+        <input class="input" id="exp-new-amount"  type="number" step="0.01" min="0" placeholder="Amount" />
+        <input class="input" id="exp-new-date"    type="date" value="${ev.date || ''}" />
+        <select class="input" id="exp-new-payment">
+          <option value="card">Card</option>
+          <option value="cash">Cash</option>
+          <option value="etransfer">E-transfer</option>
+          <option value="other">Other</option>
+        </select>
+        <button class="btn btn-primary btn-sm" id="exp-add-btn">+ Add expense</button>
+      </div>
+      ${(ev.expenses || []).length ? `
+        <div class="table-wrap">
+          <table class="table expense-table">
+            <thead><tr>
+              <th>Expense</th><th>Amount</th><th>Date</th><th>Payment</th><th>Paid</th><th></th>
+            </tr></thead>
+            <tbody>${expenseRows}</tbody>
+            <tfoot>
+              <tr>
+                <td><strong>Total</strong></td>
+                <td><strong>${fmtMoney(expenseTotals.total)}</strong></td>
+                <td colspan="2" class="muted small">Paid ${fmtMoney(expenseTotals.paid)} · Unpaid ${fmtMoney(expenseTotals.unpaid)}</td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>` : `<p class="muted small" style="margin-top:8px;">No expenses logged yet — add one above.</p>`}`;
 
     const bulkActions = isAdmin ? `
       <div class="attendance-actions">
@@ -4030,6 +4274,40 @@ const EventsView = {
         <button class="btn btn-ghost btn-sm" id="event-add-custom-btn">${isAdmin ? 'Add' : 'Add guest'}</button>
       </div>`;
 
+    // Non-admins always get the attendees view (no expenses access).
+    const activeDetail = isAdmin ? this.detailView : 'attendees';
+
+    const attendeesBody = `
+      <div class="event-stats">
+        <div><span class="event-stat-num">${attendeesRaw.length}</span><span class="event-stat-label">Invited</span></div>
+        <div><span class="event-stat-num">${accepted}</span><span class="event-stat-label">Accepted</span></div>
+        <div><span class="event-stat-num">${totalHeadcount}</span><span class="event-stat-label">Total seats</span></div>
+      </div>
+      ${bulkActions}
+      <div class="attendance-add">
+        ${bulkAddBlock}
+        ${customAddBlock}
+      </div>
+      ${attendeesRaw.length ? `
+        <div class="table-wrap">
+          <table class="table attendance-table">
+            <thead><tr>
+              <th>Attendee</th><th>Status</th><th>+N</th><th>Meal</th><th>Email</th><th></th>
+            </tr></thead>
+            <tbody>${rowsHtml}</tbody>
+            ${(() => {
+              const sum = attendeesRaw.reduce((s, x) => s + giftTotalForAttendee(x), 0);
+              if (sum <= 0) return '';
+              return `<tfoot>
+                <tr class="attendance-total-row">
+                  <td colspan="5" style="text-align:right; font-weight:600;">Total gifts received</td>
+                  <td style="text-align:right; white-space:nowrap;"><span class="att-gift-amount att-gift-total">$${sum.toFixed(2)}</span></td>
+                </tr>
+              </tfoot>`;
+            })()}
+          </table>
+        </div>` : `<p class="muted small">No attendees yet — add some above.</p>`}`;
+
     detail.innerHTML = `
       ${cover ? `<div class="event-cover" style="background-image:url('${cover}')"></div>` : ''}
       <header class="panel-head">
@@ -4041,28 +4319,7 @@ const EventsView = {
       </header>
       ${ev.description ? `<p class="panel-prose">${escape(ev.description)}</p>` : ''}
       <div class="panel-body">
-        <div class="event-stats">
-          <div><span class="event-stat-num">${attendeesRaw.length}</span><span class="event-stat-label">Invited</span></div>
-          <div><span class="event-stat-num">${accepted}</span><span class="event-stat-label">Accepted</span></div>
-          <div><span class="event-stat-num">${totalHeadcount}</span><span class="event-stat-label">Total seats</span></div>
-        </div>
-
-        ${bulkActions}
-
-        <div class="attendance-add">
-          ${bulkAddBlock}
-          ${customAddBlock}
-        </div>
-
-        ${attendeesRaw.length ? `
-          <div class="table-wrap">
-            <table class="table attendance-table">
-              <thead><tr>
-                <th>Attendee</th><th>Status</th><th>+N</th><th>Meal</th><th>Email</th><th></th>
-              </tr></thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-          </div>` : `<p class="muted small">No attendees yet — add some above.</p>`}
+        ${activeDetail === 'expenses' ? expensesBody : attendeesBody}
       </div>`;
 
     if (isAdmin) {
@@ -4075,9 +4332,62 @@ const EventsView = {
         this.render();
       });
 
+      // Detail-view segmented toggle (Attendees / Expenses)
+      detail.querySelectorAll('.event-head-tools [data-detail]').forEach(btn => on(btn, 'click', () => {
+        this.detailView = btn.dataset.detail;
+        this.renderDetail();
+      }));
+
+      // Expense add + per-row edits + remove. All admin-only.
+      if (this.detailView === 'expenses') {
+        ev.expenses = ev.expenses || [];
+        on($('#exp-add-btn'), 'click', () => {
+          const name   = $('#exp-new-name').value.trim();
+          const amount = parseFloat($('#exp-new-amount').value) || 0;
+          if (!name && !amount) { toast('Add a name or amount first.', 'warn'); return; }
+          ev.expenses.push({
+            id: uid('exp'),
+            name,
+            amount,
+            date: $('#exp-new-date').value || ev.date || '',
+            paymentType: $('#exp-new-payment').value,
+            paid: false,
+          });
+          Store.save();
+          this.renderDetail();
+        });
+
+        const findExpense = (id) => ev.expenses.find(x => x.id === id);
+        const updateExp = (sel, field, transform, rerender = false) => {
+          detail.querySelectorAll(sel).forEach(el => on(el, 'change', () => {
+            const x = findExpense(el.dataset.eid); if (!x) return;
+            x[field] = transform(el.type === 'checkbox' ? el.checked : el.value);
+            Store.save();
+            if (rerender) this.renderDetail();
+          }));
+        };
+        updateExp('.exp-name',    'name',        v => (v || '').toString());
+        updateExp('.exp-amount',  'amount',      v => parseFloat(v) || 0, true);
+        updateExp('.exp-date',    'date',        v => (v || '').toString());
+        updateExp('.exp-payment', 'paymentType', v => (v || '').toString());
+        updateExp('.exp-paid',    'paid',        v => !!v, true);
+
+        detail.querySelectorAll('[data-exp-remove]').forEach(btn => on(btn, 'click', () => {
+          const id = btn.dataset.expRemove;
+          ev.expenses = ev.expenses.filter(x => x.id !== id);
+          Store.save();
+          this.renderDetail();
+        }));
+      }
+
+      const pushAttendee = (member) => ({
+        memberId: member.id, status: 'invited', notes: '', plusN: 0,
+        meal: defaultMealForMember(member),
+      });
       on($('#event-add-member'), 'change', (e) => {
         const mid = e.target.value; if (!mid) return;
-        attendeesRaw.push({ memberId: mid, status: 'invited', notes: '', plusN: 0, meal: 'none' });
+        const m = Store.byId(mid); if (!m) return;
+        attendeesRaw.push(pushAttendee(m));
         ev.attendees = attendeesRaw;
         Store.save();
         this.renderDetail();
@@ -4087,7 +4397,7 @@ const EventsView = {
         const present = new Set(attendeesRaw.map(a => a.memberId).filter(Boolean));
         Store.membersList()
           .filter(m => m.group === grp && !present.has(m.id))
-          .forEach(m => attendeesRaw.push({ memberId: m.id, status: 'invited', notes: '', plusN: 0, meal: 'none' }));
+          .forEach(m => attendeesRaw.push(pushAttendee(m)));
         ev.attendees = attendeesRaw;
         Store.save();
         this.renderDetail();
@@ -4095,7 +4405,7 @@ const EventsView = {
       on($('#event-add-all'), 'click', () => {
         const present = new Set(attendeesRaw.map(a => a.memberId).filter(Boolean));
         Store.membersList().forEach(m => {
-          if (!present.has(m.id)) attendeesRaw.push({ memberId: m.id, status: 'invited', notes: '', plusN: 0, meal: 'none' });
+          if (!present.has(m.id)) attendeesRaw.push(pushAttendee(m));
         });
         ev.attendees = attendeesRaw;
         Store.save();
@@ -4254,6 +4564,17 @@ const EventsView = {
 
 // -------------------- US HOLIDAYS --------------------
 function pad2(n) { return String(n).padStart(2, '0'); }
+// Ordinal suffix for small numbers — 1st, 2nd, 3rd, 4th, 11th, 21st, etc.
+function nthSuffix(n) {
+  const v = Math.abs(n) % 100;
+  if (v >= 11 && v <= 13) return 'th';
+  switch (v % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
 function toIsoDate(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 // weekday: 0=Sun..6=Sat. nth: 1..5 for nth occurrence, -1 for last.
 function nthWeekdayOfMonth(year, month, weekday, nth) {
@@ -4509,6 +4830,13 @@ const CalendarView = {
       this.render();
     });
     on($('#cal-year'),  'change', (e) => { this.year = parseInt(e.target.value, 10); this.render(); });
+    on($('#cal-refresh'), 'click', () => {
+      // Clear any cached Google events so the next render goes back to the
+      // network. Also re-render local data (events/birthdays/holidays).
+      if (typeof GoogleCalendar !== 'undefined') GoogleCalendar.eventCache.clear();
+      this.render();
+      toast('Calendar refreshed.');
+    });
     on($('#cal-google-btn'), 'click', () => this.openGoogleModal());
     on($('#gcal-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeGoogleModal(); });
     // Static weekday header
@@ -4552,6 +4880,29 @@ const CalendarView = {
       if (!birthdaysByMD.has(md)) birthdaysByMD.set(md, []);
       birthdaysByMD.get(md).push(m);
     });
+    // Spouse anniversaries — recurring annually on MM-DD. Dedupe by couple so
+    // we render one chip per pair instead of one per spouse. Click target is
+    // the alphabetically-first spouse's profile (deterministic).
+    const anniversariesByMD = new Map(); // 'MM-DD' → [{ pair: [a, b], focus, isoDate }]
+    {
+      const seenPairs = new Set();
+      Store.membersList().forEach(m => {
+        if (!m.spouseId || m.divorced) return;
+        const sp = Store.byId(m.spouseId);
+        if (!sp || sp.divorced) return;
+        const pairKey = [m.id, sp.id].sort().join('|');
+        if (seenPairs.has(pairKey)) return;
+        seenPairs.add(pairKey);
+        const aniso = m.anniversary || sp.anniversary;
+        if (!aniso || aniso.length < 10) return;
+        const md = aniso.slice(5, 10);
+        // Render this anniversary attached to whichever spouse comes first by id.
+        const focus = m.id < sp.id ? m : sp;
+        const partner = focus === m ? sp : m;
+        if (!anniversariesByMD.has(md)) anniversariesByMD.set(md, []);
+        anniversariesByMD.get(md).push({ focus, partner, isoDate: aniso });
+      });
+    }
     const holidaysByDate = new Map();
     [...usHolidaysForYear(this.year - 1), ...usHolidaysForYear(this.year), ...usHolidaysForYear(this.year + 1)]
       .forEach(h => holidaysByDate.set(h.date, h));
@@ -4601,6 +4952,16 @@ const CalendarView = {
           <span class="cal-chip-icon">🎂</span><span class="cal-chip-text">${escape(m.firstName)} ${escape(m.lastName)}</span>
         </button>`);
       });
+      const dayAnnivs = anniversariesByMD.get(md) || [];
+      dayAnnivs.forEach(({ focus, partner, isoDate }) => {
+        const aYear = parseInt((isoDate || '').slice(0, 4), 10);
+        const nth   = Number.isFinite(aYear) ? (c.dt.getFullYear() - aYear) : null;
+        const ordHint = nth != null && nth > 0 ? ` — ${nth}${nthSuffix(nth)} anniversary` : '';
+        const label = `${focus.firstName} & ${partner.firstName}`;
+        chips.push(`<button type="button" class="cal-chip cal-chip-anniv" data-member-id="${focus.id}" title="${escape(focus.firstName)} ${escape(focus.lastName)} & ${escape(partner.firstName)} ${escape(partner.lastName)}${ordHint}">
+          <span class="cal-chip-icon">💍</span><span class="cal-chip-text">${escape(label)}</span>
+        </button>`);
+      });
 
       return `
         <div class="cal-cell${c.inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${iso}">
@@ -4624,6 +4985,10 @@ const CalendarView = {
       Views.show('events');
     }));
     grid.querySelectorAll('.cal-chip-birthday').forEach(b => on(b, 'click', (e) => {
+      e.stopPropagation();
+      Drawer.open(b.dataset.memberId);
+    }));
+    grid.querySelectorAll('.cal-chip-anniv').forEach(b => on(b, 'click', (e) => {
       e.stopPropagation();
       Drawer.open(b.dataset.memberId);
     }));
@@ -5158,6 +5523,13 @@ const MemberModal = {
 
     this.updateRelTargets();
     this.el.setAttribute('aria-hidden', 'false');
+    // Make sure the modal body opens scrolled to the top so the user sees the
+    // first fields, not the bottom of the form.
+    requestAnimationFrame(() => {
+      const body = this.el.querySelector('.modal-body');
+      if (body) body.scrollTop = 0;
+      this.el.querySelector('.modal-panel')?.scrollTo?.(0, 0);
+    });
     setTimeout(() => f.firstName.focus(), 50);
   },
   close() { this.el.setAttribute('aria-hidden', 'true'); },
@@ -5240,7 +5612,9 @@ const MemberModal = {
 
     const ethnicities = EthnicityPicker.read($('[data-picker="modal-ethnicity"]'));
     const input = {
-      firstName, lastName,
+      firstName,
+      middleName: (fd.get('middleName') || '').toString().trim(),
+      lastName,
       nickname: fd.get('nickname'),
       birthday: fd.get('birthday'),
       gender: fd.get('gender'),
@@ -5629,6 +6003,103 @@ function ageGroupForBirthday(iso) {
   return 'adult';
 }
 
+// Full display name including the optional middle name. Falls back to "first last"
+// when the middle is empty so we don't render double-spaces or trailing whitespace.
+function fullName(m) {
+  if (!m) return '';
+  const mid = (m.middleName || '').trim();
+  const parts = [m.firstName, mid, m.lastName].filter(Boolean);
+  return parts.join(' ');
+}
+
+// US phone auto-format. Accepts any input, returns "(XXX) XXX-XXXX" once
+// enough digits are present; otherwise a partial prefix. Non-digits stripped.
+function formatPhoneUS(raw) {
+  const d = (raw || '').toString().replace(/\D/g, '').slice(0, 10);
+  if (d.length === 0) return '';
+  if (d.length < 4)   return `(${d}`;
+  if (d.length < 7)   return `(${d.slice(0,3)}) ${d.slice(3)}`;
+  return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+}
+
+// Attach live US-phone formatting to a tel input. Caret stays at the end after
+// reformat (good enough for typing; users editing the middle will see a small
+// jump — acceptable tradeoff vs a complex caret-preservation routine).
+function bindPhoneFormat(input) {
+  if (!input || input.dataset.phoneBound) return;
+  input.dataset.phoneBound = '1';
+  input.addEventListener('input', () => { input.value = formatPhoneUS(input.value); });
+  input.addEventListener('blur',  () => { input.value = formatPhoneUS(input.value); });
+}
+
+// US zip → city/state lookup via zippopotam.us (free, no API key, CORS-enabled).
+// Returns { city, state } or null on miss.
+async function lookupZipUS(zip) {
+  const z = (zip || '').toString().trim().slice(0, 5);
+  if (!/^\d{5}$/.test(z)) return null;
+  try {
+    const r = await fetch(`https://api.zippopotam.us/us/${z}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const p = d.places?.[0];
+    if (!p) return null;
+    return {
+      city:  p['place name'] || '',
+      state: p['state abbreviation'] || p.state || '',
+    };
+  } catch { return null; }
+}
+
+// Whole years since an anniversary date. Returns null when date missing/invalid
+// or hasn't occurred yet (avoids "-1 years").
+function yearsTogether(iso) {
+  if (!iso) return null;
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  let y = now.getFullYear() - d.getFullYear();
+  if (now.getMonth() < d.getMonth() ||
+      (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) {
+    y -= 1;
+  }
+  return y < 0 ? null : y;
+}
+
+// Pick a sensible default meal type based on the member's life stage.
+function defaultMealForMember(m) {
+  if (!m) return 'none';
+  const g = m.ageGroup;
+  if (g === 'baby')  return 'kids';
+  if (g === 'child') return 'half';
+  if (g === 'adult') return 'full';
+  return 'none';
+}
+
+// Compose a single-line postal address from the new split fields, falling back
+// gracefully when only some are present (or only the legacy `address` field).
+function formatPostalAddress(m) {
+  if (!m) return '';
+  const street = (m.address || '').trim();
+  const city   = (m.city || '').trim();
+  const state  = (m.state || '').trim();
+  const zip    = (m.zip || '').trim();
+  const cityStateZip = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [street, cityStateZip].filter(Boolean).join('\n');
+}
+
+// Net gift balance for an event — sum(received) − sum(given) of gifts that
+// reference this event. Returns { received, given, net }.
+function eventGiftNet(eventId) {
+  let received = 0, given = 0;
+  (Store.state.gifts || []).forEach(g => {
+    if (g.eventId !== eventId) return;
+    const amt = Number(g.amount) || 0;
+    if (g.direction === 'received') received += amt;
+    else if (g.direction === 'given') given += amt;
+  });
+  return { received, given, net: received - given };
+}
+
 let toastTimer = null;
 function toast(msg, kind = 'ok') {
   const t = $('#toast');
@@ -5649,9 +6120,10 @@ function userEventsList() {
   return all.filter(ev => (ev.attendees || []).some(a => a.memberId === u.id));
 }
 
-// Count of events where the current user has status === 'invited' (pending action).
+// Count of events where the logged-in member has status === 'invited' (pending
+// action). Works for both regular users AND admin members (i.e. any member with
+// a real id) — the bootstrap admin has no member tie and gets zero.
 function pendingInviteCount() {
-  if (Auth.isAdmin()) return 0;
   const u = Auth.current;
   if (!u || u === 'admin-bootstrap') return 0;
   return (Store.state.events || []).filter(ev => (ev.attendees || []).some(a =>
@@ -5673,13 +6145,20 @@ function refreshEventsNav() {
   const tab   = $('#nav-events');
   const badge = $('#events-badge');
   if (!tab) return;
-  if (Auth.isAdmin()) {
+  // Bootstrap admin: always show the tab (they manage events), no badge since
+  // they have no member tie. Other admins (member with role:admin) keep their
+  // own RSVP badge — we missed this case originally.
+  if (Auth.current === 'admin-bootstrap') {
     tab.hidden = false;
     badge.hidden = true;
     return;
   }
-  const events = userEventsList();
-  tab.hidden = events.length === 0;
+  if (Auth.isAdmin()) {
+    tab.hidden = false; // admin members see Events regardless of their RSVPs
+  } else {
+    const events = userEventsList();
+    tab.hidden = events.length === 0;
+  }
   const pending = pendingInviteCount();
   if (pending > 0) {
     badge.hidden = false;
