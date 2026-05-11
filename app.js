@@ -569,6 +569,8 @@ const Store = {
       theme: { baseHue: 205 },
       events: [],
       gifts: [],
+      reminders: [],
+      grocery: [],
       googleCalendar: {
         clientId: '',
         accessToken: '',
@@ -611,6 +613,9 @@ const Store = {
     const members = this.state.members || {};
     for (const m of Object.values(members)) {
       if (!Array.isArray(m.exSpouseIds)) m.exSpouseIds = [];
+      if (m.dateOfDeath === undefined) m.dateOfDeath = '';
+      if (m.plan529      === undefined) m.plan529 = '';
+      if (m.notes        === undefined) m.notes = '';
     }
     for (const m of Object.values(members)) {
       if (m.spouseId && m.divorced) {
@@ -755,6 +760,9 @@ const Tree = {
       childrenIds: [],
       siblingLinkIds: [],
       exSpouseIds: [],
+      dateOfDeath: '',
+      plan529: '',
+      notes: '',
       x: 0, y: 0,
       createdAt: Date.now(),
     };
@@ -1882,7 +1890,17 @@ const Drawer = {
     $('#drawer-relation').textContent = Tree.computeRelation(m.id) || 'Family';
     $('#drawer-name').textContent = fullName(m);
     $('#drawer-nick').textContent = m.nickname ? `"${m.nickname}"` : '';
+    // "In loving memory" badge surfaces when a date of death is on file.
+    const remembering = $('#drawer-remembering');
+    if (remembering) remembering.hidden = !m.dateOfDeath;
     $('#kv-birthday').textContent = m.birthday ? formatDate(m.birthday) : '—';
+    const dodRow = $('#kv-dod-row');
+    if (dodRow) {
+      if (m.dateOfDeath) {
+        dodRow.hidden = false;
+        $('#kv-dod').textContent = formatDate(m.dateOfDeath);
+      } else { dodRow.hidden = true; }
+    }
     $('#kv-lifestage').textContent = m.ageGroup ? capitalize(m.ageGroup) : '—';
     $('#kv-email').textContent = m.email || '—';
     $('#kv-email-copy').hidden = !m.email;
@@ -1914,6 +1932,25 @@ const Drawer = {
       : '—';
     $('#kv-role').textContent = capitalize(m.role);
 
+    // 529 plan row (only when set)
+    const plan529Row = $('#kv-529-row');
+    if (plan529Row) {
+      if (m.plan529) {
+        plan529Row.hidden = false;
+        const a = $('#kv-529');
+        a.href = m.plan529;
+        a.textContent = m.plan529;
+      } else { plan529Row.hidden = true; }
+    }
+    // Notes section (only when set)
+    const notesSection = $('#kv-notes-section');
+    if (notesSection) {
+      if ((m.notes || '').trim()) {
+        notesSection.hidden = false;
+        $('#kv-notes').textContent = m.notes;
+      } else { notesSection.hidden = true; }
+    }
+
     // relations
     const rels = Tree.relations(m);
     $('#drawer-relations').innerHTML = rels.length
@@ -1940,6 +1977,8 @@ const Drawer = {
         toast('Relationship removed.');
       });
     });
+
+    renderDrawerGifts(m);
 
     // permissions
     const canEdit = Auth.isAdmin() || Auth.isSelf(m.id);
@@ -1978,6 +2017,9 @@ const Drawer = {
     f.zip.value   = m.zip   || '';
     f.city.value  = m.city  || '';
     f.state.value = m.state || '';
+    if (f.dateOfDeath) f.dateOfDeath.value = m.dateOfDeath || '';
+    if (f.plan529)     f.plan529.value     = m.plan529 || '';
+    if (f.notes)       f.notes.value       = m.notes   || '';
     $('#edit-zip-status').hidden = true;
     f.gender.value = m.gender;
     f.ageGroup.value = m.ageGroup;
@@ -2040,6 +2082,9 @@ const Drawer = {
     m.city       = (fd.get('city')  || '').toString().trim();
     m.state      = (fd.get('state') || '').toString().trim().toUpperCase().slice(0, 3);
     m.zip        = (fd.get('zip')   || '').toString().trim().slice(0, 10);
+    m.dateOfDeath = (fd.get('dateOfDeath') || '').toString();
+    m.plan529    = (fd.get('plan529') || '').toString().trim();
+    m.notes      = (fd.get('notes')   || '').toString();
     m.group      = (fd.get('group') || '').toString();
     // Anniversary: only meaningful when there's a current spouse; mirror to the
     // spouse so both records stay in sync.
@@ -2156,6 +2201,89 @@ const Drawer = {
   },
 };
 
+// Profile drawer Gifts section: lists what `member` received and gave,
+// each entry on its own row, with totals at the bottom. An event link
+// renders as a small chip that jumps to the Events page.
+function renderDrawerGifts(member) {
+  const host = $('#drawer-gifts'); if (!host) return;
+  const all = Store.state.gifts || [];
+  const events = Store.state.events || [];
+  const eventById = new Map(events.map(e => [e.id, e]));
+  const fmtMoney = (n) => (n == null || isNaN(n)) ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const received = all.filter(g => g.toMemberId === member.id);
+  const given    = all.filter(g => Array.isArray(g.fromMemberIds) && g.fromMemberIds.includes(member.id));
+
+  const rowHTML = (g, perspective) => {
+    // perspective = 'received' → show who it's from; 'given' → show who it's to.
+    const ev = g.eventId ? eventById.get(g.eventId) : null;
+    let other = '';
+    if (perspective === 'received') {
+      const fromNames = (g.fromMemberIds || []).map(id => {
+        const m = Store.byId(id); return m ? `${m.firstName} ${m.lastName}` : null;
+      }).filter(Boolean);
+      other = fromNames.join(', ') || g.fromText || '—';
+    } else {
+      const to = g.toMemberId ? Store.byId(g.toMemberId) : null;
+      other = to ? `${to.firstName} ${to.lastName}` : (g.toText || '—');
+    }
+    const date = g.date ? formatDate(g.date) : '';
+    const amount = fmtMoney(g.amount);
+    const occasion = g.occasion || g.item || '';
+    const eventChip = ev
+      ? `<button type="button" class="gift-event-chip" data-event-id="${ev.id}" title="Open event">${ev.icon || '🎉'} ${escape(ev.name || 'Event')}</button>`
+      : '';
+    return `
+      <div class="gift-row" data-direction="${perspective}">
+        <div class="gift-row-main">
+          <span class="gift-direction">${perspective === 'received' ? 'From' : 'To'}</span>
+          <span class="gift-other">${escape(other)}</span>
+          ${eventChip}
+          ${occasion ? `<span class="gift-occasion">${escape(occasion)}</span>` : ''}
+        </div>
+        <div class="gift-row-meta">
+          ${date ? `<span class="gift-date">${escape(date)}</span>` : ''}
+          ${amount ? `<span class="gift-amount">${escape(amount)}</span>` : ''}
+        </div>
+      </div>`;
+  };
+
+  const sumAmount = (list) => list.reduce((s, g) => s + (Number(g.amount) || 0), 0);
+  const receivedTotal = sumAmount(received);
+  const givenTotal    = sumAmount(given);
+  const net           = receivedTotal - givenTotal;
+
+  const section = (title, rows, total, perspective) => {
+    if (!rows.length) return `<p class="muted small">${title === 'Received' ? 'No gifts received yet.' : 'No gifts given yet.'}</p>`;
+    const sorted = rows.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return `
+      <div class="gifts-bucket">
+        <div class="gifts-bucket-head">
+          <h5>${title}</h5>
+          <span class="gifts-bucket-total">Total ${fmtMoney(total) || '$0.00'}</span>
+        </div>
+        <div class="gifts-rows">
+          ${sorted.map(g => rowHTML(g, perspective)).join('')}
+        </div>
+      </div>`;
+  };
+
+  host.innerHTML = `
+    ${section('Received', received, receivedTotal, 'received')}
+    ${section('Given',    given,    givenTotal,    'given')}
+    <div class="gifts-net">Net: <strong>${(net >= 0 ? '+' : '') + fmtMoney(Math.abs(net))}</strong></div>
+  `;
+
+  host.querySelectorAll('.gift-event-chip').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.eventId;
+      EventsView.selectedId = id;
+      Views.show('events');
+    });
+  });
+}
+
 function relRow(r) {
   const m = r.member;
   const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
@@ -2203,16 +2331,18 @@ function unlinkRelation(aId, bId, relLabel) {
 const Views = {
   current: 'tree',
   show(name) {
-    if ((name === 'admin' || name === 'gifts' || name === 'calendar') && !Auth.isAdmin()) name = 'tree';
+    if ((name === 'admin' || name === 'gifts' || name === 'calendar' || name === 'dashboard') && !Auth.isAdmin()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
     this.current = name;
     $$('.nav-tab').forEach(t => t.classList.toggle('is-active', t.dataset.view === name));
+    $('#view-dashboard').hidden  = name !== 'dashboard';
     $('#view-tree').hidden       = name !== 'tree';
     $('#view-myfamily').hidden   = name !== 'myfamily';
     $('#view-admin').hidden      = name !== 'admin';
     $('#view-events').hidden     = name !== 'events';
     $('#view-calendar').hidden   = name !== 'calendar';
     $('#view-gifts').hidden      = name !== 'gifts';
+    if (name === 'dashboard') DashboardView.render();
     if (name === 'admin')     AdminView.render();
     if (name === 'events')    EventsView.render();
     if (name === 'calendar')  CalendarView.render();
@@ -2582,7 +2712,9 @@ const AdminView = {
               </div>
             </div>
           </td>
-          <td>${m.email ? `<code>${escape(m.email)}</code>` : '<span class="muted">—</span>'}</td>
+          <td>${m.email
+            ? `<span class="admin-email-cell"><code>${escape(m.email)}</code><button class="admin-email-copy" type="button" data-action="copy-email" data-email="${escape(m.email)}" title="Copy email"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`
+            : '<span class="muted">—</span>'}</td>
           <td><span class="role-pill ${m.role}">${m.role}</span></td>
           <td>${m.group ? escape(m.group) : '—'}</td>
           <td>${m.birthday ? formatDate(m.birthday) : '—'}</td>
@@ -2605,6 +2737,10 @@ const AdminView = {
         if (action === 'edit')          { Drawer.open(id); setTimeout(() => Drawer.startEdit(), 50); }
         else if (action === 'reset')    { await this.resetPassword(m); }
         else if (action === 'delete')   { this.deleteMember(m); }
+        else if (action === 'copy-email') {
+          try { await navigator.clipboard.writeText(btn.dataset.email); toast('Email copied.'); }
+          catch { toast('Copy failed.', 'warn'); }
+        }
       });
     });
     $('#admin-rows').querySelectorAll('tr').forEach(tr => {
@@ -4192,6 +4328,11 @@ const EventsView = {
   detailView: 'attendees',           // 'attendees' | 'expenses'
   init() {
     on($('#btn-event-add'), 'click', () => this.openModal());
+    on($('#event-is-trip'), 'change', (e) => {
+      $('#event-trip-fieldset').hidden = !e.target.checked;
+      if (e.target.checked && !$('#event-itin-rows').children.length) this._addItineraryRow();
+    });
+    on($('#event-add-itin'), 'click', () => this._addItineraryRow());
     on($('#event-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeModal(); });
     on($('#event-form'), 'submit', (e) => { e.preventDefault(); this.saveModal(); });
 
@@ -4589,16 +4730,18 @@ const EventsView = {
           </table>
         </div>` : `<p class="muted small">No attendees yet — add some above.</p>`}`;
 
+    const tripPanel = ev.isTrip ? renderTripPanel(ev) : '';
     detail.innerHTML = `
       ${cover ? `<div class="event-cover" style="background-image:url('${cover}')"></div>` : ''}
       <header class="panel-head">
         <div>
-          <h3>${ev.icon ? `<span class="event-title-icon">${escape(ev.icon)}</span>` : ''}${escape(ev.name)}</h3>
-          <p class="muted small">${ev.date ? formatDate(ev.date) : 'Date TBD'}${locationHtml}</p>
+          <h3>${ev.isTrip ? '<span class="trip-badge">Trip</span>' : ''}${ev.icon ? `<span class="event-title-icon">${escape(ev.icon)}</span>` : ''}${escape(ev.name)}</h3>
+          <p class="muted small">${ev.date ? formatDate(ev.date) : 'Date TBD'}${ev.isTrip && ev.tripEndDate ? ` – ${formatDate(ev.tripEndDate)}` : ''}${locationHtml}${ev.isTrip && ev.tripDestination ? ` · ${escape(ev.tripDestination)}` : ''}</p>
         </div>
         ${headerActions}
       </header>
       ${ev.description ? `<p class="panel-prose">${escape(ev.description)}</p>` : ''}
+      ${tripPanel}
       <div class="panel-body">
         ${activeDetail === 'expenses' ? expensesBody : attendeesBody}
       </div>`;
@@ -4791,6 +4934,7 @@ const EventsView = {
     f.dataset.editId = editId || '';
     f.dataset.cover = '';
     $('#event-cover-preview').style.backgroundImage = '';
+    $('#event-itin-rows').innerHTML = '';
     if (editId) {
       const ev = Store.state.events.find(e => e.id === editId);
       $('#event-modal-title').textContent = 'Edit event';
@@ -4803,12 +4947,38 @@ const EventsView = {
       f.dataset.cover = cover;
       $('#event-cover-url').value = ev.coverUrl || '';
       $('#event-cover-preview').style.backgroundImage = cover ? `url('${cover}')` : '';
+      // Trip fields
+      const isTrip = !!ev.isTrip;
+      f.isTrip.checked = isTrip;
+      $('#event-trip-fieldset').hidden = !isTrip;
+      if (f.tripDestination)        f.tripDestination.value        = ev.tripDestination || '';
+      if (f.tripEndDate)            f.tripEndDate.value            = ev.tripEndDate || '';
+      if (f.tripTransportBudget)    f.tripTransportBudget.value    = ev.tripTransportBudget ?? '';
+      if (f.tripLodgingBudget)      f.tripLodgingBudget.value      = ev.tripLodgingBudget ?? '';
+      if (f.tripFoodBudget)         f.tripFoodBudget.value         = ev.tripFoodBudget ?? '';
+      if (f.tripActivitiesBudget)   f.tripActivitiesBudget.value   = ev.tripActivitiesBudget ?? '';
+      (ev.itinerary || []).forEach(d => this._addItineraryRow(d));
     } else {
       $('#event-modal-title').textContent = 'New event';
       $('#event-icon').value = '🎉';
       if (opts.defaultDate) f.date.value = opts.defaultDate;
+      f.isTrip.checked = false;
+      $('#event-trip-fieldset').hidden = true;
     }
     $('#event-modal').setAttribute('aria-hidden', 'false');
+  },
+  _addItineraryRow(data = { date: '', activity: '', notes: '' }) {
+    const host = $('#event-itin-rows');
+    const row = document.createElement('div');
+    row.className = 'trip-itin-row';
+    row.innerHTML = `
+      <input type="date" class="input itin-date" value="${escape(data.date || '')}" />
+      <input type="text" class="input itin-activity" placeholder="Day activity (e.g. Tsukiji market)" value="${escape(data.activity || '')}" />
+      <input type="text" class="input itin-notes" placeholder="Notes" value="${escape(data.notes || '')}" />
+      <button type="button" class="btn btn-ghost btn-sm itin-del" aria-label="Remove">×</button>
+    `;
+    row.querySelector('.itin-del').addEventListener('click', () => row.remove());
+    host.appendChild(row);
   },
   closeModal() { $('#event-modal').setAttribute('aria-hidden', 'true'); },
   saveModal() {
@@ -4819,6 +4989,15 @@ const EventsView = {
     const editId = f.dataset.editId;
     const coverValue = f.dataset.cover || '';
     const coverIsUpload = coverValue.startsWith('data:');
+    const isTrip = !!fd.get('isTrip');
+    const itinerary = isTrip
+      ? [...$('#event-itin-rows').querySelectorAll('.trip-itin-row')].map(r => ({
+          date:     r.querySelector('.itin-date').value || '',
+          activity: r.querySelector('.itin-activity').value.trim(),
+          notes:    r.querySelector('.itin-notes').value.trim(),
+        })).filter(d => d.date || d.activity)
+      : [];
+    const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : null; };
     const data = {
       name,
       date: (fd.get('date') || '').toString(),
@@ -4827,6 +5006,14 @@ const EventsView = {
       icon: ((fd.get('icon') || '').toString().trim() || ''),
       coverPhoto: coverIsUpload ? coverValue : null,
       coverUrl:   coverIsUpload ? '' : coverValue,
+      isTrip,
+      tripDestination:      isTrip ? (fd.get('tripDestination') || '').toString().trim() : '',
+      tripEndDate:          isTrip ? (fd.get('tripEndDate')     || '').toString() : '',
+      tripTransportBudget:  isTrip ? num(fd.get('tripTransportBudget'))  : null,
+      tripLodgingBudget:    isTrip ? num(fd.get('tripLodgingBudget'))    : null,
+      tripFoodBudget:       isTrip ? num(fd.get('tripFoodBudget'))       : null,
+      tripActivitiesBudget: isTrip ? num(fd.get('tripActivitiesBudget')) : null,
+      itinerary,
     };
     Store.state.events ||= [];
     if (editId) {
@@ -4842,6 +5029,57 @@ const EventsView = {
     this.render();
   },
 };
+
+// Render the trip-specific panel for an event: budget breakdown + itinerary.
+// Spent column reads from the existing expenses array on the event; budget
+// numbers live on ev.trip*Budget fields. Itinerary is a simple ordered list
+// from ev.itinerary[].
+function renderTripPanel(ev) {
+  const fmtMoney = (n) => (n == null || !isFinite(n)) ? '—' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const totalBudget = ['tripTransportBudget','tripLodgingBudget','tripFoodBudget','tripActivitiesBudget']
+    .reduce((s, k) => s + (Number(ev[k]) || 0), 0);
+  const totalSpent = (ev.expenses || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  const lines = [
+    ['Flights / transport', ev.tripTransportBudget],
+    ['Lodging',             ev.tripLodgingBudget],
+    ['Food & drink',        ev.tripFoodBudget],
+    ['Activities',          ev.tripActivitiesBudget],
+  ];
+  const budgetRows = lines.map(([label, val]) => `
+    <tr><td>${label}</td><td class="num">${fmtMoney(val)}</td></tr>
+  `).join('');
+  const itin = (ev.itinerary || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const itinRows = itin.length
+    ? itin.map(d => `
+        <tr>
+          <td class="itin-cell-date">${d.date ? escape(formatDate(d.date)) : '<span class="muted">—</span>'}</td>
+          <td>${escape(d.activity || '')}</td>
+          <td class="muted small">${escape(d.notes || '')}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="3" class="muted small">No itinerary days yet — add some when editing the event.</td></tr>';
+  return `
+    <div class="trip-panel">
+      <div class="trip-budget">
+        <h4>Travel budget</h4>
+        <table class="table table-compact">
+          <thead><tr><th>Category</th><th class="num">Budget</th></tr></thead>
+          <tbody>${budgetRows}</tbody>
+          <tfoot>
+            <tr><th>Total budget</th><th class="num">${fmtMoney(totalBudget)}</th></tr>
+            <tr><th>Logged spent</th><th class="num">${fmtMoney(totalSpent)}</th></tr>
+          </tfoot>
+        </table>
+      </div>
+      <div class="trip-itinerary-view">
+        <h4>Itinerary</h4>
+        <table class="table table-compact">
+          <thead><tr><th>Date</th><th>Activity</th><th>Notes</th></tr></thead>
+          <tbody>${itinRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
 
 // -------------------- US HOLIDAYS --------------------
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -5120,6 +5358,7 @@ const CalendarView = {
     });
     on($('#cal-google-btn'), 'click', () => this.openGoogleModal());
     on($('#gcal-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeGoogleModal(); });
+    on($('#cal-add-reminder'), 'click', () => RemindersModal.open());
     // Static weekday header
     const wkLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     $('#cal-weekdays').innerHTML = wkLabels.map(w => `<div class="cal-weekday">${w}</div>`).join('');
@@ -5243,6 +5482,13 @@ const CalendarView = {
           <span class="cal-chip-icon">💍</span><span class="cal-chip-text">${escape(label)}</span>
         </button>`);
       });
+      // Calendar-only reminders (recurring)
+      const dayReminders = (Store.state.reminders || []).filter(r => reminderOccursOn(r, iso));
+      dayReminders.forEach(r => {
+        chips.push(`<button type="button" class="cal-chip cal-chip-reminder" data-reminder-id="${r.id}" title="${escape(r.title)} — click to edit">
+          <span class="cal-chip-icon">🔔</span><span class="cal-chip-text">${escape(r.title)}</span>
+        </button>`);
+      });
 
       return `
         <div class="cal-cell${c.inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${iso}">
@@ -5272,6 +5518,10 @@ const CalendarView = {
     grid.querySelectorAll('.cal-chip-anniv').forEach(b => on(b, 'click', (e) => {
       e.stopPropagation();
       Drawer.open(b.dataset.memberId);
+    }));
+    grid.querySelectorAll('.cal-chip-reminder').forEach(b => on(b, 'click', (e) => {
+      e.stopPropagation();
+      RemindersModal.open(b.dataset.reminderId);
     }));
     grid.querySelectorAll('.cal-add').forEach(b => on(b, 'click', (e) => {
       e.stopPropagation();
@@ -6311,6 +6561,7 @@ function applyRemoteState(state) {
   document.body.classList.toggle('is-admin', Auth.isAdmin());
   if (Canvas?.renderAll) Canvas.renderAll();
   if (Views?.current === 'admin')    AdminView.render();
+  if (Views?.current === 'dashboard') DashboardView.render();
   if (Views?.current === 'events')   EventsView.render();
   if (Views?.current === 'calendar') CalendarView.render();
   if (Views?.current === 'gifts')    GiftsView.render();
@@ -6842,6 +7093,8 @@ function enterApp() {
   else { v.hidden = false; h.hidden = true; btn.title = 'Switch to horizontal view'; }
   Canvas.renderAll();
   setTimeout(() => { if (Store.membersList().length) Canvas.fit(); }, 60);
+  // Admins land on Dashboard; everyone else stays on the tree.
+  if (Auth.isAdmin()) Views.show('dashboard');
 }
 
 async function init() {
@@ -6861,6 +7114,8 @@ async function init() {
   EventsView.init();
   CalendarView.init();
   GiftsView.init();
+  RemindersModal.init();
+  DashboardView.init();
   bindLogin();
   bindTreeToolbar();
   bindCredsModal();
@@ -6896,6 +7151,413 @@ async function init() {
       await onSignedIn();
     }
   }
+}
+
+// -------------------- CALENDAR REMINDERS --------------------
+// Lightweight, recurring "calendar-only" items that never appear on the
+// Events page. Stored in Store.state.reminders[].
+//   id, title, startDate (YYYY-MM-DD), recurrence: none|daily|weekly|monthly|yearly,
+//   color (palette key), notes
+function reminderOccursOn(r, iso) {
+  if (!r || !r.startDate || !iso) return false;
+  if (iso < r.startDate) return false;
+  if (iso === r.startDate) return true;
+  const start = new Date(r.startDate + 'T00:00:00');
+  const day = new Date(iso + 'T00:00:00');
+  const diffDays = Math.round((day - start) / 86400000);
+  switch (r.recurrence) {
+    case 'daily':   return diffDays >= 0;
+    case 'weekly':  return diffDays % 7 === 0;
+    case 'monthly': return start.getDate() === day.getDate();
+    case 'yearly':  return start.getMonth() === day.getMonth() && start.getDate() === day.getDate();
+    case 'none':
+    default:        return false;
+  }
+}
+
+const RemindersModal = {
+  editId: null,
+  init() {
+    const el = $('#reminder-modal'); if (!el) return;
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#reminder-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#reminder-delete'), 'click', () => this.delete());
+  },
+  open(editId = null) {
+    if (!Auth.isAdmin()) return;
+    this.editId = editId;
+    const f = $('#reminder-form'); f.reset();
+    $('#reminder-modal-title').textContent = editId ? 'Edit reminder' : 'New calendar reminder';
+    $('#reminder-delete').hidden = !editId;
+    if (editId) {
+      const r = (Store.state.reminders || []).find(x => x.id === editId);
+      if (r) {
+        f.title.value = r.title || '';
+        f.startDate.value = r.startDate || '';
+        f.recurrence.value = r.recurrence || 'none';
+        f.color.value = r.color || 'amber';
+        f.notes.value = r.notes || '';
+      }
+    } else {
+      f.startDate.value = toIsoDate(new Date());
+      f.recurrence.value = 'none';
+      f.color.value = 'amber';
+    }
+    $('#reminder-modal').setAttribute('aria-hidden', 'false');
+    setTimeout(() => f.title.focus(), 30);
+  },
+  close() { $('#reminder-modal').setAttribute('aria-hidden', 'true'); this.editId = null; },
+  save() {
+    const f = $('#reminder-form');
+    const fd = new FormData(f);
+    const title = (fd.get('title') || '').toString().trim();
+    if (!title) { toast('Give your reminder a title.', 'warn'); return; }
+    const data = {
+      title,
+      startDate: (fd.get('startDate') || '').toString(),
+      recurrence: (fd.get('recurrence') || 'none').toString(),
+      color: (fd.get('color') || 'amber').toString(),
+      notes: (fd.get('notes') || '').toString().trim(),
+    };
+    Store.state.reminders ||= [];
+    if (this.editId) {
+      const r = Store.state.reminders.find(x => x.id === this.editId);
+      if (r) Object.assign(r, data);
+    } else {
+      Store.state.reminders.push({ id: uid('rem'), ...data });
+    }
+    Store.save();
+    this.close();
+    if (Views.current === 'calendar') CalendarView.render();
+    if (Views.current === 'dashboard') DashboardView.render();
+    toast(this.editId ? 'Reminder updated.' : 'Reminder added.');
+  },
+  delete() {
+    if (!this.editId) return;
+    if (!confirm('Delete this reminder?')) return;
+    Store.state.reminders = (Store.state.reminders || []).filter(x => x.id !== this.editId);
+    Store.save();
+    this.close();
+    if (Views.current === 'calendar') CalendarView.render();
+    if (Views.current === 'dashboard') DashboardView.render();
+    toast('Reminder deleted.');
+  },
+};
+
+// -------------------- DASHBOARD VIEW (admin only) --------------------
+// Landing page for admins. Pulls together:
+//   • Las Vegas clock + current weather (Open-Meteo, no API key required)
+//   • Upcoming birthdays / anniversaries / events / reminders in the next 30 days
+//   • Quick gift tracker — checkbox-style purchased/sent flags on existing gifts
+//   • Shared grocery list (realtime via the same Supabase channel as everything else)
+const DashboardView = {
+  clockTimer: null,
+  weatherFetchedAt: 0,
+  weatherCache: null,
+
+  init() {
+    on($('#dash-grocery-form'), 'submit', (e) => { e.preventDefault(); this.addGroceryItem(); });
+    on($('#dash-add-gift'), 'click', () => {
+      Views.show('gifts');
+      // Open the gift modal directly so it feels like a one-click action.
+      setTimeout(() => GiftsView.openModal && GiftsView.openModal(null, {}), 60);
+    });
+  },
+
+  render() {
+    this.renderClock();
+    if (!this.clockTimer) {
+      this.clockTimer = setInterval(() => this.renderClock(), 1000 * 30); // 30s is plenty for HH:MM display
+    }
+    this.refreshWeather();
+    this.renderUpcoming();
+    this.renderGifts();
+    this.renderGrocery();
+    this.renderGreeting();
+  },
+
+  renderGreeting() {
+    const h = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', hour12: false });
+    const hour = parseInt(h, 10);
+    let greeting = 'Hello';
+    if (!isNaN(hour)) {
+      if (hour < 12) greeting = 'Good morning';
+      else if (hour < 18) greeting = 'Good afternoon';
+      else greeting = 'Good evening';
+    }
+    const name = (Auth.current && Auth.current !== 'admin-bootstrap') ? Auth.current.firstName : '';
+    $('#dash-greeting').textContent = name ? `${greeting}, ${name}` : greeting;
+  },
+
+  renderClock() {
+    const tz = 'America/Los_Angeles';
+    const now = new Date();
+    $('#dash-time').textContent = now.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+    $('#dash-date').textContent = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }) + ' · Las Vegas, NV';
+  },
+
+  // Open-Meteo: free, no API key. Refreshes at most every 10 minutes.
+  async refreshWeather() {
+    const FRESH_MS = 10 * 60 * 1000;
+    if (this.weatherCache && Date.now() - this.weatherFetchedAt < FRESH_MS) {
+      this.paintWeather(this.weatherCache);
+      return;
+    }
+    try {
+      const url = 'https://api.open-meteo.com/v1/forecast?latitude=36.1716&longitude=-115.1391&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles';
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      const c = j.current || {};
+      this.weatherCache = { temp: c.temperature_2m, code: c.weather_code };
+      this.weatherFetchedAt = Date.now();
+      this.paintWeather(this.weatherCache);
+    } catch (e) {
+      $('#dash-weather-icon').textContent = '⚠';
+      $('#dash-weather-temp').textContent = '';
+      $('#dash-weather-desc').textContent = 'weather unavailable';
+    }
+  },
+
+  paintWeather({ temp, code }) {
+    // WMO weather codes → emoji + label. Compact mapping for common cases.
+    const map = {
+      0:  ['☀', 'Clear sky'],
+      1:  ['🌤', 'Mainly clear'],
+      2:  ['⛅', 'Partly cloudy'],
+      3:  ['☁', 'Overcast'],
+      45: ['🌫', 'Fog'],
+      48: ['🌫', 'Rime fog'],
+      51: ['🌦', 'Light drizzle'],
+      53: ['🌦', 'Drizzle'],
+      55: ['🌧', 'Heavy drizzle'],
+      61: ['🌧', 'Light rain'],
+      63: ['🌧', 'Rain'],
+      65: ['🌧', 'Heavy rain'],
+      71: ['🌨', 'Light snow'],
+      73: ['🌨', 'Snow'],
+      75: ['❄', 'Heavy snow'],
+      80: ['🌦', 'Rain showers'],
+      81: ['🌧', 'Rain showers'],
+      82: ['⛈', 'Violent showers'],
+      95: ['⛈', 'Thunderstorm'],
+      96: ['⛈', 'Thunder + hail'],
+      99: ['⛈', 'Heavy thunder'],
+    };
+    const [icon, desc] = map[code] || ['🌡', 'Current'];
+    $('#dash-weather-icon').textContent = icon;
+    $('#dash-weather-temp').textContent = temp != null ? `${Math.round(temp)}°F` : '—';
+    $('#dash-weather-desc').textContent = desc;
+  },
+
+  renderUpcoming() {
+    const host = $('#dash-upcoming-list'); if (!host) return;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const horizon = new Date(today); horizon.setDate(horizon.getDate() + 30);
+    const items = [];
+
+    // Birthdays — annual recurrence on MM-DD
+    Store.membersList().forEach(m => {
+      if (!m.birthday || m.birthday.length < 10) return;
+      const md = m.birthday.slice(5, 10);
+      const occ = nextOccurrenceInWindow(today, horizon, md);
+      if (!occ) return;
+      const birthYear = parseInt(m.birthday.slice(0, 4), 10);
+      const turning = Number.isFinite(birthYear) ? (occ.getFullYear() - birthYear) : null;
+      items.push({
+        date: occ, sort: occ.getTime(), kind: 'birthday',
+        title: `${m.firstName} ${m.lastName}'s birthday`,
+        sub: turning != null && turning >= 0 ? `Turns ${turning}` : '',
+        icon: '🎂',
+        onClick: () => Drawer.open(m.id),
+      });
+    });
+    // Anniversaries
+    const seenPair = new Set();
+    Store.membersList().forEach(m => {
+      if (!m.spouseId) return;
+      const sp = Store.byId(m.spouseId); if (!sp) return;
+      const key = [m.id, sp.id].sort().join('|');
+      if (seenPair.has(key)) return;
+      seenPair.add(key);
+      const aniso = m.anniversary || sp.anniversary;
+      if (!aniso || aniso.length < 10) return;
+      const md = aniso.slice(5, 10);
+      const occ = nextOccurrenceInWindow(today, horizon, md);
+      if (!occ) return;
+      const aYear = parseInt(aniso.slice(0, 4), 10);
+      const nth = Number.isFinite(aYear) ? (occ.getFullYear() - aYear) : null;
+      const a = m.id < sp.id ? m : sp, b = m.id < sp.id ? sp : m;
+      items.push({
+        date: occ, sort: occ.getTime(), kind: 'anniversary',
+        title: `${a.firstName} & ${b.firstName} anniversary`,
+        sub: nth != null && nth > 0 ? `${nth}${nthSuffix(nth)} year` : '',
+        icon: '💍',
+        onClick: () => Drawer.open(a.id),
+      });
+    });
+    // Events
+    (Store.state.events || []).forEach(ev => {
+      if (!ev.date) return;
+      const d = new Date(ev.date + 'T00:00:00');
+      if (d < today || d > horizon) return;
+      items.push({
+        date: d, sort: d.getTime(), kind: 'event',
+        title: ev.name, sub: ev.location || '', icon: ev.icon || '🎉',
+        onClick: () => { EventsView.selectedId = ev.id; Views.show('events'); },
+      });
+    });
+    // Reminders — expand each recurring rule into occurrences in the window
+    (Store.state.reminders || []).forEach(r => {
+      const occs = expandReminder(r, today, horizon);
+      occs.forEach(d => items.push({
+        date: d, sort: d.getTime(), kind: 'reminder',
+        title: r.title, sub: r.recurrence === 'none' ? '' : `Repeats ${r.recurrence}`, icon: '🔔',
+        onClick: () => { Views.show('calendar'); setTimeout(() => RemindersModal.open(r.id), 60); },
+      }));
+    });
+
+    items.sort((a, b) => a.sort - b.sort);
+    if (!items.length) {
+      host.innerHTML = '<p class="muted small" style="margin:0;">Nothing in the next 30 days. Quiet stretch.</p>';
+      return;
+    }
+    host.innerHTML = items.map((it, i) => `
+      <button type="button" class="dash-up-row" data-i="${i}">
+        <div class="dash-up-date">
+          <span class="dash-up-day">${it.date.getDate()}</span>
+          <span class="dash-up-mon">${it.date.toLocaleString(undefined, { month: 'short' })}</span>
+        </div>
+        <div class="dash-up-icon">${escape(it.icon)}</div>
+        <div class="dash-up-main">
+          <div class="dash-up-title">${escape(it.title)}</div>
+          ${it.sub ? `<div class="dash-up-sub">${escape(it.sub)}</div>` : ''}
+        </div>
+        <div class="dash-up-kind dash-up-kind-${it.kind}">${it.kind}</div>
+      </button>
+    `).join('');
+    host.querySelectorAll('.dash-up-row').forEach((b, i) => on(b, 'click', () => items[i].onClick && items[i].onClick()));
+  },
+
+  renderGifts() {
+    const host = $('#dash-gifts-list'); if (!host) return;
+    const all = (Store.state.gifts || []).slice();
+    // Sort: undone first, then by date desc. Cap to 8 for the tile.
+    all.sort((a, b) => {
+      const aDone = a.purchased && a.sent ? 1 : 0;
+      const bDone = b.purchased && b.sent ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      return (b.date || '').localeCompare(a.date || '');
+    });
+    const top = all.slice(0, 8);
+    if (!top.length) {
+      host.innerHTML = '<p class="muted small" style="margin:0;">No gifts logged yet. Click "Log a gift" to add one.</p>';
+      return;
+    }
+    const memberName = (id) => { const m = id ? Store.byId(id) : null; return m ? `${m.firstName} ${m.lastName}` : ''; };
+    host.innerHTML = top.map(g => {
+      const to = memberName(g.toMemberId) || g.toText || '—';
+      const from = (g.fromMemberIds || []).map(memberName).filter(Boolean).join(', ') || g.fromText || '';
+      const item = g.item || g.occasion || '';
+      const amt = g.amount != null ? `$${Number(g.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
+      return `
+        <div class="dash-gift-row" data-id="${g.id}">
+          <div class="dash-gift-main">
+            <div class="dash-gift-title">${escape(item || 'Gift')} <span class="muted small">→ ${escape(to)}</span></div>
+            <div class="dash-gift-sub">${from ? `From ${escape(from)} · ` : ''}${g.date ? escape(formatDate(g.date)) : ''}${amt ? ' · ' + escape(amt) : ''}</div>
+          </div>
+          <div class="dash-gift-flags">
+            <label class="dash-gift-flag"><input type="checkbox" data-flag="purchased" ${g.purchased ? 'checked' : ''}/><span>Purchased</span></label>
+            <label class="dash-gift-flag"><input type="checkbox" data-flag="sent" ${g.sent ? 'checked' : ''}/><span>Sent</span></label>
+          </div>
+        </div>`;
+    }).join('');
+    host.querySelectorAll('.dash-gift-row').forEach(row => {
+      row.querySelectorAll('input[type="checkbox"]').forEach(cb => on(cb, 'change', () => {
+        const g = (Store.state.gifts || []).find(x => x.id === row.dataset.id); if (!g) return;
+        g[cb.dataset.flag] = cb.checked;
+        Store.save();
+        this.renderGifts();
+      }));
+    });
+  },
+
+  renderGrocery() {
+    const host = $('#dash-grocery-list'); if (!host) return;
+    const list = Store.state.grocery || [];
+    if (!list.length) {
+      host.innerHTML = '<li class="muted small" style="padding:8px 4px;">List is empty. Add something above.</li>';
+      return;
+    }
+    // Sort: open items first (newest at top), then done items.
+    const open = list.filter(i => !i.done).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const done = list.filter(i => i.done).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const renderItem = (i) => `
+      <li class="dash-grocery-item ${i.done ? 'is-done' : ''}" data-id="${i.id}">
+        <label class="dash-grocery-check">
+          <input type="checkbox" ${i.done ? 'checked' : ''}/>
+          <span>${escape(i.text)}</span>
+        </label>
+        <button type="button" class="dash-grocery-del" title="Remove" aria-label="Remove">×</button>
+      </li>`;
+    host.innerHTML = open.map(renderItem).join('') + done.map(renderItem).join('');
+    host.querySelectorAll('.dash-grocery-item').forEach(li => {
+      const cb = li.querySelector('input[type="checkbox"]');
+      const del = li.querySelector('.dash-grocery-del');
+      on(cb, 'change', () => {
+        const item = (Store.state.grocery || []).find(x => x.id === li.dataset.id); if (!item) return;
+        item.done = cb.checked;
+        Store.save();
+        this.renderGrocery();
+      });
+      on(del, 'click', () => {
+        Store.state.grocery = (Store.state.grocery || []).filter(x => x.id !== li.dataset.id);
+        Store.save();
+        this.renderGrocery();
+      });
+    });
+  },
+
+  addGroceryItem() {
+    const input = $('#dash-grocery-input');
+    const text = (input.value || '').trim();
+    if (!text) return;
+    Store.state.grocery ||= [];
+    Store.state.grocery.unshift({ id: uid('g'), text, done: false, ts: Date.now() });
+    Store.save();
+    input.value = '';
+    input.focus();
+    this.renderGrocery();
+  },
+};
+
+// Find the next occurrence of an annual MM-DD between today and horizon.
+// Returns a Date (inclusive on both ends) or null.
+function nextOccurrenceInWindow(today, horizon, md) {
+  const [mm, dd] = md.split('-').map(n => parseInt(n, 10));
+  if (!mm || !dd) return null;
+  for (let y = today.getFullYear(); y <= horizon.getFullYear() + 1; y++) {
+    const candidate = new Date(y, mm - 1, dd);
+    candidate.setHours(0, 0, 0, 0);
+    if (candidate < today) continue;
+    if (candidate > horizon) return null;
+    return candidate;
+  }
+  return null;
+}
+
+// Expand a reminder into Date objects whose iso falls between [today, horizon].
+function expandReminder(r, today, horizon) {
+  const out = [];
+  if (!r || !r.startDate) return out;
+  const start = new Date(r.startDate + 'T00:00:00');
+  if (start > horizon) return out;
+  // Walk days in the window — caps at 31 iterations so this stays cheap.
+  for (let d = new Date(Math.max(today.getTime(), start.getTime())); d <= horizon; d.setDate(d.getDate() + 1)) {
+    const iso = toIsoDate(d);
+    if (reminderOccursOn(r, iso)) out.push(new Date(d));
+  }
+  return out;
 }
 
 document.addEventListener('DOMContentLoaded', init);

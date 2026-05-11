@@ -80,6 +80,7 @@
           </div>
         </button>
         <nav class="nav" role="tablist">
+          <button class="nav-tab" data-view="dashboard" data-admin-only role="tab">Dashboard</button>
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
           <button class="nav-tab" data-view="calendar" data-admin-only role="tab">Calendar</button>
@@ -106,6 +107,101 @@
         </div>
       </div>
     </header>
+
+    <!-- ===== DASHBOARD VIEW (admin only) ===== -->
+    <main id="view-dashboard" class="view view-dashboard" hidden>
+      <div class="container">
+        <div class="dash-hero">
+          <div class="dash-hero-text">
+            <p class="dash-eyebrow" id="dash-greeting">Good morning</p>
+            <h2 id="dash-title">Today at a glance</h2>
+          </div>
+          <div class="dash-clock" id="dash-clock">
+            <div class="dash-time" id="dash-time">—</div>
+            <div class="dash-date" id="dash-date">Las Vegas, NV</div>
+            <div class="dash-weather" id="dash-weather">
+              <span class="dash-weather-icon" id="dash-weather-icon">·</span>
+              <span class="dash-weather-temp" id="dash-weather-temp">—</span>
+              <span class="dash-weather-desc" id="dash-weather-desc">loading…</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-grid">
+          <section class="panel dash-panel dash-upcoming">
+            <header class="dash-panel-head">
+              <h3>Upcoming · next 30 days</h3>
+              <span class="muted small">Birthdays · Anniversaries · Events</span>
+            </header>
+            <div id="dash-upcoming-list" class="dash-upcoming-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-gifts">
+            <header class="dash-panel-head">
+              <h3>Gift tracker</h3>
+              <button class="btn btn-secondary btn-sm" id="dash-add-gift">+ Log a gift</button>
+            </header>
+            <p class="muted small" style="margin: 0 0 10px;">Mark each gift as purchased and sent so nothing slips through.</p>
+            <div id="dash-gifts-list" class="dash-gifts-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-grocery">
+            <header class="dash-panel-head">
+              <h3>Grocery list</h3>
+              <span class="muted small">Shared with family · realtime</span>
+            </header>
+            <form id="dash-grocery-form" class="dash-grocery-add">
+              <input id="dash-grocery-input" type="text" placeholder="Add an item…" maxlength="80" autocomplete="off" />
+              <button type="submit" class="btn btn-primary btn-sm">Add</button>
+            </form>
+            <ul id="dash-grocery-list" class="dash-grocery-list"></ul>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== REMINDER MODAL (Calendar-only recurring items) ===== -->
+    <div id="reminder-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="reminder-modal-title">New calendar reminder</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="reminder-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" required maxlength="80" placeholder="Trash day, Bills due, Yoga class…" /></label>
+          <div class="grid-2">
+            <label class="field"><span>Start date *</span><input name="startDate" type="date" required /></label>
+            <label class="field"><span>Color</span>
+              <select name="color">
+                <option value="amber">Amber</option>
+                <option value="teal">Teal</option>
+                <option value="rose">Rose</option>
+                <option value="indigo">Indigo</option>
+                <option value="lime">Lime</option>
+              </select>
+            </label>
+          </div>
+          <label class="field"><span>Repeats</span>
+            <select name="recurrence">
+              <option value="none">Doesn't repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+            </select>
+          </label>
+          <label class="field"><span>Notes</span><textarea name="notes" rows="2"></textarea></label>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save reminder</button>
+            <button class="btn btn-danger-ghost" type="button" id="reminder-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ===== TREE VIEW ===== -->
     <main id="view-tree" class="view view-tree">
@@ -313,6 +409,7 @@
             </button>
             <select class="input" id="cal-year" aria-label="Year"></select>
             <button class="btn btn-secondary btn-sm" id="cal-today">Today</button>
+            <button class="btn btn-secondary btn-sm" id="cal-add-reminder" title="Add a recurring reminder (Calendar-only)">+ Reminder</button>
             <button class="btn btn-secondary btn-sm" id="cal-refresh" title="Refresh calendar">
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               Refresh
@@ -334,6 +431,7 @@
           <span class="cal-legend-item"><span class="cal-dot is-birthday"></span>Birthday</span>
           <span class="cal-legend-item"><span class="cal-dot is-anniv"></span>Anniversary</span>
           <span class="cal-legend-item"><span class="cal-dot is-holiday"></span>US holiday</span>
+          <span class="cal-legend-item"><span class="cal-dot is-reminder"></span>Reminder</span>
         </div>
         <div class="panel cal-panel">
           <div class="cal-weekdays" id="cal-weekdays"></div>
@@ -449,6 +547,35 @@
             <label class="field"><span>Date</span><input name="date" type="date" /></label>
             <label class="field"><span>Location</span><input name="location" /></label>
           </div>
+
+          <label class="checkbox-row">
+            <input type="checkbox" name="isTrip" id="event-is-trip" />
+            <span>This is a travel trip <span class="muted small">(adds destination, dates, daily itinerary, and travel budget)</span></span>
+          </label>
+
+          <fieldset id="event-trip-fieldset" hidden class="trip-fieldset">
+            <legend>Trip details</legend>
+            <div class="grid-2">
+              <label class="field"><span>Destination</span><input name="tripDestination" placeholder="Tokyo, Japan" /></label>
+              <label class="field"><span>End date</span><input name="tripEndDate" type="date" /></label>
+            </div>
+            <div class="grid-2">
+              <label class="field"><span>Flights / transport budget</span><input name="tripTransportBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+              <label class="field"><span>Lodging budget</span><input name="tripLodgingBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+            </div>
+            <div class="grid-2">
+              <label class="field"><span>Food &amp; drink budget</span><input name="tripFoodBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+              <label class="field"><span>Activities budget</span><input name="tripActivitiesBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+            </div>
+            <div class="trip-itinerary">
+              <div class="trip-itinerary-head">
+                <h4>Daily itinerary</h4>
+                <button type="button" class="btn btn-ghost btn-sm" id="event-add-itin">+ Add day</button>
+              </div>
+              <div id="event-itin-rows" class="trip-itinerary-rows"></div>
+            </div>
+          </fieldset>
+
           <label class="field"><span>Description</span><textarea name="description" rows="3"></textarea></label>
           <div class="field">
             <span>Cover photo</span>
@@ -531,6 +658,7 @@
         <div class="drawer-hero">
           <div class="drawer-photo" id="drawer-photo"></div>
           <div class="drawer-id">
+            <p class="drawer-remembering" id="drawer-remembering" hidden>In loving memory</p>
             <p class="drawer-eyebrow" id="drawer-relation"></p>
             <h2 id="drawer-name"></h2>
             <p class="drawer-nick" id="drawer-nick"></p>
@@ -540,6 +668,7 @@
         <div id="drawer-view" class="drawer-body">
           <dl class="kv">
             <div><dt>Birthday</dt><dd id="kv-birthday">—</dd></div>
+            <div id="kv-dod-row" hidden><dt>Date of death</dt><dd id="kv-dod">—</dd></div>
             <div><dt>Life stage</dt><dd id="kv-lifestage">—</dd></div>
             <div><dt>Email</dt><dd id="kv-email-cell"><span id="kv-email">—</span><button type="button" id="kv-email-copy" class="kv-copy-btn" title="Copy email" hidden>
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -554,11 +683,22 @@
             <div><dt>Group</dt><dd id="kv-group">—</dd></div>
             <div><dt>Ethnicity</dt><dd id="kv-ethnicity">—</dd></div>
             <div><dt>Role</dt><dd id="kv-role">—</dd></div>
+            <div id="kv-529-row" hidden><dt>529 plan</dt><dd id="kv-529-cell"><a id="kv-529" target="_blank" rel="noopener">—</a></dd></div>
           </dl>
+
+          <div class="drawer-section" id="kv-notes-section" hidden>
+            <h4>Notes</h4>
+            <p class="drawer-notes" id="kv-notes"></p>
+          </div>
 
           <div class="drawer-section">
             <h4>Family</h4>
             <div id="drawer-relations" class="relation-list"></div>
+          </div>
+
+          <div class="drawer-section">
+            <h4>Gifts</h4>
+            <div id="drawer-gifts" class="gifts-mini"></div>
           </div>
 
           <div class="drawer-actions">
@@ -581,7 +721,15 @@
             <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
             <label class="field"><span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel" /></label>
           </div>
+          <label class="field">
+            <span>Date of death <span class="muted small">(optional — adds an "In loving memory" badge to the profile)</span></span>
+            <input name="dateOfDeath" type="date" />
+          </label>
           <label class="field"><span>Email</span><input name="email" type="email" /></label>
+          <label class="field">
+            <span>529 plan link <span class="muted small">(URL)</span></span>
+            <input name="plan529" type="url" placeholder="https://…" />
+          </label>
           <label class="field"><span>Street address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
           <div class="grid-zip">
             <label class="field"><span>Zip / ZIP</span><input name="zip" id="edit-zip" inputmode="numeric" maxlength="10" placeholder="90210" autocomplete="postal-code" /></label>
@@ -603,6 +751,10 @@
           <label class="field">
             <span>Ethnicity</span>
             <div class="ethnicity-picker" data-picker="edit-ethnicity"></div>
+          </label>
+          <label class="field">
+            <span>Notes <span class="muted small">(personal notes, allergies, dietary preferences, etc.)</span></span>
+            <textarea name="notes" rows="4" placeholder=""></textarea>
           </label>
           <div class="grid-2">
             <label class="field" data-admin-only><span>Gender</span>
