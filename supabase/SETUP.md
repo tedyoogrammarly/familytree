@@ -42,9 +42,20 @@ The family archive isn't meant to be public. After your family members have sign
 
 Paste both into the next message so I can wire the app up. The anon key is safe to commit to a public repo — it's protected by the RLS policies above.
 
-## 6. First-time login (after the code is wired up)
+## 6. Deploy the admin password-reset Edge Function
+
+The browser cannot set another user's password (that needs the `service_role` key, which must never ship to clients). The app calls a small Edge Function instead. Deploy it once:
+
+1. Left sidebar → **Edge Functions** → **Deploy a new function**.
+2. Name it exactly `admin-reset-password`.
+3. Paste the contents of `supabase/functions/admin-reset-password/index.ts` from this repo.
+4. Click **Deploy**. No env-var setup needed — Supabase auto-injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
+
+The "Reset PW" button in Admin will start working as soon as this is deployed.
+
+## 7. First-time login (after the code is wired up)
 
 1. Open the app.
 2. Sign up with your email + password — that account becomes the admin automatically (via `claim_first_admin()`).
-3. Add family members from the Admin page; their member ids are still tracked in the JSON state.
-4. To give a family member their own login, create them in **Authentication → Users → Add user** in the Supabase dashboard, then map their Supabase user id to their member id in `member_accounts`. (I'll add a UI for this once the basic refactor is done.)
+3. Add family members from the Admin page. Provide an email on the create form and the Supabase Auth user is created automatically; the generated password is shown once for you to share.
+4. Click **Reset PW** on any member to generate a new password (calls the Edge Function above).

@@ -54,6 +54,36 @@ const Backend = {
     return { ok: true };
   },
 
+  // Set another user's password via the admin-reset-password Edge Function.
+  // The Edge Function holds service_role (which can't safely live in the
+  // browser) and performs the admin.updateUserById call on our behalf after
+  // verifying the caller is an admin.
+  async adminSetPassword(memberId, newPassword) {
+    if (!this.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data: link, error: linkErr } = await this.client
+      .from('member_accounts')
+      .select('user_id')
+      .eq('member_id', memberId)
+      .maybeSingle();
+    if (linkErr) return { ok: false, reason: linkErr.message };
+    if (!link)   return { ok: false, reason: 'This member has no Supabase login linked.' };
+    const { data, error } = await this.client.functions.invoke('admin-reset-password', {
+      body: { target_user_id: link.user_id, new_password: newPassword },
+    });
+    if (error) {
+      // Supabase's FunctionsHttpError swallows the response body — pull it out
+      // so the admin sees a useful message instead of just "non-2xx".
+      let detail = error.message || 'Function call failed.';
+      try {
+        const body = await error.context?.json?.();
+        if (body?.error) detail = body.error;
+      } catch {}
+      return { ok: false, reason: detail };
+    }
+    if (data?.error) return { ok: false, reason: data.error };
+    return { ok: true };
+  },
+
   // Create a Supabase Auth user *and* link them to an in-app member record.
   // Tricky bit: signUp() normally replaces the active session, which would
   // log the admin out. We sidestep that with a second, session-less client
@@ -5905,14 +5935,10 @@ const UserChip = {
   },
 };
 
-// Admin "Reset PW" button. Behaves intelligently based on whether the member
-// actually has a Supabase Auth user yet:
-//   - has login → send a password reset email
-//   - no login  → offer to create the login (otherwise resetPasswordForEmail
-//                 silently no-ops for unknown emails, which is what was
-//                 happening before — Supabase deliberately doesn't reveal
-//                 whether an email is registered, so we have to detect this
-//                 ourselves via member_accounts).
+// Admin "Reset PW" button. Generates a random password, sets it on the
+// member's Supabase Auth user via the admin-reset-password Edge Function,
+// and shows the email + new password once for the admin to share.
+// For members with no Supabase login yet, creates the login on the spot.
 async function sendAdminResetEmail(m) {
   if (!Auth.isAdmin()) return;
   if (!m) return;
@@ -5920,7 +5946,7 @@ async function sendAdminResetEmail(m) {
     toast('Add an email to this member first — accounts are tied to email.', 'warn');
     return;
   }
-  // Probe member_accounts to see whether this member has an auth user linked.
+  // Does this member already have a Supabase login?
   const { data: link, error } = await Backend.client
     .from('member_accounts')
     .select('user_id')
@@ -5928,10 +5954,11 @@ async function sendAdminResetEmail(m) {
     .maybeSingle();
   if (error) { toast('Could not check login state: ' + error.message, 'warn'); return; }
 
+  const password = randomPassword();
+
   if (!link) {
-    // No login yet — pre-existing member from before the auto-mirror feature.
-    if (!confirm(`${m.firstName} doesn't have a Supabase login yet.\n\nCreate one now with email ${m.email}? A password will be generated and shown for you to share.`)) return;
-    const password = randomPassword();
+    // No login yet — create one (pre-existing member from before auto-mirror).
+    if (!confirm(`${m.firstName} doesn't have a Supabase login yet.\n\nCreate one now with email ${m.email}?`)) return;
     const r = await Backend.createMemberAccount({
       email: m.email,
       password,
@@ -5953,11 +5980,22 @@ async function sendAdminResetEmail(m) {
     return;
   }
 
-  // Has login — send the reset email.
-  if (!confirm(`Send a password reset email to ${m.email}?`)) return;
-  const r = await Backend.sendPasswordReset(m.email);
-  if (r.ok) toast(`Reset link sent to ${m.email}. (Tell them to check spam if it doesn't arrive in a minute.)`);
-  else      toast('Could not send reset: ' + r.reason, 'warn');
+  // Has login — reset the password via the Edge Function.
+  if (!confirm(`Reset ${m.firstName}'s password? A new randomized password will be generated for you to share.`)) return;
+  const r = await Backend.adminSetPassword(m.id, password);
+  if (r.ok) {
+    showCredentials({
+      email: m.email,
+      password,
+      title: 'Password reset',
+      note: 'Share this new password with the family member. They can change it after signing in.',
+    });
+  } else {
+    const hint = /not\s*found|404/i.test(r.reason || '')
+      ? '\n\nTip: deploy the admin-reset-password Edge Function in Supabase first (see supabase/functions/admin-reset-password/index.ts).'
+      : '';
+    toast('Could not reset password: ' + r.reason + hint, 'warn');
+  }
 }
 
 // -------------------- CHANGE / SET PASSWORD --------------------
