@@ -758,6 +758,65 @@ function generateUsername(firstName, lastName) {
 }
 
 // -------------------- TREE / MEMBERS --------------------
+// Places a freshly-created member relative to whomever they were linked to.
+// Used in manual-layout mode where autoLayout() is disabled — without this
+// the new card would render at (0, 0) far from its actual family. Picks a
+// natural slot based on the relationship type (child → below the parent,
+// spouse → beside, parent → above, sibling → beside the existing sibling)
+// and then slides along the primary axis until it isn't on top of an
+// existing card.
+function placeMemberNearRelative(member, relType, targetId, secondId) {
+  const target = targetId ? Store.byId(targetId) : null;
+  if (!target) {
+    // Standalone add (rare in this app). Drop just below+right of the
+    // bottom-right of the existing tree so it's at least visible.
+    const all = Store.membersList().filter(m => m.id !== member.id);
+    if (!all.length) { member.x = 0; member.y = 0; return; }
+    const maxX = Math.max(...all.map(m => m.x));
+    const maxY = Math.max(...all.map(m => m.y));
+    member.x = maxX + NODE_W + X_GAP * 2;
+    member.y = maxY;
+    return;
+  }
+  const second = secondId ? Store.byId(secondId) : null;
+  let x, y;
+  switch (relType) {
+    case 'child':
+      if (second) {
+        x = (target.x + second.x) / 2;
+        y = Math.max(target.y, second.y) + NODE_H + Y_GAP;
+      } else {
+        x = target.x;
+        y = target.y + NODE_H + Y_GAP;
+      }
+      break;
+    case 'parent':
+      x = target.x;
+      y = target.y - NODE_H - Y_GAP;
+      break;
+    case 'spouse':
+    case 'sibling':
+    default:
+      x = target.x + NODE_W + X_GAP;
+      y = target.y;
+      break;
+  }
+  // Nudge along the primary axis until we don't overlap an existing card.
+  // Step by a card-and-gap width so the layout stays grid-aligned even
+  // after several adds. Caps at 30 attempts (~6000px) — beyond that the
+  // user has bigger problems.
+  const others = Store.membersList().filter(m => m.id !== member.id);
+  const overlaps = (tx, ty) => others.some(m =>
+    Math.abs(m.x - tx) < NODE_W * 0.9 && Math.abs(m.y - ty) < NODE_H * 0.9);
+  let attempts = 0;
+  while (overlaps(x, y) && attempts < 30) {
+    x += NODE_W + X_GAP;
+    attempts++;
+  }
+  member.x = x;
+  member.y = y;
+}
+
 const Tree = {
   async addMember(input) {
     const id = uid();
@@ -812,8 +871,16 @@ const Tree = {
     }
     // Children inherit ethnicities from their parents.
     inheritEthnicities();
-    // Re-run the full auto-layout so the new member slots into a clean tree.
-    autoLayout();
+    if (Store.state.manualLayout) {
+      // The user has hand-placed the tree, so we must NOT re-run autoLayout
+      // (it'd reshuffle every card). Instead, drop the new card right next
+      // to the target of the relationship so the spatial relationship is
+      // preserved and the user only has to nudge if needed.
+      placeMemberNearRelative(m, input.relType, input.relTargetId, input.relSecondId);
+    } else {
+      // Re-run the full auto-layout so the new member slots into a clean tree.
+      autoLayout();
+    }
     Store.save();
     return { member: m, password };
   },
@@ -8453,6 +8520,15 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.14',
+    date: '2026-05-11',
+    title: 'Family Tree — new members slot in next to their relative in manual layout',
+    changes: [
+      'Family Tree: when the layout is in manual mode and a new member is added with a relationship, the new card now drops in at a natural position relative to its target (child → below the parent or below the parent-couple midpoint, spouse/sibling → beside the target, parent → above the target). Previously the card landed at (0, 0) in the top-left corner.',
+      'Family Tree: the placer nudges along the primary axis if the chosen slot would overlap an existing card, so adding multiple kids to the same parents stacks them in a row instead of dropping each on top of the last.',
+    ],
+  },
   {
     version: '4.13',
     date: '2026-05-11',
