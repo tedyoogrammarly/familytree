@@ -3493,11 +3493,100 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 
 .vault-list { display: flex; flex-direction: column; gap: 10px; }
 .vault-row {
+  position: relative;
   background: #fff;
   border: 1px solid var(--ink-200);
   border-radius: var(--radius-sm);
-  padding: 14px 16px;
+  padding: 14px 16px 14px 36px;
   box-shadow: var(--shadow-soft);
+  transition: opacity .12s var(--ease-out), box-shadow .12s var(--ease-out);
+}
+/* Drag handle pinned to the row's left gutter. Six-dot grip icon; hover
+   reveals stronger color. The whole row participates in the visual lift
+   while a drag is happening so the user sees what they're moving. */
+.vault-drag-handle {
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  width: 22px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: grab;
+  color: var(--ink-300);
+  transition: color .12s var(--ease-out), background-color .12s var(--ease-out);
+  padding: 0;
+}
+.vault-drag-handle:hover { color: var(--ink-700); background: var(--paper-veil); }
+.vault-drag-handle:active { cursor: grabbing; }
+.vault-row.is-dragging { opacity: .55; box-shadow: 0 8px 24px rgba(19,24,38,.15); }
+.vault-row.is-dragging .vault-drag-handle { cursor: grabbing; }
+
+/* Emoji <select> in the utility editor. Slightly wider so the emoji-
+   plus-label combos don't truncate ("⚡  Electricity"). */
+.vault-emoji-select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  font-size: 13.5px;
+  font-family: inherit;
+}
+
+/* Insurance-photo lightbox. Full-viewport dark overlay with the image
+   sized to fit. Closed via the × button, clicking the backdrop, or Esc. */
+.vault-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+.vault-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(19,24,38,.88);
+  backdrop-filter: blur(4px);
+}
+.vault-lightbox-img {
+  position: relative;
+  max-width: 95vw;
+  max-height: 92vh;
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  background: #fff;
+}
+.vault-lightbox-close {
+  position: absolute;
+  top: 16px; right: 16px;
+  width: 36px; height: 36px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.18);
+  color: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background-color .12s var(--ease-out);
+}
+.vault-lightbox-close:hover { background: rgba(255,255,255,.22); }
+.vault-lightbox[hidden] { display: none; }
+
+/* Make the photo thumbs in the read-side view behave like buttons even
+   though they're <button>s under the hood (override default form button
+   styling that would otherwise add a border + background). */
+.vault-card-photo-large {
+  appearance: none;
+  border: 1px solid var(--ink-200);
+  padding: 0;
+  cursor: zoom-in;
 }
 .vault-row-view {
   display: grid;

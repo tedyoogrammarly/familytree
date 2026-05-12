@@ -9218,6 +9218,16 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.24',
+    date: '2026-05-12',
+    title: 'Admin polish — utility emoji picker, in-page card photo lightbox, drag-to-reorder lists',
+    changes: [
+      'Admin → Home → Utilities: the emoji field is now a curated dropdown (Electricity / Gas / Water / Trash / Internet / Cable / Phone / Yard / Pest / Pool / Cleaning / Solar / Power / Security) instead of a freeform text input. Custom emojis set in earlier versions carry forward as a "(custom)" option so they aren\'t lost.',
+      'Admin → Benefits: clicking an insurance card photo now opens it in an in-page lightbox overlay instead of trying to navigate a new tab to the data: URL (which Chrome refuses, leaving a blank page). Close via the × button, clicking the backdrop, or pressing Esc.',
+      'Admin → Finance / Benefits / Home: every list (banks, insurance cards, utilities, HOAs, code sets) now has a six-dot drag handle on the left of each row. Drag a row up or down to reorder; the new order is saved immediately. The row you\'re dragging gets a subtle lift + dimming so you can see what you\'re moving.',
+    ],
+  },
+  {
     version: '4.23',
     date: '2026-05-12',
     title: 'Admin page polish — Finance multi-holder + balance log, Benefits new fields + larger photos, multi-HOA/codes, structured birth fields',
@@ -9580,6 +9590,13 @@ const VaultView = {
       $$('.vault-panel').forEach(p => { p.hidden = p.id !== `vault-${this.section}`; });
       this.render();
     }));
+    // Lightbox close affordances: × button, backdrop click, Esc key.
+    document.querySelectorAll('[data-vault-lightbox-close]').forEach(el => {
+      on(el, 'click', () => this.closeLightbox());
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !$('#vault-lightbox').hidden) this.closeLightbox();
+    });
   },
 
   // Returns the member ids whose profiles render in the Family tab. Self +
@@ -9877,6 +9894,10 @@ const VaultView = {
     `;
     on(host.querySelector('[data-action=add-bank]'), 'click', () => this.addBank());
     host.querySelectorAll('.vault-row').forEach(row => this.wireBankRow(row));
+    this.enableDragReorder(host.querySelector('.vault-list'), 'data-bid', (newIds) => {
+      Store.state.vault.banks = this.reorderById(Store.state.vault.banks, newIds);
+      Store.save();
+    });
   },
 
   // Bank row view + edit form. The "title" is "Bank — Nickname" so a single
@@ -9893,6 +9914,7 @@ const VaultView = {
     const historyEdit = this.renderBalanceHistoryEdit(b);
     return `
       <div class="vault-row" data-bid="${b.id}">
+        ${this.renderDragHandle()}
         <div class="vault-row-view" data-role="view">
           <div class="vault-row-main">
             <div class="vault-row-title">${escape(title)}</div>
@@ -10108,6 +10130,7 @@ const VaultView = {
       ${items.length ? `<div class="vault-list">
         ${items.map(i => `
           <div class="vault-row vault-row-ins" data-iid="${i.id}">
+            ${this.renderDragHandle()}
             <div class="vault-row-view" data-role="view">
               <div class="vault-row-main">
                 <div class="vault-row-title">${kindIcon[i.kind] || '📄'} ${escape(i.insurer || 'Unnamed plan')} <span class="muted small">· ${escape(kindLabel[i.kind] || 'Other')}</span></div>
@@ -10123,8 +10146,8 @@ const VaultView = {
                 </div>
                 ${i.notes ? `<div class="muted small" style="margin-top:6px;">${escape(i.notes)}</div>` : ''}
                 ${(i.frontPhoto || i.backPhoto) ? `<div class="vault-card-photos">
-                  ${i.frontPhoto ? `<a class="vault-card-photo-large" href="${i.frontPhoto}" target="_blank" rel="noopener" style="background-image:url('${i.frontPhoto}')" title="Front of card — click to enlarge"><span class="vault-card-photo-caption">Front</span></a>` : ''}
-                  ${i.backPhoto  ? `<a class="vault-card-photo-large" href="${i.backPhoto}"  target="_blank" rel="noopener" style="background-image:url('${i.backPhoto}')"  title="Back of card — click to enlarge"><span class="vault-card-photo-caption">Back</span></a>` : ''}
+                  ${i.frontPhoto ? `<button type="button" class="vault-card-photo-large" data-lightbox-src="${i.frontPhoto}" style="background-image:url('${i.frontPhoto}')" title="Front of card — click to enlarge"><span class="vault-card-photo-caption">Front</span></button>` : ''}
+                  ${i.backPhoto  ? `<button type="button" class="vault-card-photo-large" data-lightbox-src="${i.backPhoto}"  style="background-image:url('${i.backPhoto}')"  title="Back of card — click to enlarge"><span class="vault-card-photo-caption">Back</span></button>` : ''}
                 </div>` : ''}
               </div>
               <div class="vault-row-actions">
@@ -10182,6 +10205,18 @@ const VaultView = {
     `;
     on(host.querySelector('[data-action=add-ins]'), 'click', () => this.addInsurance());
     host.querySelectorAll('.vault-row-ins').forEach(row => this.wireInsuranceRow(row));
+    this.enableDragReorder(host.querySelector('.vault-list'), 'data-iid', (newIds) => {
+      Store.state.vault.insurances = this.reorderById(Store.state.vault.insurances, newIds);
+      Store.save();
+    });
+    // Photo thumbs open the in-page lightbox instead of trying to navigate
+    // a new tab to the data: URL (Chrome refuses, gives a blank page).
+    host.querySelectorAll('[data-lightbox-src]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.openLightbox(el.dataset.lightboxSrc);
+      });
+    });
   },
 
   wireInsuranceRow(row) {
@@ -10297,6 +10332,154 @@ const VaultView = {
     host.querySelectorAll('.vault-row[data-uid]').forEach(row => this.wireUtilityRow(row));
     host.querySelectorAll('.vault-row[data-hid]').forEach(row => this.wireHOARow(row));
     host.querySelectorAll('.vault-row[data-cid]').forEach(row => this.wireCodeSetRow(row));
+    // Three independent lists inside Home — wire each to its own data-attr.
+    const lists = host.querySelectorAll('.vault-list');
+    if (lists[0]) this.enableDragReorder(lists[0], 'data-uid', (newIds) => {
+      Store.state.vault.utilities = this.reorderById(Store.state.vault.utilities, newIds);
+      Store.save();
+    });
+    if (lists[1]) this.enableDragReorder(lists[1], 'data-hid', (newIds) => {
+      Store.state.vault.hoas = this.reorderById(Store.state.vault.hoas, newIds);
+      Store.save();
+    });
+    if (lists[2]) this.enableDragReorder(lists[2], 'data-cid', (newIds) => {
+      Store.state.vault.codeSets = this.reorderById(Store.state.vault.codeSets, newIds);
+      Store.save();
+    });
+  },
+
+  // Curated list of utility emojis. Used to build the picker dropdown for
+  // u.emoji. If a member has an older custom emoji not in this list, it
+  // gets prepended as a "Custom" option so it isn't silently dropped on
+  // edit.
+  UTILITY_EMOJI_PRESETS: [
+    ['⚡',  'Electricity'],
+    ['🔥',  'Gas'],
+    ['💧',  'Water'],
+    ['🗑️', 'Trash / waste'],
+    ['🚿',  'Sewer'],
+    ['📶',  'Internet'],
+    ['📺',  'Cable / TV'],
+    ['📞',  'Phone / landline'],
+    ['🌳',  'Yard / landscaping'],
+    ['🐛',  'Pest control'],
+    ['🏊',  'Pool service'],
+    ['🧹',  'Cleaning'],
+    ['☀️', 'Solar'],
+    ['🔌',  'Power / general'],
+    ['🚪',  'Security'],
+  ],
+
+  renderUtilityEmojiSelect(current) {
+    const presets = this.UTILITY_EMOJI_PRESETS;
+    const presetEmojis = presets.map(p => p[0]);
+    const customOpt = current && !presetEmojis.includes(current)
+      ? `<option value="${escape(current)}" selected>${escape(current)} (custom)</option>`
+      : '';
+    return `<select name="emoji" class="vault-emoji-select">
+      <option value="" ${!current ? 'selected' : ''}>— No emoji —</option>
+      ${customOpt}
+      ${presets.map(([e, label]) =>
+        `<option value="${e}" ${current === e ? 'selected' : ''}>${e}  ${escape(label)}</option>`
+      ).join('')}
+    </select>`;
+  },
+
+  // -------- Drag-to-reorder + image lightbox plumbing --------
+
+  // The small six-dot grip injected at the top-left of every reorderable
+  // row. The button is the *only* draggable element so clicks elsewhere on
+  // the row keep working normally (Edit / Delete buttons, form inputs).
+  // The drag image is swapped to the whole row in dragstart so the visual
+  // feedback isn't just a tiny handle floating around.
+  renderDragHandle() {
+    return `<button type="button" class="vault-drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder" tabindex="-1">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+        <circle cx="6" cy="3.5" r="1.2"/><circle cx="10" cy="3.5" r="1.2"/>
+        <circle cx="6" cy="8"   r="1.2"/><circle cx="10" cy="8"   r="1.2"/>
+        <circle cx="6" cy="12.5" r="1.2"/><circle cx="10" cy="12.5" r="1.2"/>
+      </svg>
+    </button>`;
+  },
+
+  // Wire up drag-to-reorder on a list element. Each draggable child row
+  // must have:
+  //   - a `.vault-drag-handle` child (the only `draggable=true` element)
+  //   - the `dataAttr` attribute holding its stable id (data-bid, data-iid, etc.)
+  // After the user drops, `onReorder(newIdList)` is called so the caller
+  // can re-sort the underlying state array and Store.save().
+  enableDragReorder(listEl, dataAttr, onReorder) {
+    if (!listEl) return;
+    let dragged = null;
+    listEl.querySelectorAll('.vault-drag-handle').forEach(handle => {
+      handle.addEventListener('dragstart', (e) => {
+        const row = handle.closest('.vault-row');
+        if (!row) return;
+        dragged = row;
+        row.classList.add('is-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        // Some browsers require data to be set or the drag refuses to start.
+        e.dataTransfer.setData('text/plain', row.getAttribute(dataAttr) || '');
+        // Use the whole row as the drag image instead of the tiny handle.
+        const rect = row.getBoundingClientRect();
+        try { e.dataTransfer.setDragImage(row, e.clientX - rect.left, e.clientY - rect.top); } catch {}
+      });
+      handle.addEventListener('dragend', () => {
+        if (dragged) dragged.classList.remove('is-dragging');
+        dragged = null;
+      });
+    });
+    listEl.addEventListener('dragover', (e) => {
+      if (!dragged) return;
+      const overRow = e.target.closest('.vault-row');
+      if (!overRow || overRow === dragged || overRow.parentNode !== listEl) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = overRow.getBoundingClientRect();
+      const isAfter = e.clientY > rect.top + rect.height / 2;
+      if (isAfter) {
+        if (dragged.nextElementSibling !== overRow.nextElementSibling) {
+          listEl.insertBefore(dragged, overRow.nextElementSibling);
+        }
+      } else {
+        if (dragged.nextElementSibling !== overRow) {
+          listEl.insertBefore(dragged, overRow);
+        }
+      }
+    });
+    listEl.addEventListener('drop', (e) => {
+      if (!dragged) return;
+      e.preventDefault();
+      const newIds = [...listEl.querySelectorAll(`.vault-row[${dataAttr}]`)]
+        .map(r => r.getAttribute(dataAttr));
+      onReorder(newIds);
+    });
+  },
+
+  // Re-sort an array (in place) to match the order of `idList`. Items
+  // missing from idList stay at the end in their existing order — defensive
+  // against any DOM glitch that drops a row mid-drag.
+  reorderById(arr, idList) {
+    const byId = new Map(arr.map(x => [x.id, x]));
+    const ordered = idList.map(id => byId.get(id)).filter(Boolean);
+    const leftover = arr.filter(x => !idList.includes(x.id));
+    return [...ordered, ...leftover];
+  },
+
+  // Insurance-card photo lightbox. Data URLs sometimes won't open in a
+  // new tab (Chrome blocks top-frame navigation to data: URIs) so we
+  // render the full-size image into an in-page overlay instead.
+  openLightbox(src) {
+    const el = $('#vault-lightbox');
+    el.querySelector('img').src = src;
+    el.hidden = false;
+    document.body.style.overflow = 'hidden';
+  },
+  closeLightbox() {
+    const el = $('#vault-lightbox');
+    el.hidden = true;
+    el.querySelector('img').src = '';
+    document.body.style.overflow = '';
   },
 
   // -------- Utility (formatted like HOA card, with emoji prefix on name) --------
@@ -10305,6 +10488,7 @@ const VaultView = {
     const websiteHref = u.website && !u.website.startsWith('http') ? `https://${u.website}` : (u.website || '');
     return `
       <div class="vault-row" data-uid="${u.id}">
+        ${this.renderDragHandle()}
         <div class="vault-row-view" data-role="view">
           <div class="vault-row-main">
             <div class="vault-row-title">${escape(titlePrefix)}${escape(u.name || 'Unnamed utility')}</div>
@@ -10322,7 +10506,7 @@ const VaultView = {
         </div>
         <form class="vault-row-edit" data-role="edit" hidden>
           <div class="vault-edit-grid">
-            <label class="vault-edit-field" style="max-width:120px;"><span class="vault-edit-label">Emoji</span><input name="emoji" placeholder="⚡" value="${escape(u.emoji || '')}" maxlength="4" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Emoji</span>${this.renderUtilityEmojiSelect(u.emoji)}</label>
             <label class="vault-edit-field"><span class="vault-edit-label">Name</span><input name="name" placeholder="e.g. NV Energy" value="${escape(u.name || '')}" /></label>
             <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="website" type="url" placeholder="https://" value="${escape(u.website || '')}" /></label>
             <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(u.phone || '')}" /></label>
@@ -10388,6 +10572,7 @@ const VaultView = {
     const hasAny = h.name || h.contact || h.address || h.email || h.phone;
     return `
       <div class="vault-row" data-hid="${h.id}">
+        ${this.renderDragHandle()}
         <div class="vault-row-view" data-role="view">
           ${hasAny ? `
             <div class="vault-row-main">
@@ -10485,6 +10670,7 @@ const VaultView = {
   renderCodeSetRow(c) {
     return `
       <div class="vault-row" data-cid="${c.id}">
+        ${this.renderDragHandle()}
         <div class="vault-row-view" data-role="view">
           <div class="vault-row-main">
             ${c.propertyLabel ? `<div class="vault-row-eyebrow">${escape(c.propertyLabel)}</div>` : ''}
