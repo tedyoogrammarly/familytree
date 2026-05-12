@@ -1,0 +1,63 @@
+# Pings the Supabase project on a schedule so the free-tier auto-pause
+# (which kicks in after ~7 days of inactivity) never triggers. Hits a real
+# database query (`/rest/v1/archive`) so the activity counter sees actual DB
+# traffic — auth/storage pings alone aren't always enough.
+#
+# Why every 6 hours instead of, say, daily: GitHub-hosted runners
+# occasionally skip scheduled runs under heavy load, so the extra
+# headroom guarantees we're well inside Supabase's 7-day window even if a
+# few runs get dropped.
+#
+# The URL + anon key are already public in `index.html` (anon keys are
+# meant to be — they're protected by RLS). No secrets to configure; this
+# workflow just works once the repo's Actions are enabled.
+
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours, on the hour
+  workflow_dispatch:         # manual "Run workflow" button in the Actions UI
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      SUPABASE_URL: https://inwutpebjqaakinybhwu.supabase.co
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlud3V0cGVianFhYWtpbnliaHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0ODA3NDgsImV4cCI6MjA5NDA1Njc0OH0.JvzkwmacCDIYQz0CndXVM29OlR0HPZ8E1gCQ41E2Dj0
+
+    steps:
+      - name: Ping Supabase REST (database)
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -sS -o /tmp/body.txt -w "%{http_code}" \
+            "${SUPABASE_URL}/rest/v1/archive?select=id&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+          echo "Status: $STATUS"
+          echo "Body:   $(cat /tmp/body.txt | head -c 200)"
+          # Anon role can't read archive (admin-only RLS), so 401 is the
+          # success signal — it means PostgREST + the database both
+          # responded, which is enough to count as activity. 200 also fine
+          # if the row is somehow readable. Anything 5xx/0/timeout = real
+          # failure, fail the job so we get a notification.
+          case "$STATUS" in
+            200|401|403) echo "Project is awake ✅" ;;
+            *)           echo "Unexpected status — Supabase may be paused or down." ; exit 1 ;;
+          esac
+
+      - name: Ping Supabase Auth (signal #2)
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "${SUPABASE_URL}/auth/v1/settings" \
+            -H "apikey: ${SUPABASE_ANON_KEY}")
+          echo "Auth status: $STATUS"
+          case "$STATUS" in
+            200|401|403) echo "Auth service awake ✅" ;;
+            *)           echo "Auth endpoint failed — project may be paused." ; exit 1 ;;
+          esac
