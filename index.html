@@ -86,7 +86,8 @@
           <button class="nav-tab" data-view="calendar" data-admin-only role="tab">Calendar</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
-          <button class="nav-tab" data-view="admin" data-admin-only role="tab">Admin</button>
+          <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
+          <button class="nav-tab" data-view="history" data-admin-only role="tab">History</button>
         </nav>
       </div>
       <div class="topbar-right">
@@ -131,9 +132,37 @@
           <section class="panel dash-panel dash-upcoming">
             <header class="dash-panel-head">
               <h3>Upcoming · next 60 days</h3>
-              <span class="muted small">Birthdays · Anniversaries · Events · Holidays</span>
+              <div class="dash-filter-chips" id="dash-upcoming-filters">
+                <button type="button" class="dash-filter-chip is-active" data-kind="all">All</button>
+                <button type="button" class="dash-filter-chip" data-kind="birthday">Birthdays</button>
+                <button type="button" class="dash-filter-chip" data-kind="anniversary">Anniversaries</button>
+                <button type="button" class="dash-filter-chip" data-kind="event">Events</button>
+                <button type="button" class="dash-filter-chip" data-kind="holiday">Holidays</button>
+                <button type="button" class="dash-filter-chip" data-kind="reminder">Reminders</button>
+              </div>
             </header>
             <div id="dash-upcoming-list" class="dash-upcoming-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-month-totals">
+            <header class="dash-panel-head">
+              <h3 id="dash-month-title">This month's gifts</h3>
+              <span class="muted small">Logged so far</span>
+            </header>
+            <div class="dash-money-grid">
+              <div class="dash-money-cell received">
+                <span class="dash-money-label">Received</span>
+                <span class="dash-money-amount" id="dash-month-received">$0.00</span>
+              </div>
+              <div class="dash-money-cell given">
+                <span class="dash-money-label">Given</span>
+                <span class="dash-money-amount" id="dash-month-given">$0.00</span>
+              </div>
+              <div class="dash-money-cell net">
+                <span class="dash-money-label">Net</span>
+                <span class="dash-money-amount" id="dash-month-net">$0.00</span>
+              </div>
+            </div>
           </section>
 
           <section class="panel dash-panel dash-gifts">
@@ -254,7 +283,7 @@
           </div>
         </div>
         <div class="tree-toolbar-group">
-          <span class="page-emoji page-emoji-inline" data-page-emoji="tree" data-admin-only title="Pick an emoji for Family Tree"></span>
+          <span class="page-emoji page-emoji-inline" data-page-emoji="tree" title="Pick an emoji for Family Tree"></span>
           <select id="tree-filter-group" class="tree-filter" title="Show only members of one group" aria-label="Filter by group">
             <option value="">All groups</option>
           </select>
@@ -306,12 +335,29 @@
       </div>
     </main>
 
+    <!-- ===== HISTORY VIEW (admin only) ===== -->
+    <main id="view-history" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="history"></span>Change history</h2>
+            <p>Every meaningful change shipped to this site, newest first.</p>
+          </div>
+          <div class="history-toolbar">
+            <span class="muted small">Current version:</span>
+            <span class="history-current-version" id="history-current-version">—</span>
+          </div>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </main>
+
     <!-- ===== ADMIN VIEW ===== -->
     <main id="view-admin" class="view" hidden>
       <div class="container">
         <div class="page-head">
           <div>
-            <h2><span class="page-emoji" data-page-emoji="admin"></span>Admin</h2>
+            <h2><span class="page-emoji" data-page-emoji="admin"></span>Members</h2>
             <p>Manage members, groups, and accounts.</p>
           </div>
           <button class="btn btn-secondary" id="btn-admin-export">Export to Excel</button>

@@ -2371,7 +2371,7 @@ function unlinkRelation(aId, bId, relLabel) {
 const Views = {
   current: 'tree',
   show(name) {
-    if ((name === 'admin' || name === 'gifts' || name === 'calendar' || name === 'dashboard') && !Auth.isAdmin()) name = 'tree';
+    if ((name === 'admin' || name === 'gifts' || name === 'calendar' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
     this.current = name;
     $$('.nav-tab').forEach(t => t.classList.toggle('is-active', t.dataset.view === name));
@@ -2379,11 +2379,13 @@ const Views = {
     $('#view-tree').hidden       = name !== 'tree';
     $('#view-myfamily').hidden   = name !== 'myfamily';
     $('#view-admin').hidden      = name !== 'admin';
+    $('#view-history').hidden    = name !== 'history';
     $('#view-events').hidden     = name !== 'events';
     $('#view-calendar').hidden   = name !== 'calendar';
     $('#view-gifts').hidden      = name !== 'gifts';
     if (name === 'dashboard') DashboardView.render();
     if (name === 'admin')     AdminView.render();
+    if (name === 'history')   HistoryView.render();
     if (name === 'events')    EventsView.render();
     if (name === 'calendar')  CalendarView.render();
     if (name === 'gifts')     GiftsView.render();
@@ -2466,7 +2468,21 @@ const MyFamilyView = {
     }
 
     // Collect the cast.
-    const parents = (focus.parentIds || []).map(id => Store.byId(id)).filter(Boolean);
+    // Parents: union of focus.parentIds, anyone whose childrenIds includes
+    // focus (reverse-lookup catches asymmetric data), AND the current spouse
+    // of any parent we found (so a parent's spouse who is also the bio
+    // co-parent shows up even when the data only wired the link one way).
+    const parentIdSet = new Set(focus.parentIds || []);
+    Store.membersList().forEach(o => {
+      if ((o.childrenIds || []).includes(focus.id)) parentIdSet.add(o.id);
+    });
+    // Expand: include each parent's current spouse as an inferred co-parent.
+    [...parentIdSet].forEach(pid => {
+      const p = Store.byId(pid);
+      if (p && p.spouseId) parentIdSet.add(p.spouseId);
+    });
+    const parents = [...parentIdSet].map(id => Store.byId(id)).filter(Boolean);
+
     const spouse  = focus.spouseId ? Store.byId(focus.spouseId) : null;
     const exes    = (focus.exSpouseIds || [])
       .map(id => Store.byId(id))
@@ -2479,12 +2495,21 @@ const MyFamilyView = {
       ...allPartners.flatMap(p => p.childrenIds || []),
     ]);
     const children = childIds.map(id => Store.byId(id)).filter(Boolean);
+    // In-laws: each child's current spouse joins the children row so the
+    // user sees who their kids married. Tracked as separate so the layout
+    // can interleave them and the connector code can skip them.
+    const childSpouseIds = unique(
+      children.map(c => c.spouseId).filter(Boolean)
+    ).filter(id => !childIds.includes(id));  // dedupe: in-law isn't also a child
+    const childSpouses = childSpouseIds.map(id => Store.byId(id)).filter(Boolean);
+    const childSpouseOf = {};  // childSpouseId → child id (for layout adjacency)
+    children.forEach(c => { if (c.spouseId && childSpouseOf[c.spouseId] == null) childSpouseOf[c.spouseId] = c.id; });
 
-    // Grandchildren: the children of any of the children. Shown so the
-    // logged-in user sees the next generation down (we always include them
-    // when present — the case where this matters most is the user's own
-    // family page, and including them for admins doesn't hurt).
-    const grandIds = unique(children.flatMap(c => c.childrenIds || []));
+    // Grandchildren: the children of any of the children OR their spouses.
+    const grandIds = unique([
+      ...children.flatMap(c => c.childrenIds || []),
+      ...childSpouses.flatMap(s => s.childrenIds || []),
+    ]);
     const grandchildren = grandIds.map(id => Store.byId(id)).filter(Boolean);
 
     // Layout: 3 rows. Each row is centered horizontally around x = 0.
@@ -2513,19 +2538,31 @@ const MyFamilyView = {
     const Y_GRAND    = Y_CHILDREN + CH + ROW_GAP;
 
     placeRow(parents, Y_PARENTS);
-    // Focus row: [focus, current spouse, ex1, ex2, ...] left-to-right.
-    // But put the current spouse to the LEFT of focus and exes to the right —
-    // matches the "current to one side, exes to the other" idea the user asked
-    // for when viewing an ex-spouse layout. Falls back gracefully if no spouse.
+    // Focus row: [current spouse, focus, ex1, ex2, ...]. Current spouse to
+    // the left, exes to the right matches the visual the user asked for.
     const focusRow = spouse
       ? [spouse, focus, ...exes]
       : [focus, ...exes];
     placeRow(focusRow, Y_FOCUS);
-    placeRow(children, Y_CHILDREN);
+    // Children row: each child immediately followed by their spouse if any.
+    // Interleaving keeps couples visually together.
+    const childrenRow = [];
+    const seenInChildrenRow = new Set();
+    children.forEach(c => {
+      if (seenInChildrenRow.has(c.id)) return;
+      childrenRow.push(c); seenInChildrenRow.add(c.id);
+      if (c.spouseId) {
+        const sp = Store.byId(c.spouseId);
+        if (sp && !seenInChildrenRow.has(sp.id) && !childIds.includes(sp.id)) {
+          childrenRow.push(sp); seenInChildrenRow.add(sp.id);
+        }
+      }
+    });
+    placeRow(childrenRow, Y_CHILDREN);
     placeRow(grandchildren, Y_GRAND);
 
     // World bounds — compute min/max so we can center the canvas.
-    const all = [focus, ...parents, ...allPartners, ...children, ...grandchildren];
+    const all = [focus, ...parents, ...allPartners, ...children, ...childSpouses, ...grandchildren];
     let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
     all.forEach(m => {
       const p = rowFor[m.id];
@@ -2547,7 +2584,7 @@ const MyFamilyView = {
     world.style.height = `${worldH + padTop * 2}px`;
 
     // -------- nodes --------
-    const renderableMembers = [focus, ...parents, ...allPartners, ...children, ...grandchildren];
+    const renderableMembers = [focus, ...parents, ...allPartners, ...children, ...childSpouses, ...grandchildren];
     nodes.innerHTML = renderableMembers.map(m => {
       const p = rowFor[m.id]; if (!p) return '';
       const html = nodeHTML(m);
@@ -2677,20 +2714,43 @@ const MyFamilyView = {
       });
     }
 
-    // Children → Grandchildren. Same logic, simpler — each grandchild's
-    // parent must be in `children`; drop from that parent's bottom.
+    // In-law connectors: each child paired with their spouse in the children
+    // row gets a horizontal spouse line + heart between them.
+    children.forEach(c => {
+      if (!c.spouseId) return;
+      const sp = rowFor[c.spouseId];
+      const a = rowFor[c.id];
+      if (!sp || !a) return;
+      const yLine = a.y + CH / 2 + shiftY;
+      const leftX  = Math.min(a.x, sp.x) + CW + shiftX;
+      const rightX = Math.max(a.x, sp.x) + shiftX;
+      lines.push(`M ${leftX} ${yLine} H ${rightX}`);
+      hearts.push(heartMarker((leftX + rightX) / 2, yLine, false));
+    });
+
+    // Children → Grandchildren. Per-grandchild routing same as parents:
+    // two visible bio parents → couple midpoint; one → that parent's bottom.
     if (grandchildren.length) {
-      const childrenInRow = new Set(children.map(c => c.id));
+      const childRowIds = new Set([...children.map(c => c.id), ...childSpouseIds]);
       grandchildren.forEach(gc => {
-        const visibleParents = (gc.parentIds || []).filter(pid => childrenInRow.has(pid));
+        const visibleParents = (gc.parentIds || []).filter(pid => childRowIds.has(pid));
         if (!visibleParents.length) return;
-        const parent = rowFor[visibleParents[0]];
-        if (!parent) return;
-        const startX = parent.x + CW / 2 + shiftX;
-        const startY = parent.y + CH + shiftY;
+        let startX, startY;
+        if (visibleParents.length >= 2) {
+          const a = rowFor[visibleParents[0]], b = rowFor[visibleParents[1]];
+          const yLine = a.y + CH / 2 + shiftY;
+          startX = (Math.min(a.x, b.x) + CW + Math.max(a.x, b.x)) / 2 + shiftX;
+          startY = yLine;
+        } else {
+          const p = rowFor[visibleParents[0]];
+          startX = p.x + CW / 2 + shiftX;
+          startY = p.y + CH + shiftY;
+        }
         const top = ANCHOR_TOP(gc.id);
+        const dropTo = rowFor[children[0].id].y + CH + shiftY + 4;
+        lines.push(`M ${startX} ${startY} V ${dropTo}`);
         const trunkY = top.y - 28;
-        lines.push(`M ${startX} ${startY} V ${trunkY}`);
+        lines.push(`M ${startX} ${dropTo} V ${trunkY}`);
         lines.push(`M ${Math.min(startX, top.x)} ${trunkY} H ${Math.max(startX, top.x)}`);
         lines.push(`M ${top.x} ${trunkY} V ${top.y}`);
       });
@@ -7464,6 +7524,7 @@ const DashboardView = {
   clockTimer: null,
   weatherFetchedAt: 0,
   weatherCache: null,
+  upcomingFilter: 'all',     // 'all' | 'birthday' | 'anniversary' | 'event' | 'holiday' | 'reminder'
 
   init() {
     on($('#dash-grocery-form'), 'submit', (e) => { e.preventDefault(); this.addGroceryItem(); });
@@ -7471,6 +7532,12 @@ const DashboardView = {
       Views.show('gifts');
       // Open the gift modal directly so it feels like a one-click action.
       setTimeout(() => GiftsView.openModal && GiftsView.openModal(null, {}), 60);
+    });
+    on($('#dash-upcoming-filters'), 'click', (e) => {
+      const b = e.target.closest('.dash-filter-chip'); if (!b) return;
+      this.upcomingFilter = b.dataset.kind;
+      $$('#dash-upcoming-filters .dash-filter-chip').forEach(c => c.classList.toggle('is-active', c === b));
+      this.renderUpcoming();
     });
   },
 
@@ -7481,9 +7548,29 @@ const DashboardView = {
     }
     this.refreshWeather();
     this.renderUpcoming();
+    this.renderMonthTotals();
     this.renderGifts();
     this.renderGrocery();
     this.renderGreeting();
+  },
+
+  renderMonthTotals() {
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const monthName = now.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+    $('#dash-month-title').textContent = `${monthName} gifts`;
+    let received = 0, given = 0;
+    (Store.state.gifts || []).forEach(g => {
+      if (!g.date || !g.date.startsWith(ym)) return;
+      const amt = Number(g.amount) || 0;
+      if (g.direction === 'received') received += amt;
+      else if (g.direction === 'given') given += amt;
+    });
+    const fmt = (n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    $('#dash-month-received').textContent = fmt(received);
+    $('#dash-month-given').textContent    = fmt(given);
+    const net = received - given;
+    $('#dash-month-net').textContent      = (net >= 0 ? '+' : '−') + fmt(Math.abs(net));
   },
 
   renderGreeting() {
@@ -7618,14 +7705,34 @@ const DashboardView = {
         onClick: () => Drawer.open(a.id),
       });
     });
-    // Events
+    // Events — also compute per-event gift totals (received - given) so the
+    // row can show "+$X" or "−$X" next to each event.
+    const fmtMoney = (n) => `$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const giftsByEvent = new Map();
+    (Store.state.gifts || []).forEach(g => {
+      if (!g.eventId) return;
+      const cur = giftsByEvent.get(g.eventId) || { received: 0, given: 0 };
+      const amt = Number(g.amount) || 0;
+      if (g.direction === 'received') cur.received += amt;
+      else if (g.direction === 'given') cur.given += amt;
+      giftsByEvent.set(g.eventId, cur);
+    });
     (Store.state.events || []).forEach(ev => {
       if (!ev.date) return;
       const d = new Date(ev.date + 'T00:00:00');
       if (d < today || d > horizon) return;
+      const tot = giftsByEvent.get(ev.id);
+      let extra = '';
+      if (tot && (tot.received || tot.given)) {
+        const net = tot.received - tot.given;
+        const sign = net >= 0 ? '+' : '−';
+        extra = ` · Gifts ${sign}${fmtMoney(net)} (in ${fmtMoney(tot.received)}, out ${fmtMoney(tot.given)})`;
+      }
       items.push({
         date: d, sort: d.getTime(), kind: 'event',
-        title: ev.name, sub: ev.location || '', icon: ev.icon || '🎉',
+        title: ev.name,
+        sub: (ev.location || '') + extra,
+        icon: ev.icon || '🎉',
         onClick: () => { EventsView.selectedId = ev.id; Views.show('events'); },
       });
     });
@@ -7640,11 +7747,16 @@ const DashboardView = {
     });
 
     items.sort((a, b) => a.sort - b.sort);
-    if (!items.length) {
-      host.innerHTML = '<p class="muted small" style="margin:0;">Nothing in the next 60 days. Quiet stretch.</p>';
+    const filtered = this.upcomingFilter === 'all'
+      ? items
+      : items.filter(it => it.kind === this.upcomingFilter);
+    if (!filtered.length) {
+      host.innerHTML = this.upcomingFilter === 'all'
+        ? '<p class="muted small" style="margin:0;">Nothing in the next 60 days. Quiet stretch.</p>'
+        : `<p class="muted small" style="margin:0;">No ${this.upcomingFilter}s in the next 60 days.</p>`;
       return;
     }
-    host.innerHTML = items.map((it, i) => `
+    host.innerHTML = filtered.map((it, i) => `
       <button type="button" class="dash-up-row" data-i="${i}">
         <div class="dash-up-date">
           <span class="dash-up-day">${it.date.getDate()}</span>
@@ -7658,18 +7770,21 @@ const DashboardView = {
         <div class="dash-up-kind dash-up-kind-${it.kind}">${it.kind}</div>
       </button>
     `).join('');
-    host.querySelectorAll('.dash-up-row').forEach((b, i) => on(b, 'click', () => items[i].onClick && items[i].onClick()));
+    host.querySelectorAll('.dash-up-row').forEach((b, i) => on(b, 'click', () => filtered[i].onClick && filtered[i].onClick()));
   },
 
   renderGifts() {
     const host = $('#dash-gifts-list'); if (!host) return;
-    // Once a gift is both purchased AND sent it's "done" — drop it from the
-    // tracker so the list always shows the next thing that needs attention.
-    const all = (Store.state.gifts || []).filter(g => !(g.purchased && g.sent));
+    // Tracker only shows gifts WE are giving and that aren't fully done.
+    // Gifts received (direction='received') are records of stuff people gave
+    // us — there's nothing to purchase or send, so they don't belong here.
+    const all = (Store.state.gifts || []).filter(g =>
+      g.direction === 'given' && !(g.purchased && g.sent)
+    );
     all.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const top = all.slice(0, 8);
     if (!top.length) {
-      host.innerHTML = '<p class="muted small" style="margin:0;">All caught up — every logged gift is purchased and sent.</p>';
+      host.innerHTML = '<p class="muted small" style="margin:0;">No gifts to track. Click "Log a gift" and pick "Given" to start tracking purchase &amp; send status.</p>';
       return;
     }
     const memberName = (id) => { const m = id ? Store.byId(id) : null; return m ? `${m.firstName} ${m.lastName}` : ''; };
@@ -7777,6 +7892,57 @@ function expandReminder(r, today, horizon) {
   }
   return out;
 }
+
+// -------------------- HISTORY VIEW (admin only) --------------------
+// Static changelog loaded from /changelog.json. Maintained by hand each time
+// a meaningful change ships. Major version bumps for big features / data
+// model changes; minor (decimal) bumps for tweaks and fixes.
+const HistoryView = {
+  data: null,         // { entries: [...] } — populated on first render
+  loading: false,
+
+  async render() {
+    const list = $('#history-list'); if (!list) return;
+    if (this.data) { this._paint(); return; }
+    if (this.loading) return;
+    this.loading = true;
+    list.innerHTML = '<p class="muted small">Loading change history…</p>';
+    try {
+      const r = await fetch('changelog.json', { cache: 'no-cache' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      this.data = await r.json();
+    } catch (e) {
+      list.innerHTML = `<p class="muted small">Could not load history: ${escape(e.message || 'unknown error')}.</p>`;
+      this.loading = false;
+      return;
+    }
+    this.loading = false;
+    this._paint();
+  },
+
+  _paint() {
+    const list = $('#history-list'); if (!list) return;
+    const entries = (this.data && this.data.entries) || [];
+    if (!entries.length) {
+      list.innerHTML = '<p class="muted small">No history entries yet.</p>';
+      return;
+    }
+    const current = $('#history-current-version');
+    if (current) current.textContent = 'v' + entries[0].version;
+    list.innerHTML = entries.map(e => `
+      <article class="history-entry">
+        <header class="history-entry-head">
+          <span class="history-version">v${escape(String(e.version))}</span>
+          <span class="history-date">${escape(e.date || '')}</span>
+        </header>
+        <h3 class="history-title">${escape(e.title || '')}</h3>
+        <ul class="history-changes">
+          ${(e.changes || []).map(c => `<li>${escape(c)}</li>`).join('')}
+        </ul>
+      </article>
+    `).join('');
+  },
+};
 
 // -------------------- PAGE EMOJIS --------------------
 // Admins can pin an emoji to each page. The emoji shows in the page H2 and

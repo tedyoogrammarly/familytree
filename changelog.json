@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "_note": "Hand-maintained log of meaningful shipped changes. Newest first.",
+  "_versioning": "Major bumps for big features / data-model changes. Minor bumps for tweaks, fixes, polish.",
+  "entries": [
+    {
+      "version": "4.4",
+      "date": "2026-05-11",
+      "title": "My Family parents fix, Dashboard filters and totals, Members rename, History page",
+      "changes": [
+        "My Family: parents row now uses union-from-both-directions and pulls in each parent's spouse, so missing co-parents (like Doan's mother) show up automatically",
+        "My Family: children row now includes each child's spouse (in-laws); grandchildren also include kids of the in-law",
+        "Family Tree: emoji slot in the toolbar is no longer hidden by the global data-admin-only rule",
+        "Dashboard: Birthdays / Anniversaries / Events / Holidays / Reminders are now clickable filter chips above the upcoming list",
+        "Dashboard: new 'This month's gifts' panel — received, given, and net for the current calendar month",
+        "Dashboard: each event row in Upcoming now shows its rolling gift totals (in / out / net)",
+        "Dashboard: gift tracker now only shows 'given' gifts that aren't yet fully purchased + sent — received gifts no longer clutter the tracker",
+        "Admin nav tab and page title renamed to 'Members'",
+        "New History page (admin only) — this changelog"
+      ]
+    },
+    {
+      "version": "4.3",
+      "date": "2026-05-11",
+      "title": "Family Tree card overflow, group filter ancestors, My Family per-child routing",
+      "changes": [
+        "Family Tree: .node overflows visible so the 'In loving memory' badge and the '+' button aren't clipped; the photo handles its own corner-rounding",
+        "Family Tree: removed the desaturate-on-death photo filter",
+        "Family Tree: Group filter keep-set now walks every ancestor (and ancestor spouses) so the tree stays vertical instead of collapsing into a horizontal row",
+        "Family Tree: emoji slot moved out of a hidden floating position into the toolbar",
+        "My Family: per-child routing — each child's trunk drops from their actual visible bio parent(s), so step-parents no longer get a line down to non-bio children",
+        "My Family: focus row now [current spouse, focus, ex1, ex2, ...] — current to one side, exes to the other",
+        "My Family: added a 4th row for grandchildren"
+      ]
+    },
+    {
+      "version": "4.2",
+      "date": "2026-05-11",
+      "title": "Family Tree polish, My Family ex-spouses, Dashboard tweaks, Admin sort and login column, page emojis",
+      "changes": [
+        "Family Tree: 'In loving memory' badge on the profile card when a date of death is set; age caps at date of death",
+        "Family Tree: Tree.relations does union-from-both-directions and healMissingKeys heals asymmetric parent/child/ex-spouse links every load",
+        "My Family: renders current spouse + every ex on the focus row with broken-heart lines; children from any marriage hang from the correct couple",
+        "Dashboard: Upcoming horizon extended to 60 days; US holidays merged in",
+        "Dashboard: gift tracker hides rows where both purchased AND sent are checked",
+        "Admin: Name column header is clickable, toggles between by-last and by-first sort",
+        "Admin: new 'Login' column showing whether the member has a Supabase auth row",
+        "Page emojis: admins can set an emoji per page; updates both the H2 and the nav tab"
+      ]
+    },
+    {
+      "version": "4.1",
+      "date": "2026-05-11",
+      "title": "Dashboard, profile additions, calendar reminders, travel trips",
+      "changes": [
+        "Profile drawer: date of death, 529 plan URL, notes, in-drawer gifts section (received / given with totals and event links)",
+        "Admin members table: inline copy-email button per row",
+        "Calendar: birthday chip recolored green to distinguish from US holiday red; legend updated",
+        "Calendar: new 'Calendar reminder' type — recurring (daily / weekly / monthly / yearly), Calendar-only (no Events page entry)",
+        "Events: 'This is a travel trip' toggle adds destination, end date, four budget categories, and a daily itinerary editor; event detail shows budget table and itinerary",
+        "Dashboard (new, admin-only): Las Vegas clock + weather (Open-Meteo), next-30-day upcoming list, quick gift tracker with purchased/sent checkboxes, shared family grocery list",
+        "Routing: admins land on Dashboard after sign-in"
+      ]
+    },
+    {
+      "version": "4.0",
+      "date": "2026-05-11",
+      "title": "Multiple ex-spouses, photo recrop, Group + My Family tree filters",
+      "changes": [
+        "Multi-spouse data model: exSpouseIds[] on every member; the Mark-as-divorced flow moves the current spouse into the ex array (one-way) and the canvas draws each ex with a long-dashed broken heart",
+        "healMissingKeys migrates legacy 'divorced flag on current spouse' pairs into the new model",
+        "Profile edit drawer: 'Crop photo' button re-runs the cropper on an existing photo",
+        "Family Tree toolbar: Group dropdown and My Family toggle as mutually-exclusive view filters"
+      ]
+    },
+    {
+      "version": "3.4",
+      "date": "2026-05-11",
+      "title": "Edge Function for admin password reset",
+      "changes": [
+        "New Supabase Edge Function admin-reset-password (service_role server-side) so admins can set a member's password directly from the website without an email round-trip",
+        "Client toast surfaces a 'deploy the Edge Function first' hint when the function call fails"
+      ]
+    },
+    {
+      "version": "3.3",
+      "date": "2026-05-11",
+      "title": "Smart Reset PW handles missing logins; recovery modal fixes",
+      "changes": [
+        "Admin Reset PW probes member_accounts first; if no login exists, it offers to create one on the spot",
+        "Open recovery modal directly when the URL has a recovery hash (fixes a race where the listener fired before the callback was wired)"
+      ]
+    },
+    {
+      "version": "3.2",
+      "date": "2026-05-11",
+      "title": "Mirror members into Supabase Auth on create",
+      "changes": [
+        "Member create form gains an Email field; saving creates a Supabase Auth user via a session-less throwaway client (admin stays logged in)",
+        "member_accounts row inserted linking auth user to member; credentials modal shows email + generated password once"
+      ]
+    },
+    {
+      "version": "3.1",
+      "date": "2026-05-11",
+      "title": "RLS policy fixes; admin password reset via email",
+      "changes": [
+        "Split member_accounts policies per operation to break the 'infinite recursion in policy' error",
+        "Add explicit INSERT policy on archive so PostgREST .upsert() works",
+        "Admin Reset PW uses resetPasswordForEmail and a recovery-mode change-password modal on the receiving end"
+      ]
+    },
+    {
+      "version": "3.0",
+      "date": "2026-05-11",
+      "title": "Supabase backend wire-up + auth",
+      "changes": [
+        "Replaced localStorage-only storage with Supabase: JSONB-blob single-row archive + member_accounts mapping + RLS",
+        "Auth flow switched from local username/passwordHash to Supabase email/password with realtime sync"
+      ]
+    },
+    {
+      "version": "2.0",
+      "date": "2026-05-11",
+      "title": "Calendar, expenses, anniversaries, photo crop, profile fields",
+      "changes": [
+        "Calendar page with events, birthdays, US holidays; Google Calendar sync; recurring per-attendee expenses; anniversary tracking; photo crop modal; long batch of profile improvements"
+      ]
+    },
+    {
+      "version": "1.0",
+      "date": "2026-05-11",
+      "title": "Initial commit",
+      "changes": [
+        "Family Archive web app — vanilla JS, single-file index.html + app.js + styles.css"
+      ]
+    }
+  ]
+}
