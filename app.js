@@ -1398,11 +1398,36 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     return (m.exSpouseIds || []).some(eid => hasParents(Store.byId(eid)));
   };
   const realRoots = all.filter(m => !hasParents(m) && !partnerHasParents(m));
-  // Reverse the iteration order so the most-recently-added root family lands
-  // on the left and earlier families slide right. For Ted's archive this puts
-  // Doan's parents (Nguyen) on the left and Ted's parents/grandparents (Yoo)
-  // on the right, with the Ted+Doan marriage line nearer the visual center.
-  const roots = realRoots.slice().reverse();
+  // Place the admin's own family on the right so the global view treats them
+  // as the focal point of the tree. For each root, walk the subtree (children
+  // + partners + their children) and check whether the logged-in admin is in
+  // there. Roots that don't contain the admin sort first (laid out leftmost);
+  // roots that do contain the admin sort last (rightmost). This keeps Ted's
+  // archive showing Doan's parents on the left and Ted's parents/grandparents
+  // on the right regardless of how members were added.
+  const adminMemberId = Auth.current && Auth.current !== 'admin-bootstrap' ? Auth.current : null;
+  const rootContainsAdmin = (rootId) => {
+    if (!adminMemberId) return false;
+    const queue = [rootId];
+    const seen = new Set();
+    while (queue.length) {
+      const id = queue.shift();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (id === adminMemberId) return true;
+      const mm = Store.byId(id);
+      if (!mm) continue;
+      (mm.childrenIds || []).forEach(cid => queue.push(cid));
+      if (mm.spouseId) queue.push(mm.spouseId);
+      (mm.exSpouseIds || []).forEach(eid => queue.push(eid));
+    }
+    return false;
+  };
+  const roots = realRoots.slice().sort((a, b) => {
+    const ra = rootContainsAdmin(a.id) ? 1 : 0;
+    const rb = rootContainsAdmin(b.id) ? 1 : 0;
+    return ra - rb;
+  });
   let cursor = 0;
   roots.forEach(r => {
     if (placed.has(r.id)) return;
@@ -1823,6 +1848,11 @@ function nodeHTML(m) {
   const gen = ((_gensCache || computeGenerations())[m.id] ?? 0);
 
   const sp = m.spouseId ? Store.byId(m.spouseId) : null;
+  // Anniversary read either off the member directly or off their current
+  // spouse, so the chip shows on both cards even when only one side has the
+  // date filled in.
+  const anniIso = m.anniversary || sp?.anniversary || '';
+  const togetherStr = anniIso ? togetherLabel(anniIso) : '';
   const childCount = unique([...(m.childrenIds || []), ...(sp?.childrenIds || [])]).length;
   const hidden = m.collapsed ? descendantCount(m) : 0;
   const collapsedClass = m.collapsed ? ' is-collapsed' : '';
@@ -1862,6 +1892,10 @@ function nodeHTML(m) {
         ${ageStr ? `<div class="node-meta">
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           ${ageStr}
+        </div>` : ''}
+        ${togetherStr ? `<div class="node-anniv" title="Anniversary: ${escape(anniIso)}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.35-7-10.5C5 7.46 7.46 5 10.5 5c1.74 0 3.41.81 4.5 2.09C16.09 5.81 17.76 5 19.5 5 22.54 5 25 7.46 25 10.5 25 16.65 18 21 18 21H12z" fill="currentColor" transform="translate(-2 0)"/></svg>
+          ${escape(togetherStr)}
         </div>` : ''}
         ${flagsHTML}
       </div>
@@ -1913,10 +1947,7 @@ const Drawer = {
     bindPhoneFormat($('#drawer-edit').querySelector('input[name=phone]'));
 
     on($('#edit-anniversary'), 'input', () => {
-      const yrs = yearsTogether($('#edit-anniversary').value);
-      $('#edit-anniv-years').textContent = yrs != null
-        ? `${yrs} year${yrs === 1 ? '' : 's'} together`
-        : '';
+      $('#edit-anniv-years').textContent = togetherLabel($('#edit-anniversary').value);
     });
 
     // Zip → city/state autofill
@@ -2530,20 +2561,29 @@ const MyFamilyView = {
     });
     const parents = [...parentIdSet].map(id => Store.byId(id)).filter(Boolean);
 
-    // Step-parents: each bio parent's current spouse who is NOT a bio
-    // parent themselves. These render in the parents row next to their
-    // spouse with a heart connector but no parent-line down to the focus.
+    // Step-parents: every spouse — current OR ex — of a bio parent who is
+    // NOT themselves a bio parent of the focus. Showing exes here surfaces
+    // half-siblings' other parent (e.g. Tony Chang's ex Mimi Morse, who is
+    // bio mother of Heather Grisnik but not of Suejin Chang). Each renders
+    // in the parents row next to their bio-parent spouse with a heart
+    // (solid for current, broken for ex) and no parent-line to the focus.
     const stepParentIds = new Set();
     parents.forEach(p => {
       if (p.spouseId && !parentIdSet.has(p.spouseId)) stepParentIds.add(p.spouseId);
+      (p.exSpouseIds || []).forEach(eid => {
+        if (!parentIdSet.has(eid)) stepParentIds.add(eid);
+      });
     });
     const stepParents = [...stepParentIds].map(id => Store.byId(id)).filter(Boolean);
-    // stepParentOf[id] → the bio parent whose current spouse this person is.
-    // Used by the layout to interleave them adjacent to their bio-parent
-    // spouse, and by the edge renderer to draw the spouse heart marker.
+    // stepParentOf[stepParentId] → the bio parent this step-parent is/was
+    // married to. Used by the layout to interleave them adjacent to that
+    // bio parent and by the edge renderer to draw the heart marker.
     const stepParentOf = {};
     parents.forEach(p => {
       if (p.spouseId && stepParentIds.has(p.spouseId)) stepParentOf[p.spouseId] = p.id;
+      (p.exSpouseIds || []).forEach(eid => {
+        if (stepParentIds.has(eid) && stepParentOf[eid] == null) stepParentOf[eid] = p.id;
+      });
     });
 
     const spouse  = focus.spouseId ? Store.byId(focus.spouseId) : null;
@@ -2614,19 +2654,36 @@ const MyFamilyView = {
     const Y_CHILDREN = Y_FOCUS + CH + ROW_GAP;
     const Y_GRAND    = Y_CHILDREN + CH + ROW_GAP;
 
-    // Parents row interleaves step-parents adjacent to their bio-parent
-    // spouse so the heart connector reads as a couple. A step-parent that
-    // isn't tied to a visible bio parent (rare) just tails on at the end.
+    // Parents row interleaves: bio parent → their bio co-parent (if any) →
+    // their step-parents (current spouse then exes), then next bio parent.
+    // Placing the bio co-parent adjacent makes the bio-couple heart land
+    // between them; step-parents tail after so each step gets its own heart
+    // connector with the bio parent without crossing over the bio co-parent.
     const parentsRow = [];
     const seenInParentsRow = new Set();
     parents.forEach(p => {
       if (seenInParentsRow.has(p.id)) return;
       parentsRow.push(p); seenInParentsRow.add(p.id);
+      // Bio co-parent next to them (a parent whose ID is in parentIdSet).
+      if (p.spouseId && parentIdSet.has(p.spouseId) && !seenInParentsRow.has(p.spouseId)) {
+        const sp = Store.byId(p.spouseId);
+        if (sp) { parentsRow.push(sp); seenInParentsRow.add(sp.id); }
+      }
+      // Current step-parent.
       if (p.spouseId && stepParentIds.has(p.spouseId) && !seenInParentsRow.has(p.spouseId)) {
         const sp = Store.byId(p.spouseId);
         if (sp) { parentsRow.push(sp); seenInParentsRow.add(sp.id); }
       }
+      // Ex-spouse step-parents.
+      (p.exSpouseIds || []).forEach(eid => {
+        if (stepParentIds.has(eid) && !seenInParentsRow.has(eid)) {
+          const sp = Store.byId(eid);
+          if (sp) { parentsRow.push(sp); seenInParentsRow.add(sp.id); }
+        }
+      });
     });
+    // Trailing step-parents whose bio link wasn't visited above (defensive —
+    // shouldn't happen with the iteration above, but keeps them on screen).
     stepParents.forEach(sp => {
       if (!seenInParentsRow.has(sp.id)) { parentsRow.push(sp); seenInParentsRow.add(sp.id); }
     });
@@ -2775,7 +2832,8 @@ const MyFamilyView = {
         }
       }
     }
-    // Bio parent → step-parent (current marriage).
+    // Bio parent → step-parent. Solid heart when currently married, broken
+    // heart when the step-parent is an ex of the bio parent.
     stepParents.forEach(sp => {
       const bioId = stepParentOf[sp.id];
       const bio = bioId ? Store.byId(bioId) : null;
@@ -2783,7 +2841,9 @@ const MyFamilyView = {
       const key = parentPairKey(bio.id, sp.id);
       if (drawnParentPair.has(key)) return;
       drawnParentPair.add(key);
-      drawParentHeart(bio, sp, false);
+      const divorced = (bio.exSpouseIds || []).includes(sp.id)
+        || (sp.exSpouseIds || []).includes(bio.id);
+      drawParentHeart(bio, sp, divorced);
     });
 
     // Focus + each partner: draw a horizontal line + heart between them.
@@ -7302,6 +7362,24 @@ function yearsTogether(iso) {
   return y < 0 ? null : y;
 }
 
+// Human-readable "X years/months together" string. Falls back to months when
+// the couple has been together less than a year. Returns '' for invalid /
+// future-dated anniversaries so callers can guard with a falsy check.
+function togetherLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  if (d > now) return '';
+  let y = now.getFullYear() - d.getFullYear();
+  let m = now.getMonth() - d.getMonth();
+  if (now.getDate() < d.getDate()) m -= 1;
+  if (m < 0) { y -= 1; m += 12; }
+  if (y >= 1) return `${y} year${y === 1 ? '' : 's'} together`;
+  if (m >= 1) return `${m} month${m === 1 ? '' : 's'} together`;
+  return 'Just married';
+}
+
 // Pick a sensible default meal type based on the member's life stage.
 function defaultMealForMember(m) {
   if (!m) return 'none';
@@ -8152,6 +8230,17 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.8',
+    date: '2026-05-11',
+    title: 'Anniversary on cards, admin-on-the-right root sort, My Family all-spouses display',
+    changes: [
+      'Family Tree: profile cards now show "X years together" (or "X months together" when under a year) underneath the age. The chip reads off the member or their current spouse so it appears on both halves of the couple.',
+      'Family Tree: root sorting now puts whichever root subtree contains the admin on the right edge of the canvas. Doan\'s parents (Nguyen) layout on the left, Ted\'s parents/grandparents (Yoo) layout on the right — independent of the order members were added.',
+      'My Family: bio parents now bring in every spouse — current AND ex — that isn\'t themselves a bio parent of the focus. Suejin Chang\'s view now surfaces all of Tony Chang\'s partners (including Heather Grisnik\'s mother Mimi Morse) so half-sibling parentage reads clearly.',
+      'My Family: ex-step-parents render with a broken heart to the bio parent (current step-parents stay solid). Bio co-parent now interleaves directly after the bio parent so the bio-couple heart never gets stranded across step-parent cards.',
+    ],
+  },
   {
     version: '4.7',
     date: '2026-05-11',
