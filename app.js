@@ -1488,8 +1488,11 @@ function autoLayout(orientation = Store.state.orientation || 'vertical', opts = 
   // aren't yet wired to their grandkids — e.g. a Grandpa Yoo who hasn't
   // been linked as Bong's parent still slots into the Yoo cluster on the
   // left because his last name matches the admin.
-  const adminMemberId = Auth.current && Auth.current !== 'admin-bootstrap' ? Auth.current : null;
-  const adminMember   = adminMemberId ? Store.byId(adminMemberId) : null;
+  // Auth.current is the resolved member OBJECT (or the 'admin-bootstrap'
+  // sentinel / null), not a bare ID. Pull the id out explicitly so the
+  // string comparisons in rootContainsAdminByBlood don't fall through.
+  const adminMember   = (Auth.current && Auth.current !== 'admin-bootstrap') ? Auth.current : null;
+  const adminMemberId = adminMember?.id || null;
   const adminLN       = (adminMember?.lastName || '').trim().toLowerCase();
   const rootContainsAdminByBlood = (root) => {
     if (!adminMemberId) return false;
@@ -2875,7 +2878,12 @@ const MyFamilyView = {
     // Card geometry matches the main Family Tree.
     const CW = NODE_W, CH = NODE_H;
     const GAP_X = 60;
-    const ROW_GAP = 100;
+    // Generous row gap so multi-group parent trunks (e.g. half-siblings
+    // routed under different parent pairs) can stagger their trunks on
+    // separate Y lanes without overlapping the heart-line area or each
+    // other. v4.10 had 100 here and the parent → kid trunks all bunched
+    // into a 60px-wide horizontal strip below the parents row.
+    const ROW_GAP = 160;
 
     const rowFor = {};        // memberId → { x, y }
     const placeRow = (members, y) => {
@@ -2976,11 +2984,51 @@ const MyFamilyView = {
     world.style.width  = `${stageW}px`;
     world.style.height = `${worldH + padTop * 2}px`;
 
+    // Pre-compute kid → parent-group mapping for color coding (consumed by
+    // both the node render below and the edges section further down). When
+    // there are 2+ parent groups (i.e. half-siblings with different parent
+    // pairs), each kid card gets its parent-group hue painted onto its
+    // gen-bar so the branches read as visually distinct.
+    const kidHueByMember = new Map();
+    let kidGroups = []; // { ps, kids, key, _lane, _hue }
+    if (parents.length || stepParents.length) {
+      const adultsInRow = new Set([
+        ...parents.map(p => p.id),
+        ...stepParents.map(p => p.id),
+      ]);
+      const _groups = new Map();
+      [focus, ...siblings].forEach(k => {
+        const visible = (k.parentIds || []).filter(pid => adultsInRow.has(pid));
+        if (!visible.length) return;
+        const key = visible.slice().sort().join('|');
+        if (!_groups.has(key)) {
+          _groups.set(key, { ps: visible.map(id => Store.byId(id)).filter(Boolean), kids: [], key });
+        }
+        _groups.get(key).kids.push(k);
+      });
+      kidGroups = [..._groups.values()];
+      const hueMap = kidGroups.length > 1 ? buildFamilyHueMap(kidGroups.map(g => g.key)) : null;
+      kidGroups.forEach((g, i) => { g._lane = i; g._hue = hueMap?.get(g.key); });
+      if (kidGroups.length > 1) {
+        kidGroups.forEach(g => g.kids.forEach(k => kidHueByMember.set(k.id, g._hue)));
+      }
+    }
+
     // -------- nodes --------
     const renderableMembers = [focus, ...parents, ...stepParents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
     nodes.innerHTML = renderableMembers.map(m => {
       const p = rowFor[m.id]; if (!p) return '';
-      const html = nodeHTML(m);
+      let html = nodeHTML(m);
+      // Apply the parent-group hue to a kid card whose parents differ from
+      // their siblings (Suejin's view of Heather/Jewelia, etc.). We inject
+      // --gen overrides at the front of the existing inline style so the
+      // gen-bar adopts the group color without touching nodeHTML itself.
+      const kidHue = kidHueByMember.get(m.id);
+      if (kidHue != null) {
+        const accent = `hsl(${kidHue} 65% 48%)`;
+        const accentSoft = `hsl(${kidHue} 65% 92%)`;
+        html = html.replace('style="', `style="--gen: ${accent}; --gen-soft: ${accentSoft}; `);
+      }
       // nodeHTML produces a translate(x, y) inline style. Override with our row coords.
       return html.replace(/transform:\s*translate\([^)]+\);/, `transform: translate(${p.x + shiftX}px, ${p.y + shiftY}px);`);
     }).join('');
@@ -3006,33 +3054,20 @@ const MyFamilyView = {
     // grouped under Mimi alone, Suejin is grouped under Tony+SuejinMom. Each
     // group renders its own trunk so no kid gets a parent-line from someone
     // who isn't actually their bio parent.
-    if (parents.length || stepParents.length) {
-      const adultsInRow = new Set([
-        ...parents.map(p => p.id),
-        ...stepParents.map(p => p.id),
-      ]);
-      const groups = new Map(); // key → { ps: Member[], kids: Member[] }
-      [focus, ...siblings].forEach(k => {
-        const visible = (k.parentIds || []).filter(pid => adultsInRow.has(pid));
-        if (!visible.length) return; // kid with no visible bio parent — skip
-        const key = visible.slice().sort().join('|');
-        if (!groups.has(key)) {
-          groups.set(key, { ps: visible.map(id => Store.byId(id)).filter(Boolean), kids: [] });
-        }
-        groups.get(key).kids.push(k);
-      });
-
-      groups.forEach(({ ps, kids }) => {
+    // Draw the per-group trunks computed earlier. Each group's trunk sits
+    // on its own Y lane so multi-group views (half-siblings) don't pile
+    // every trunk onto the same horizontal rail.
+    if (kidGroups.length) {
+      const LANE_OFFSET = 18;
+      kidGroups.forEach(({ ps, kids, _lane }) => {
         if (!ps.length || !kids.length) return;
         const parentBottoms = ps.map(p => ANCHOR_BOTTOM(p.id));
         const kidTops = kids.map(k => ANCHOR_TOP(k.id));
-        const trunkY = kidTops[0].y - 36;
+        const trunkY = kidTops[0].y - 40 + (_lane % 4) * LANE_OFFSET;
         const couple = ps.length === 2 &&
           ps[0].spouseId === ps[1].id && !ps[0].divorced && !ps[1].divorced;
 
         if (couple) {
-          // Two parents currently married → vertical drops to a short
-          // horizontal heart-line, then a single drop to the trunk.
           const yLine = parentBottoms[0].y + 28;
           const midX  = (parentBottoms[0].x + parentBottoms[1].x) / 2;
           const x0 = Math.min(parentBottoms[0].x, parentBottoms[1].x);
@@ -3041,22 +3076,15 @@ const MyFamilyView = {
           lines.push(`M ${parentBottoms[1].x} ${parentBottoms[1].y} V ${yLine}`);
           lines.push(`M ${x0} ${yLine} H ${x1}`);
           lines.push(`M ${midX} ${yLine} V ${trunkY}`);
-          // Heart marker on the couple line — only when both parents are
-          // the focus's bio parents (the "main" parent-couple). Heart
-          // markers between bio + step go through the parent-heart loop
-          // further down so the broken-vs-solid logic stays in one place.
           if (parentIdSet.has(ps[0].id) && parentIdSet.has(ps[1].id)) {
             hearts.push(heartMarker(midX, yLine, false));
           }
         } else {
-          // Solo / non-currently-married parents drop straight to the trunk.
           parentBottoms.forEach(pb => {
             lines.push(`M ${pb.x} ${pb.y} V ${trunkY}`);
           });
         }
 
-        // Horizontal trunk that spans every parent and every kid in this
-        // group, plus drops to each kid.
         const allX = [...parentBottoms.map(p => p.x), ...kidTops.map(t => t.x)];
         const trunkLeft  = Math.min(...allX);
         const trunkRight = Math.max(...allX);
@@ -3242,10 +3270,12 @@ const MyFamilyView = {
     // Card click → drawer. Admins can open any card. Non-admin users may
     // only open their own card and their current spouse's — every other
     // card in the mini-tree is read-only for them so they can't pry into
-    // someone else's profile fields (address, email, etc.).
-    const meId       = Auth.current && Auth.current !== 'admin-bootstrap' ? Auth.current : null;
-    const me         = meId ? Store.byId(meId) : null;
-    const allowedIds = new Set([meId, me?.spouseId].filter(Boolean));
+    // someone else's profile fields (address, email, etc.). Auth.current
+    // is the resolved member OBJECT, so we pull the id off it directly
+    // (the v4.16 attempt treated it as a bare id and the set comparison
+    // never matched).
+    const me         = (Auth.current && Auth.current !== 'admin-bootstrap') ? Auth.current : null;
+    const allowedIds = new Set([me?.id, me?.spouseId].filter(Boolean));
     nodes.querySelectorAll('.node').forEach(el => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('.node-add')) return;
@@ -5122,11 +5152,13 @@ const EventsView = {
           // (red) when paid expenses exceed gift income; positive (green)
           // otherwise. Only paid expenses count — unpaid bills don't affect
           // the at-a-glance number.
+          // Money summary chip is admin-only — non-admin users still see
+          // event name + date + attendee count but never the net amount.
           const giftNet = eventGiftNet(ev.id);
           const expTot  = eventExpenseTotals(ev);
           const cardNet = giftNet.net - expTot.paid;
           const hasNum  = giftNet.received !== 0 || giftNet.given !== 0 || expTot.paid !== 0;
-          const netChip = hasNum
+          const netChip = (Auth.isAdmin() && hasNum)
             ? `<span class="event-net ${cardNet >= 0 ? 'is-positive' : 'is-negative'}" title="Gifts in $${giftNet.received.toFixed(2)} · Gifts out $${giftNet.given.toFixed(2)} · Paid expenses $${expTot.paid.toFixed(2)}">${cardNet >= 0 ? '+' : '−'}$${Math.abs(cardNet).toFixed(2)}</span>`
             : '';
           return `
@@ -8531,6 +8563,18 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.17',
+    date: '2026-05-11',
+    title: 'Bug fixes — event card net chip, own-profile click, My Family layout + half-sib coloring',
+    changes: [
+      'Events: the +/− gift summary chip on the event list card on the left side is now hidden for non-admin users (in addition to the attendee-table footer fixed in v4.16).',
+      'My Family: non-admin user can now actually open their own profile card and their current spouse\'s. v4.16 treated Auth.current as a bare id, but it\'s the resolved member OBJECT — the set comparison never matched. The check now pulls the .id off the object.',
+      'Family Tree: same bug fixed in the autoLayout root-sort heuristic. rootContainsAdminByBlood was always returning false because Auth.current (an object) was being compared to member ids (strings), so the admin\'s family wasn\'t actually sorting correctly. Now extracts .id properly.',
+      'My Family: bumped the row gap from 100 to 160 so multi-group parent trunks (half-siblings routed under different parent pairs) have breathing room.',
+      'My Family: half-sibling trunks now stagger their Y lanes (18px apart) so multi-group routings don\'t all collapse onto the same horizontal rail. Plus each parent-group gets a distinct hue applied to its kid card\'s top accent bar (only when 2+ groups are present), so it\'s visually obvious which kids share which parents.',
+    ],
+  },
   {
     version: '4.16',
     date: '2026-05-11',
