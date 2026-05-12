@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>The Yoo Family</title>
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle' font-size='56'>🌳</text></svg>" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -120,10 +121,8 @@
           <div class="dash-clock" id="dash-clock">
             <div class="dash-time" id="dash-time">—</div>
             <div class="dash-date" id="dash-date">Las Vegas, NV</div>
-            <div class="dash-weather" id="dash-weather">
-              <span class="dash-weather-icon" id="dash-weather-icon">·</span>
-              <span class="dash-weather-temp" id="dash-weather-temp">—</span>
-              <span class="dash-weather-desc" id="dash-weather-desc">loading…</span>
+            <div class="dash-forecast" id="dash-forecast" aria-label="5-day forecast">
+              <div class="dash-forecast-loading muted small">loading forecast…</div>
             </div>
           </div>
         </div>
@@ -455,6 +454,7 @@
                       <th>Group</th>
                       <th>Birthday</th>
                       <th title="Whether this member has a Supabase login linked">Login</th>
+                      <th title="Date this member last accessed the site">Last activity</th>
                       <th></th>
                     </tr>
                   </thead>

@@ -726,6 +726,16 @@ const Auth = {
     }
     const m = Store.byId(mid);
     this.current = m || (Backend.account.is_admin ? 'admin-bootstrap' : null);
+    // Stamp last-seen on the resolved member so the Members page can show
+    // "Last activity". Debounce-y: skip the write if we already stamped
+    // within the last minute to avoid noisy save churn from repeat reloads.
+    if (m) {
+      const now = Date.now();
+      if (!m.lastLoginAt || now - m.lastLoginAt > 60 * 1000) {
+        m.lastLoginAt = now;
+        Store.save();
+      }
+    }
   },
 
   async logout() {
@@ -3452,6 +3462,9 @@ const AdminView = {
           <td>${m.group ? escape(m.group) : '—'}</td>
           <td>${m.birthday ? formatDate(m.birthday) : '—'}</td>
           <td>${loginCell}</td>
+          <td>${m.lastLoginAt
+            ? `<span title="${new Date(m.lastLoginAt).toLocaleString()}">${formatDate(new Date(m.lastLoginAt).toISOString().slice(0,10))}</span>`
+            : '<span class="muted">—</span>'}</td>
           <td style="text-align:right; white-space:nowrap;">
             <button class="btn btn-ghost btn-sm" data-action="edit">Edit</button>
             <button class="btn btn-ghost btn-sm" data-action="reset">Reset PW</button>
@@ -3459,7 +3472,7 @@ const AdminView = {
           </td>
         </tr>`;
     }).join('');
-    $('#admin-rows').innerHTML = rows || `<tr><td colspan="7" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
+    $('#admin-rows').innerHTML = rows || `<tr><td colspan="8" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
 
     $('#admin-rows').querySelectorAll('button[data-action]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -8252,30 +8265,38 @@ const DashboardView = {
     $('#dash-date').textContent = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }) + ' · Las Vegas, NV';
   },
 
-  // Open-Meteo: free, no API key. Refreshes at most every 10 minutes.
+  // Open-Meteo: free, no API key. 5-day daily forecast for Las Vegas.
+  // Refreshes at most every 30 minutes — the API returns daily highs/lows
+  // which don't move minute-to-minute.
   async refreshWeather() {
-    const FRESH_MS = 10 * 60 * 1000;
+    const FRESH_MS = 30 * 60 * 1000;
     if (this.weatherCache && Date.now() - this.weatherFetchedAt < FRESH_MS) {
       this.paintWeather(this.weatherCache);
       return;
     }
     try {
-      const url = 'https://api.open-meteo.com/v1/forecast?latitude=36.1716&longitude=-115.1391&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles';
+      const url = 'https://api.open-meteo.com/v1/forecast?latitude=36.1716&longitude=-115.1391&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=5';
       const r = await fetch(url);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
-      const c = j.current || {};
-      this.weatherCache = { temp: c.temperature_2m, code: c.weather_code };
+      const d = j.daily || {};
+      const days = (d.time || []).map((iso, i) => ({
+        iso,
+        high: d.temperature_2m_max?.[i],
+        low:  d.temperature_2m_min?.[i],
+        code: d.weather_code?.[i],
+      }));
+      this.weatherCache = { days };
       this.weatherFetchedAt = Date.now();
       this.paintWeather(this.weatherCache);
     } catch (e) {
-      $('#dash-weather-icon').textContent = '⚠';
-      $('#dash-weather-temp').textContent = '';
-      $('#dash-weather-desc').textContent = 'weather unavailable';
+      const el = $('#dash-forecast');
+      if (el) el.innerHTML = '<div class="dash-forecast-loading muted small">forecast unavailable</div>';
     }
   },
 
-  paintWeather({ temp, code }) {
+  paintWeather({ days }) {
+    const el = $('#dash-forecast'); if (!el || !days?.length) return;
     // WMO weather codes → emoji + label. Compact mapping for common cases.
     const map = {
       0:  ['☀', 'Clear sky'],
@@ -8300,10 +8321,24 @@ const DashboardView = {
       96: ['⛈', 'Thunder + hail'],
       99: ['⛈', 'Heavy thunder'],
     };
-    const [icon, desc] = map[code] || ['🌡', 'Current'];
-    $('#dash-weather-icon').textContent = icon;
-    $('#dash-weather-temp').textContent = temp != null ? `${Math.round(temp)}°F` : '—';
-    $('#dash-weather-desc').textContent = desc;
+    el.innerHTML = days.slice(0, 5).map((day, i) => {
+      const [icon, desc] = map[day.code] || ['🌡', ''];
+      // Parse the iso date in local time (noon avoids DST edge cases).
+      const date  = new Date(day.iso + 'T12:00:00');
+      const label = i === 0 ? 'Today'
+                  : date.toLocaleDateString('en-US', { weekday: 'short' });
+      const hi = day.high != null ? `${Math.round(day.high)}°` : '—';
+      const lo = day.low  != null ? `${Math.round(day.low)}°`  : '—';
+      return `<div class="dash-forecast-day" title="${escape(desc)}">
+        <div class="dash-forecast-label">${escape(label)}</div>
+        <div class="dash-forecast-icon">${icon}</div>
+        <div class="dash-forecast-temps">
+          <span class="dash-forecast-hi">${hi}</span>
+          <span class="dash-forecast-sep">/</span>
+          <span class="dash-forecast-lo">${lo}</span>
+        </div>
+      </div>`;
+    }).join('');
   },
 
   renderUpcoming() {
@@ -8419,8 +8454,15 @@ const DashboardView = {
         : `<p class="muted small" style="margin:0;">No ${this.upcomingFilter}s in the next 60 days.</p>`;
       return;
     }
-    host.innerHTML = filtered.map((it, i) => `
-      <button type="button" class="dash-up-row" data-i="${i}">
+    // Rows for items happening today get a light-yellow accent so they
+    // pop out of the upcoming list. Date comparison uses LA timezone-ish
+    // via toIsoDate so a midnight rollover in the user's locale doesn't
+    // flicker the highlight on/off.
+    const todayIso = toIsoDate(today);
+    host.innerHTML = filtered.map((it, i) => {
+      const isToday = toIsoDate(it.date) === todayIso;
+      return `
+      <button type="button" class="dash-up-row${isToday ? ' is-today' : ''}" data-i="${i}">
         <div class="dash-up-date">
           <span class="dash-up-day">${it.date.getDate()}</span>
           <span class="dash-up-mon">${it.date.toLocaleString(undefined, { month: 'short' })}</span>
@@ -8432,7 +8474,7 @@ const DashboardView = {
         </div>
         <div class="dash-up-kind dash-up-kind-${it.kind}">${it.kind}</div>
       </button>
-    `).join('');
+    `;}).join('');
     host.querySelectorAll('.dash-up-row').forEach((b, i) => on(b, 'click', () => filtered[i].onClick && filtered[i].onClick()));
   },
 
@@ -8563,6 +8605,17 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.18',
+    date: '2026-05-11',
+    title: 'Tree favicon, Members "Last activity" column, Dashboard 5-day forecast + today highlight',
+    changes: [
+      'Favicon: browser tab now shows a 🌳 tree emoji via inline SVG favicon (no asset file needed).',
+      'Members page: new "Last activity" column showing the date of each member\'s most recent visit. The timestamp is stamped on the member record (Auth.applyAccount sets lastLoginAt on resolve, debounced to once-per-minute to avoid noisy saves) and the cell carries a full-datetime tooltip on hover.',
+      'Dashboard: the single-line current-weather chip is replaced with a 5-day Las Vegas forecast. Each day shows day-of-week → weather icon → high/low temp. Cache lifetime bumped to 30 min since daily forecasts don\'t move minute-to-minute.',
+      'Dashboard: upcoming list rows for items happening today now render with a light-yellow background + amber border so the "today" row pops out of the cream stack.',
+    ],
+  },
   {
     version: '4.17',
     date: '2026-05-11',

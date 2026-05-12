@@ -2840,16 +2840,41 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   color: var(--ink-900);
 }
 .dash-date { color: var(--ink-500); font-size: 13px; margin-top: 4px; }
-.dash-weather {
-  display: flex; align-items: center; gap: 8px;
+/* 5-day forecast row beneath the clock. Each day reads day-of-week → icon
+   → high/low temp, vertically. Right-aligned to match the clock block. */
+.dash-forecast {
+  display: flex; gap: 14px;
   justify-content: flex-end;
-  margin-top: 8px;
-  font-size: 14px;
+  margin-top: 10px;
+  font-size: 12px;
   color: var(--ink-700);
 }
-.dash-weather-icon { font-size: 22px; }
-.dash-weather-temp { font-variant-numeric: tabular-nums; font-weight: 600; }
-.dash-weather-desc { color: var(--ink-500); }
+.dash-forecast-loading { padding: 4px 0; }
+.dash-forecast-day {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 2px;
+  min-width: 50px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.5);
+  border: 1px solid var(--ink-100);
+}
+.dash-forecast-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--ink-500);
+  text-transform: uppercase;
+}
+.dash-forecast-icon { font-size: 22px; line-height: 1; }
+.dash-forecast-temps {
+  display: flex; align-items: baseline; gap: 4px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+.dash-forecast-hi { font-weight: 600; color: var(--ink-800); }
+.dash-forecast-sep { color: var(--ink-300); }
+.dash-forecast-lo { color: var(--ink-500); }
 
 .dash-grid {
   display: grid;
@@ -2890,6 +2915,16 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   color: inherit;
 }
 .dash-up-row:hover { background: var(--paper-soft); border-color: var(--ink-200); }
+/* Today's items pop in light yellow so the "happening now" row reads
+   at-a-glance against the cream rows above and below. */
+.dash-up-row.is-today {
+  background: hsl(48 95% 92%);
+  border-color: hsl(45 85% 70%);
+}
+.dash-up-row.is-today:hover {
+  background: hsl(48 95% 88%);
+  border-color: hsl(45 85% 60%);
+}
 .dash-up-date {
   text-align: center;
   color: var(--ink-700);
@@ -3048,7 +3083,7 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   .dash-upcoming, .dash-gifts, .dash-grocery { grid-column: 1; grid-row: auto; }
   .dash-hero { flex-direction: column; align-items: flex-start; }
   .dash-clock { text-align: left; }
-  .dash-weather { justify-content: flex-start; }
+  .dash-forecast { justify-content: flex-start; flex-wrap: wrap; }
 }
 .cal-chip-holiday {
   background: hsl(0 65% 96%);
