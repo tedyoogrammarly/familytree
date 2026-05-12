@@ -594,18 +594,17 @@ code {
   shape-rendering: auto;
   opacity: .95;
 }
-/* Spouse: dotted + heart at midpoint. */
+/* Current spouse: solid + heart at midpoint. */
 .tree-edges .edge.spouse {
   stroke: var(--accent-700);
-  stroke-dasharray: 1 6;
   stroke-linecap: round;
   stroke-width: 2;
   shape-rendering: auto;
   opacity: .9;
 }
-/* Past-marriage line: longer dashes + lower opacity so exes read as muted */
+/* Past-marriage line: dotted + muted opacity so exes read as past. */
 .tree-edges .edge.spouse.ex {
-  stroke-dasharray: 6 6;
+  stroke-dasharray: 1 6;
   opacity: .55;
 }
 /* Sibling: distinct long-dash pattern — visually different from both the bold
@@ -2242,6 +2241,11 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .myfamily-world {
   position: relative;
   margin: 0 auto;
+  /* Scale the whole mini-tree down 10% so larger families don't feel as
+     cramped horizontally. Top-center origin keeps the focus row in the
+     same visual spot. */
+  transform: scale(0.9);
+  transform-origin: 50% 0%;
 }
 .myfamily-edges {
   position: absolute; top: 0; left: 0;

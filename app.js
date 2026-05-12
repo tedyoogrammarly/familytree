@@ -8521,6 +8521,15 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.15',
+    date: '2026-05-11',
+    title: 'Family Tree spouse line solid + ex dotted, My Family zoomed out 10%',
+    changes: [
+      'Family Tree: swapped the line styles between current spouse and ex spouse — current spouse line is now solid (with the heart marker), ex spouse line is dotted + muted opacity.',
+      'My Family: scaled the mini-tree down 10% with a CSS transform so larger families don\'t feel as cramped horizontally. Top-center origin keeps the focus row in place visually.',
+    ],
+  },
+  {
     version: '4.14',
     date: '2026-05-11',
     title: 'Family Tree — new members slot in next to their relative in manual layout',
