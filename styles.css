@@ -586,10 +586,15 @@ code {
   shape-rendering: crispEdges;
   opacity: .6;
 }
+/* Parent → child: bold solid. The thickest, most opaque connector so the
+   "this person descends from" relationship reads at a glance. */
 .tree-edges .edge.family {
-  stroke-width: 2;
-  opacity: .85;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  shape-rendering: auto;
+  opacity: .95;
 }
+/* Spouse: dotted + heart at midpoint. */
 .tree-edges .edge.spouse {
   stroke: var(--accent-700);
   stroke-dasharray: 1 6;
@@ -603,13 +608,15 @@ code {
   stroke-dasharray: 6 6;
   opacity: .55;
 }
+/* Sibling: distinct long-dash pattern — visually different from both the bold
+   solid parent line and the dotted spouse line. */
 .tree-edges .edge.sibling {
   stroke: var(--ink-400);
-  stroke-dasharray: 6 4;
+  stroke-dasharray: 9 5;
   stroke-linecap: round;
-  stroke-width: 1.5;
+  stroke-width: 1.8;
   shape-rendering: auto;
-  opacity: .7;
+  opacity: .75;
 }
 .tree-edges .spouse-heart .heart-fill {
   fill: var(--accent-700);
@@ -1228,7 +1235,11 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
   color: var(--ink-700); font-weight: 600;
 }
 .gifts-rows { display: flex; flex-direction: column; gap: 6px; }
-.gift-row {
+/* Inline mini-gift rows (drawer): the original flex layout. Scoped so the
+   .gift-row class doesn't bleed onto the Gifts table's <tr> elements, which
+   would turn the rows into flex containers and break table column alignment. */
+.gifts-rows .gift-row,
+.gifts-mini .gift-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px;
   padding: 8px 10px;
@@ -1237,8 +1248,10 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
   border: 1px solid var(--ink-100);
   font-size: 13px;
 }
-.gift-row[data-direction="received"] { border-left: 3px solid hsl(145 55% 42%); }
-.gift-row[data-direction="given"]    { border-left: 3px solid hsl(35 80% 50%); }
+.gifts-rows .gift-row[data-direction="received"],
+.gifts-mini .gift-row[data-direction="received"] { border-left: 3px solid hsl(145 55% 42%); }
+.gifts-rows .gift-row[data-direction="given"],
+.gifts-mini .gift-row[data-direction="given"]    { border-left: 3px solid hsl(35 80% 50%); }
 .gift-row-main { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
 .gift-direction {
   font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
@@ -2546,13 +2559,57 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   line-height: 1;
 }
 
+/* ===== Reminder modal — custom recurrence panel =====
+   Shown only when "Custom…" is picked in the Repeats dropdown. Mirrors the
+   compact Google Calendar layout: "Repeat every [N] [unit]" inline, with a
+   row of weekday chips that appears only when the unit is "week". */
+.reminder-custom {
+  margin-top: -2px;
+  padding: 12px 14px;
+  background: var(--paper-soft);
+  border: 1px solid var(--ink-100);
+  border-radius: 10px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.reminder-custom-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.reminder-custom-row input[type="number"] {
+  width: 72px; padding: 8px 10px;
+  border: 1px solid var(--ink-200); border-radius: 8px;
+  font: inherit; background: #fff;
+}
+.reminder-custom-row select {
+  padding: 8px 10px;
+  border: 1px solid var(--ink-200); border-radius: 8px;
+  background: #fff; font: inherit;
+}
+.reminder-custom-days {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.dow-row { display: flex; gap: 6px; }
+.dow-chip { cursor: pointer; }
+.dow-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.dow-chip span {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: #fff; border: 1px solid var(--ink-200);
+  font-size: 12px; font-weight: 600; color: var(--ink-700);
+  user-select: none;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.dow-chip:hover span { border-color: var(--brand-300); }
+.dow-chip input:checked + span {
+  background: var(--brand-700); border-color: var(--brand-700); color: #f7f3ec;
+}
+
 /* ===== History view ===== */
 .history-toolbar { display: flex; align-items: center; gap: 8px; }
 .history-current-version {
   display: inline-block;
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--brand-800);
+  background: var(--brand-700);
   color: #f7f3ec;
   font-size: 12px;
   font-weight: 600;

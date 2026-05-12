@@ -1320,9 +1320,9 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     const m = Store.byId(memberId);
     if (!m) return 0;
     const spouse = m.spouseId && !placed.has(m.spouseId) ? Store.byId(m.spouseId) : null;
-    // Ex-spouses join the cluster as additional slots beside the current
-    // spouse. Each unplaced ex slots in once per anchor. Children of any
-    // marriage hang centered below the whole cluster.
+    // Ex-spouses join the cluster as additional slots beside the anchor.
+    // Each unplaced ex slots in once. Children of any marriage hang centered
+    // below the whole cluster.
     const exes = (m.exSpouseIds || [])
       .filter(eid => !placed.has(eid))
       .map(eid => Store.byId(eid))
@@ -1331,22 +1331,57 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     if (spouse) placed.add(spouse.id);
     exes.forEach(ex => placed.add(ex.id));
 
-    // Partners ordered: current spouse first (closest to anchor), then exes.
-    const partners = [spouse, ...exes].filter(Boolean);
-    const slotCount = 1 + partners.length;
+    // Stack-above rule: when the anchor has BOTH a current spouse AND ex(es),
+    // the current spouse moves onto a vertical heart-line above the anchor and
+    // the ex(es) keep their horizontal slot beside the anchor. Without this,
+    // the current spouse and ex(es) would compete for the same row and one
+    // would end up far from the anchor with no line back. Also catches the
+    // mirror case: when an ex (e.g. Myong) is the layout root, the ex's
+    // current spouse (e.g. Hee → Kimberly) was getting dropped into the
+    // orphan bucket way off to the right.
+    const stackAnchorSpouse = !!(spouse && exes.length);
+    const horizPartners = stackAnchorSpouse ? exes : [spouse, ...exes].filter(Boolean);
+    // Each ex that has its own current spouse (not yet placed) gets that
+    // spouse stacked above the ex card too.
+    const exStacks = []; // { ex, currentSpouse }
+    exes.forEach(ex => {
+      if (ex.spouseId && !placed.has(ex.spouseId)) {
+        const cs = Store.byId(ex.spouseId);
+        if (cs) { placed.add(cs.id); exStacks.push({ ex, currentSpouse: cs }); }
+      }
+    });
 
     // When the cluster is collapsed, treat it as a leaf for layout purposes
     // so the tree compresses around the hidden subtree.
-    const isCollapsed = m.collapsed || partners.some(p => p.collapsed);
+    const isCollapsed = m.collapsed
+      || horizPartners.some(p => p.collapsed)
+      || (stackAnchorSpouse && spouse?.collapsed);
+    // Children include every partner's offspring — horizontal AND stacked.
+    const allKidParents = [spouse, ...exes, ...exStacks.map(s => s.currentSpouse)].filter(Boolean);
     const childIds = isCollapsed ? [] : unique([
       ...(m.childrenIds || []),
-      ...partners.flatMap(p => p.childrenIds || []),
+      ...allKidParents.flatMap(p => p.childrenIds || []),
     ]).filter(cid => !placed.has(cid) && Store.byId(cid));
 
+    const slotCount = 1 + horizPartners.length;
     const coupleSize = slotCount * SIBLING_SIZE + Math.max(0, slotCount - 1) * SIBLING_GAP;
+    // Stacked partners sit one card-depth + small gap above their anchor card
+    // along the depth axis (above in vertical orientation, left in horizontal).
+    const STACK_GAP = 30;
+    const stackAbove = (anchor, partner) => {
+      if (isVertical) {
+        partner.x = anchor.x;
+        partner.y = anchor.y - DEPTH_SIZE - STACK_GAP;
+      } else {
+        partner.y = anchor.y;
+        partner.x = anchor.x - DEPTH_SIZE - STACK_GAP;
+      }
+    };
     const placePartners = (anchorStart) => {
       placeAt(m, anchorStart, depth);
-      partners.forEach((p, i) => placeAt(p, anchorStart + (i + 1) * (SIBLING_SIZE + SIBLING_GAP), depth));
+      horizPartners.forEach((p, i) => placeAt(p, anchorStart + (i + 1) * (SIBLING_SIZE + SIBLING_GAP), depth));
+      if (stackAnchorSpouse && spouse) stackAbove(m, spouse);
+      exStacks.forEach(({ ex, currentSpouse }) => stackAbove(ex, currentSpouse));
     };
 
     if (!childIds.length) {
@@ -1581,9 +1616,19 @@ const Canvas = {
         if (ps.length === 1) {
           anchorX = cx(ps[0]); anchorY = ps[0].y + NODE_H;
         } else if (areSpouses) {
-          const sortedP = ps.slice().sort((a, b) => a.x - b.x);
-          anchorY = Math.max(...ps.map(p => p.y)) + NODE_H * 0.5;
-          anchorX = (sortedP[0].x + NODE_W + sortedP[1].x) / 2;
+          // Stacked couple (same X, different Y): trunk drops from the bottom
+          // edge of the lower card. Otherwise, drop from the midpoint of the
+          // heart-line between the two side-by-side cards.
+          const stacked = Math.abs(ps[0].x - ps[1].x) < 1;
+          if (stacked) {
+            const lower = ps[0].y > ps[1].y ? ps[0] : ps[1];
+            anchorX = lower.x + NODE_W / 2;
+            anchorY = lower.y + NODE_H;
+          } else {
+            const sortedP = ps.slice().sort((a, b) => a.x - b.x);
+            anchorY = Math.max(...ps.map(p => p.y)) + NODE_H * 0.5;
+            anchorX = (sortedP[0].x + NODE_W + sortedP[1].x) / 2;
+          }
         } else {
           anchorY = Math.max(...ps.map(p => p.y)) + NODE_H;
           anchorX = ps.reduce((s, p) => s + cx(p), 0) / ps.length;
@@ -1664,17 +1709,28 @@ const Canvas = {
     const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
     const drawPair = (m, s, divorced) => {
       let mx, my;
-      if (orientation === 'vertical') {
+      // Detect a "stacked" pair: same primary coord, separated by a card-
+      // depth gap. The autoLayout produces these when an anchor has both a
+      // current spouse and an ex — the current spouse gets stacked above.
+      // Regardless of tree orientation, a stacked pair needs a heart-line
+      // along the depth axis instead of the primary axis.
+      const stacked = Math.abs(m.x - s.x) < 1 && Math.abs(m.y - s.y) > NODE_H * 0.6;
+      const cls = divorced ? 'edge spouse ex' : 'edge spouse';
+      if (stacked) {
+        const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
+        const x = top.x + NODE_W / 2;
+        lines.push(`<path class="${cls}" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
+        mx = x;
+        my = (top.y + NODE_H + bot.y) / 2;
+      } else if (orientation === 'vertical') {
         const left = m.x < s.x ? m : s, right = m.x < s.x ? s : m;
         const y = Math.max(left.y, right.y) + NODE_H * 0.5;
-        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
         lines.push(`<path class="${cls}" d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
         mx = (left.x + NODE_W + right.x) / 2;
         my = y;
       } else {
         const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
         const x = Math.max(top.x, bot.x) + NODE_W * 0.5;
-        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
         lines.push(`<path class="${cls}" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
         mx = x;
         my = (top.y + NODE_H + bot.y) / 2;
@@ -2471,18 +2527,17 @@ const MyFamilyView = {
     }
 
     // Collect the cast.
-    // Parents: union of focus.parentIds, anyone whose childrenIds includes
-    // focus (reverse-lookup catches asymmetric data), AND the current spouse
-    // of any parent we found (so a parent's spouse who is also the bio
-    // co-parent shows up even when the data only wired the link one way).
+    // Parents: union of focus.parentIds and anyone whose childrenIds includes
+    // focus (reverse-lookup catches asymmetric data). We deliberately do NOT
+    // inflate this with each parent's current spouse — that previously pulled
+    // step-parents in as bio parents (e.g. Hee's current wife Kimberly showed
+    // up as Ted's mother because Hee was a parent and Hee was married to her).
+    // The parent/child relationship has to come from explicit data, not from
+    // a marriage. healMissingKeys keeps parentIds ↔ childrenIds symmetric on
+    // load, so the reverse-lookup already covers the legit asymmetric case.
     const parentIdSet = new Set(focus.parentIds || []);
     Store.membersList().forEach(o => {
       if ((o.childrenIds || []).includes(focus.id)) parentIdSet.add(o.id);
-    });
-    // Expand: include each parent's current spouse as an inferred co-parent.
-    [...parentIdSet].forEach(pid => {
-      const p = Store.byId(pid);
-      if (p && p.spouseId) parentIdSet.add(p.spouseId);
     });
     const parents = [...parentIdSet].map(id => Store.byId(id)).filter(Boolean);
 
@@ -2655,9 +2710,15 @@ const MyFamilyView = {
 
       // Drop targets along the trunk: focus + every sibling that shares a
       // parent we already drew. Compute their top anchors and stretch the
-      // trunk wide enough to reach all of them.
+      // trunk wide enough to reach every parent AND every drop target.
+      // Including each parent's X covers the divorced-parents case where the
+      // two parents sit far apart with no married-couple midpoint to anchor.
       const dropTops = [focusTop, ...siblings.map(s => ANCHOR_TOP(s.id))];
-      const allX = [midX, ...dropTops.map(t => t.x)];
+      const allX = [
+        midX,
+        ...parentBottoms.map(p => p.x),
+        ...dropTops.map(t => t.x),
+      ];
       const trunkLeft  = Math.min(...allX);
       const trunkRight = Math.max(...allX);
       lines.push(`M ${trunkLeft} ${trunkY} H ${trunkRight}`);
@@ -7459,7 +7520,11 @@ async function init() {
 // -------------------- CALENDAR REMINDERS --------------------
 // Lightweight, recurring "calendar-only" items that never appear on the
 // Events page. Stored in Store.state.reminders[].
-//   id, title, startDate (YYYY-MM-DD), recurrence: none|daily|weekly|monthly|yearly,
+//   id, title, startDate (YYYY-MM-DD),
+//   recurrence: none|daily|weekly|biweekly|monthly|yearly|custom,
+//   customInterval (number, custom only),
+//   customUnit (day|week|month|year, custom only),
+//   customDays (array of 0-6 for Sun..Sat — only used for custom + unit=week),
 //   color (palette key), notes
 function reminderOccursOn(r, iso) {
   if (!r || !r.startDate || !iso) return false;
@@ -7468,14 +7533,61 @@ function reminderOccursOn(r, iso) {
   const start = new Date(r.startDate + 'T00:00:00');
   const day = new Date(iso + 'T00:00:00');
   const diffDays = Math.round((day - start) / 86400000);
+  // Helper: month-difference (calendar months, not 30-day approximation).
+  const monthsBetween = (a, b) =>
+    (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
   switch (r.recurrence) {
-    case 'daily':   return diffDays >= 0;
-    case 'weekly':  return diffDays % 7 === 0;
-    case 'monthly': return start.getDate() === day.getDate();
-    case 'yearly':  return start.getMonth() === day.getMonth() && start.getDate() === day.getDate();
+    case 'daily':    return diffDays >= 0;
+    case 'weekly':   return diffDays % 7 === 0;
+    case 'biweekly': return diffDays % 14 === 0;
+    case 'monthly':  return start.getDate() === day.getDate();
+    case 'yearly':   return start.getMonth() === day.getMonth() && start.getDate() === day.getDate();
+    case 'custom': {
+      const n = Math.max(1, parseInt(r.customInterval, 10) || 1);
+      const unit = r.customUnit || 'day';
+      if (unit === 'day') return diffDays % n === 0;
+      if (unit === 'week') {
+        const days = Array.isArray(r.customDays) ? r.customDays.map(Number) : [];
+        if (days.length) {
+          // Anniversaries on selected weekdays. Pick the start-of-week of the
+          // first occurrence and require: same week-of-N pattern AND today's
+          // weekday is one of the selected days.
+          const weekOfStart = Math.floor(diffDays / 7);
+          if (weekOfStart % n !== 0) return false;
+          return days.includes(day.getDay());
+        }
+        return diffDays % (7 * n) === 0;
+      }
+      if (unit === 'month') {
+        if (start.getDate() !== day.getDate()) return false;
+        return monthsBetween(start, day) % n === 0;
+      }
+      if (unit === 'year') {
+        if (start.getMonth() !== day.getMonth() || start.getDate() !== day.getDate()) return false;
+        return (day.getFullYear() - start.getFullYear()) % n === 0;
+      }
+      return false;
+    }
     case 'none':
     default:        return false;
   }
+}
+
+// Human-readable label for the upcoming list / dashboard sub-line.
+function reminderRecurrenceLabel(r) {
+  if (!r || !r.recurrence || r.recurrence === 'none') return '';
+  if (r.recurrence === 'biweekly') return 'every 2 weeks';
+  if (r.recurrence !== 'custom') return r.recurrence;
+  const n = Math.max(1, parseInt(r.customInterval, 10) || 1);
+  const unit = r.customUnit || 'day';
+  const unitLabel = n === 1 ? unit : `${unit}s`;
+  const base = n === 1 ? `every ${unit}` : `every ${n} ${unitLabel}`;
+  if (unit === 'week' && Array.isArray(r.customDays) && r.customDays.length) {
+    const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const days = r.customDays.slice().sort().map(d => names[d]).join(', ');
+    return `${base} on ${days}`;
+  }
+  return base;
 }
 
 const RemindersModal = {
@@ -7485,6 +7597,18 @@ const RemindersModal = {
     on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
     on($('#reminder-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
     on($('#reminder-delete'), 'click', () => this.delete());
+    // Recurrence change → toggle the custom panel.
+    on($('#reminder-recurrence'), 'change', () => this.syncCustomPanel());
+    // Custom unit change → only "week" exposes the day-of-week chips.
+    on($('#reminder-custom-unit'), 'change', () => this.syncCustomPanel());
+  },
+  syncCustomPanel() {
+    const rec = $('#reminder-recurrence')?.value;
+    const panel = $('#reminder-custom');
+    const dows = $('#reminder-custom-days');
+    if (!panel || !dows) return;
+    panel.hidden = rec !== 'custom';
+    dows.hidden  = !(rec === 'custom' && $('#reminder-custom-unit')?.value === 'week');
   },
   open(editId = null) {
     if (!Auth.isAdmin()) return;
@@ -7500,12 +7624,24 @@ const RemindersModal = {
         f.recurrence.value = r.recurrence || 'none';
         f.color.value = r.color || 'amber';
         f.notes.value = r.notes || '';
+        // Custom recurrence fields: only restored when the saved value is 'custom'.
+        if (r.recurrence === 'custom') {
+          if (f.customInterval) f.customInterval.value = r.customInterval || 1;
+          if (f.customUnit)     f.customUnit.value     = r.customUnit || 'day';
+          const days = Array.isArray(r.customDays) ? r.customDays.map(String) : [];
+          $$('#reminder-custom-days input[name="customDays"]').forEach(cb => {
+            cb.checked = days.includes(cb.value);
+          });
+        }
       }
     } else {
       f.startDate.value = toIsoDate(new Date());
       f.recurrence.value = 'none';
       f.color.value = 'amber';
+      if (f.customInterval) f.customInterval.value = 1;
+      if (f.customUnit)     f.customUnit.value     = 'day';
     }
+    this.syncCustomPanel();
     $('#reminder-modal').setAttribute('aria-hidden', 'false');
     setTimeout(() => f.title.focus(), 30);
   },
@@ -7515,13 +7651,25 @@ const RemindersModal = {
     const fd = new FormData(f);
     const title = (fd.get('title') || '').toString().trim();
     if (!title) { toast('Give your reminder a title.', 'warn'); return; }
+    const recurrence = (fd.get('recurrence') || 'none').toString();
     const data = {
       title,
       startDate: (fd.get('startDate') || '').toString(),
-      recurrence: (fd.get('recurrence') || 'none').toString(),
+      recurrence,
       color: (fd.get('color') || 'amber').toString(),
       notes: (fd.get('notes') || '').toString().trim(),
     };
+    // Custom recurrence: capture interval + unit, and the day-of-week selection
+    // only when the unit is "week" (Google Calendar parity).
+    if (recurrence === 'custom') {
+      data.customInterval = Math.max(1, parseInt(fd.get('customInterval'), 10) || 1);
+      data.customUnit     = (fd.get('customUnit') || 'day').toString();
+      if (data.customUnit === 'week') {
+        data.customDays = fd.getAll('customDays').map(v => parseInt(v, 10)).filter(n => !isNaN(n));
+      } else {
+        data.customDays = [];
+      }
+    }
     Store.state.reminders ||= [];
     if (this.editId) {
       const r = Store.state.reminders.find(x => x.id === this.editId);
@@ -7774,7 +7922,7 @@ const DashboardView = {
       const occs = expandReminder(r, today, horizon);
       occs.forEach(d => items.push({
         date: d, sort: d.getTime(), kind: 'reminder',
-        title: r.title, sub: r.recurrence === 'none' ? '' : `Repeats ${r.recurrence}`, icon: '🔔',
+        title: r.title, sub: r.recurrence === 'none' ? '' : `Repeats ${reminderRecurrenceLabel(r)}`, icon: '🔔',
         onClick: () => { Views.show('calendar'); setTimeout(() => RemindersModal.open(r.id), 60); },
       }));
     });
@@ -7933,6 +8081,22 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.6',
+    date: '2026-05-11',
+    title: 'Family Tree stacked-spouse layout, line-style differentiation, Calendar custom recurrence, Gifts table fix, History chip fix, My Family step-parent fix',
+    changes: [
+      'Family Tree: when an anchor has both a current spouse and an ex-spouse, the current spouse now stacks vertically above the anchor (with a vertical heart-line) while the ex(es) stay beside. Fixes the case where the current spouse was getting dropped into the orphan bucket far to the right with no connector back.',
+      'Family Tree: the same stacking rule applies when an ex is the layout root — that ex\'s current spouse is placed above the ex card, instead of being orphaned.',
+      'Family Tree: parent → child lines are now thicker, rounder, and more opaque; sibling lines use a longer dash pattern. The three relationship types (solid bold = parent, long-dash = sibling, dotted + heart = spouse) read distinctly at a glance.',
+      'Family Tree: family-children trunk now drops from the bottom of the lower card when the parent couple is stacked.',
+      'Calendar: reminder recurrence now supports "Every 2 weeks" and a Google-style custom panel — pick an interval (every N), a unit (day/week/month/year), and for weekly: tap day-of-week chips (M T W T F S S).',
+      'Gifts: removed the .gift-row flex layout from <tr> rows. The class was originally for the inline mini-gift list in the profile drawer; on the Gifts table it was turning each <tr> into a flex container, breaking column alignment between the header and the body. Scoped the flex layout to the inline list only.',
+      'History: current-version chip background was using an undefined --brand-800 CSS variable, so the chip rendered transparent with paper-colored text (invisible). Pointed it at --brand-700 and the chip now shows up correctly.',
+      'My Family: removed the "add each parent\'s current spouse" step from the parents collection. That heuristic was pulling step-parents in as bio parents (Kimberly was showing as Ted/Sarah\'s mother because she\'s Hee\'s current spouse). Parents now come from explicit parentIds + reverse-lookup only.',
+      'My Family: parent-trunk now spans every parent\'s column, not just the first — fixes a gap where the second divorced parent\'s drop-line landed in empty space.',
+    ],
+  },
   {
     version: '4.5',
     date: '2026-05-11',

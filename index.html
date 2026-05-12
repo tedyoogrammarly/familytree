@@ -214,14 +214,40 @@
             </label>
           </div>
           <label class="field"><span>Repeats</span>
-            <select name="recurrence">
+            <select name="recurrence" id="reminder-recurrence">
               <option value="none">Doesn't repeat</option>
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
+              <option value="biweekly">Every 2 weeks</option>
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
+              <option value="custom">Custom…</option>
             </select>
           </label>
+          <div id="reminder-custom" class="reminder-custom" hidden>
+            <div class="reminder-custom-row">
+              <span class="muted small">Repeat every</span>
+              <input name="customInterval" id="reminder-custom-interval" type="number" min="1" max="365" value="1" />
+              <select name="customUnit" id="reminder-custom-unit">
+                <option value="day">day(s)</option>
+                <option value="week">week(s)</option>
+                <option value="month">month(s)</option>
+                <option value="year">year(s)</option>
+              </select>
+            </div>
+            <div class="reminder-custom-days" id="reminder-custom-days" hidden>
+              <span class="muted small">On</span>
+              <div class="dow-row" role="group" aria-label="Days of week">
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="0"/><span>S</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="1"/><span>M</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="2"/><span>T</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="3"/><span>W</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="4"/><span>T</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="5"/><span>F</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="6"/><span>S</span></label>
+              </div>
+            </div>
+          </div>
           <label class="field"><span>Notes</span><textarea name="notes" rows="2"></textarea></label>
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit">Save reminder</button>
