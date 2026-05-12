@@ -1440,7 +1440,19 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
   const roots = realRoots.slice().sort((a, b) => {
     const ra = isAdminFamilyRoot(a) ? 0 : 1;
     const rb = isAdminFamilyRoot(b) ? 0 : 1;
-    return ra - rb;
+    if (ra !== rb) return ra - rb;
+    // Within the admin family group, push roots that contain admin by blood
+    // to the RIGHT so surname-only roots (typically older ancestors that
+    // haven't been wired into the bloodline yet — Bong+Kum, Wonjoon Yoo,
+    // Grandpa/Grandma Yoo) lay out to the LEFT of the admin's direct-chain
+    // root. This keeps the admin near the boundary with the spouse's family
+    // and the admin's wider Yoo cluster to the far left.
+    if (ra === 0) {
+      const ba = rootContainsAdminByBlood(a) ? 1 : 0;
+      const bb = rootContainsAdminByBlood(b) ? 1 : 0;
+      return ba - bb;
+    }
+    return 0;
   });
   let cursor = 0;
   roots.forEach(r => {
@@ -7824,6 +7836,7 @@ const RemindersModal = {
         f.recurrence.value = r.recurrence || 'none';
         f.color.value = r.color || 'amber';
         f.notes.value = r.notes || '';
+        $('#reminder-hide-dashboard').checked = !!r.hideFromDashboard;
         $('#reminder-icon').value = r.icon || '🔔';
         // Custom recurrence fields: only restored when the saved value is 'custom'.
         if (r.recurrence === 'custom') {
@@ -7841,6 +7854,7 @@ const RemindersModal = {
       f.color.value = 'amber';
       if (f.customInterval) f.customInterval.value = 1;
       if (f.customUnit)     f.customUnit.value     = 'day';
+      $('#reminder-hide-dashboard').checked = false;
       $('#reminder-icon').value = '🔔';
     }
     this.syncCustomPanel();
@@ -7861,6 +7875,7 @@ const RemindersModal = {
       color: (fd.get('color') || 'amber').toString(),
       notes: (fd.get('notes') || '').toString().trim(),
       icon: ((fd.get('icon') || '🔔').toString().trim() || '🔔'),
+      hideFromDashboard: !!fd.get('hideFromDashboard'),
     };
     // Custom recurrence: capture interval + unit, and the day-of-week selection
     // only when the unit is "week" (Google Calendar parity).
@@ -8120,8 +8135,12 @@ const DashboardView = {
         onClick: () => { EventsView.selectedId = ev.id; Views.show('events'); },
       });
     });
-    // Reminders — expand each recurring rule into occurrences in the window
+    // Reminders — expand each recurring rule into occurrences in the window.
+    // Reminders marked hideFromDashboard never enter the upcoming list (they
+    // still render on the Calendar). Keeps low-signal recurring chores like
+    // trash day out of the Dashboard hero feed.
     (Store.state.reminders || []).forEach(r => {
+      if (r.hideFromDashboard) return;
       const occs = expandReminder(r, today, horizon);
       occs.forEach(d => items.push({
         date: d, sort: d.getTime(), kind: 'reminder',
@@ -8284,6 +8303,15 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.11',
+    date: '2026-05-11',
+    title: 'Family Tree ancestor roots land left of admin, reminders gain hide-from-Dashboard flag',
+    changes: [
+      'Family Tree: within the admin family group, roots that contain the admin by blood now sort to the RIGHT of surname-only roots. So Bong+Kum, Wonjoon Yoo, and any floating Grandpa/Grandma Yoo roots lay out to the left of Hee Yoo\'s cluster instead of stacking after it. Wiring those ancestor roots in as Hee\'s parents will still consolidate them into a single subtree above Hee.',
+      'Calendar: reminders now have a "Hide from Dashboard" checkbox. Checked reminders still render on the Calendar but never enter the Dashboard upcoming list — useful for low-signal recurring chores like trash day.',
+    ],
+  },
   {
     version: '4.10',
     date: '2026-05-11',
