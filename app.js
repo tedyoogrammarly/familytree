@@ -2605,16 +2605,28 @@ const MyFamilyView = {
       .map(id => Store.byId(id))
       .filter(Boolean);
     // Siblings: anyone sharing a parent with focus (union from both
-    // directions, same defense as the parents calculation above).
+    // directions, same defense as the parents calculation above) PLUS any
+    // child of a visible step-parent. The step-sibling case surfaces
+    // half-siblings that share only one parent — e.g. Heather Grisnik
+    // (Tony + Mimi) shows up in Suejin's view via Tony's childrenIds, and
+    // Jewelia Chang (Mimi only) shows up via her bio mother Mimi being a
+    // step-parent. The actual parent-line routing further down then routes
+    // each kid to their own bio parents only.
     const sibIdSet = new Set();
     parentIdSet.forEach(pid => {
       const p = Store.byId(pid); if (!p) return;
       (p.childrenIds || []).forEach(cid => { if (cid !== focus.id) sibIdSet.add(cid); });
     });
+    stepParents.forEach(sp => {
+      (sp.childrenIds || []).forEach(cid => { if (cid !== focus.id) sibIdSet.add(cid); });
+    });
     Store.membersList().forEach(o => {
-      // Reverse-lookup: if any sibling-claimed parent of focus also lists
-      // someone else as their child, pick that up too.
-      const sharedParents = (o.parentIds || []).some(pid => parentIdSet.has(pid));
+      // Reverse-lookup: if any visible parent (bio OR step) also lists
+      // someone else as their child, pick that up too. Without including
+      // step-parents in this lookup we miss step-siblings when only the
+      // step-parent's side of the link is wired.
+      const sharedParents = (o.parentIds || []).some(pid =>
+        parentIdSet.has(pid) || stepParentIds.has(pid));
       if (sharedParents && o.id !== focus.id) sibIdSet.add(o.id);
     });
     const siblings = [...sibIdSet].map(id => Store.byId(id)).filter(Boolean);
@@ -2768,53 +2780,75 @@ const MyFamilyView = {
     };
 
     const lines = [];
+    const exLines = []; // dashed connectors for ex/divorced heart-lines
     const hearts = [];
 
-    // Parents → focus + siblings: drop from parent-couple midpoint to a
-    // horizontal trunk above the focus row, then drop into the focus AND
-    // each sibling. Siblings hang off the same trunk so the shared-parent
-    // relationship reads at a glance.
-    if (parents.length) {
-      const focusTop = ANCHOR_TOP(focus.id);
-      const parentBottoms = parents.map(p => ANCHOR_BOTTOM(p.id));
-      const couple = parents.length === 2 &&
-        parents[0].spouseId === parents[1].id &&
-        !parents[0].divorced && !parents[1].divorced;
-      const trunkY = focusTop.y - 36;
-      const midX = couple
-        ? (parentBottoms[0].x + parentBottoms[1].x) / 2
-        : parentBottoms[0].x;
-
-      // Vertical down from each parent's bottom
-      parentBottoms.forEach((pb) => {
-        const stopY = couple ? pb.y + 28 : trunkY;
-        lines.push(`M ${pb.x} ${pb.y} V ${stopY}`);
+    // Parents → focus + siblings, routed per-kid. Each kid (focus or sibling)
+    // is grouped by which subset of the visible parents row (bio parents AND
+    // step-parents) is in their own parentIds. Half-siblings naturally fall
+    // into their own group: Heather is grouped under Tony+Mimi, Jewelia is
+    // grouped under Mimi alone, Suejin is grouped under Tony+SuejinMom. Each
+    // group renders its own trunk so no kid gets a parent-line from someone
+    // who isn't actually their bio parent.
+    if (parents.length || stepParents.length) {
+      const adultsInRow = new Set([
+        ...parents.map(p => p.id),
+        ...stepParents.map(p => p.id),
+      ]);
+      const groups = new Map(); // key → { ps: Member[], kids: Member[] }
+      [focus, ...siblings].forEach(k => {
+        const visible = (k.parentIds || []).filter(pid => adultsInRow.has(pid));
+        if (!visible.length) return; // kid with no visible bio parent — skip
+        const key = visible.slice().sort().join('|');
+        if (!groups.has(key)) {
+          groups.set(key, { ps: visible.map(id => Store.byId(id)).filter(Boolean), kids: [] });
+        }
+        groups.get(key).kids.push(k);
       });
 
-      if (couple) {
-        const yLine = parentBottoms[0].y + 28;
-        const x0 = Math.min(parentBottoms[0].x, parentBottoms[1].x);
-        const x1 = Math.max(parentBottoms[0].x, parentBottoms[1].x);
-        lines.push(`M ${x0} ${yLine} H ${x1}`);
-        lines.push(`M ${midX} ${yLine} V ${trunkY}`);
-        hearts.push(heartMarker(midX, yLine, !!parents[0].divorced || !!parents[1].divorced));
-      }
+      groups.forEach(({ ps, kids }) => {
+        if (!ps.length || !kids.length) return;
+        const parentBottoms = ps.map(p => ANCHOR_BOTTOM(p.id));
+        const kidTops = kids.map(k => ANCHOR_TOP(k.id));
+        const trunkY = kidTops[0].y - 36;
+        const couple = ps.length === 2 &&
+          ps[0].spouseId === ps[1].id && !ps[0].divorced && !ps[1].divorced;
 
-      // Drop targets along the trunk: focus + every sibling that shares a
-      // parent we already drew. Compute their top anchors and stretch the
-      // trunk wide enough to reach every parent AND every drop target.
-      // Including each parent's X covers the divorced-parents case where the
-      // two parents sit far apart with no married-couple midpoint to anchor.
-      const dropTops = [focusTop, ...siblings.map(s => ANCHOR_TOP(s.id))];
-      const allX = [
-        midX,
-        ...parentBottoms.map(p => p.x),
-        ...dropTops.map(t => t.x),
-      ];
-      const trunkLeft  = Math.min(...allX);
-      const trunkRight = Math.max(...allX);
-      lines.push(`M ${trunkLeft} ${trunkY} H ${trunkRight}`);
-      dropTops.forEach(t => lines.push(`M ${t.x} ${trunkY} V ${t.y}`));
+        if (couple) {
+          // Two parents currently married → vertical drops to a short
+          // horizontal heart-line, then a single drop to the trunk.
+          const yLine = parentBottoms[0].y + 28;
+          const midX  = (parentBottoms[0].x + parentBottoms[1].x) / 2;
+          const x0 = Math.min(parentBottoms[0].x, parentBottoms[1].x);
+          const x1 = Math.max(parentBottoms[0].x, parentBottoms[1].x);
+          lines.push(`M ${parentBottoms[0].x} ${parentBottoms[0].y} V ${yLine}`);
+          lines.push(`M ${parentBottoms[1].x} ${parentBottoms[1].y} V ${yLine}`);
+          lines.push(`M ${x0} ${yLine} H ${x1}`);
+          lines.push(`M ${midX} ${yLine} V ${trunkY}`);
+          // Heart marker on the couple line — only when both parents are
+          // the focus's bio parents (the "main" parent-couple). Heart
+          // markers between bio + step go through the parent-heart loop
+          // further down so the broken-vs-solid logic stays in one place.
+          if (parentIdSet.has(ps[0].id) && parentIdSet.has(ps[1].id)) {
+            hearts.push(heartMarker(midX, yLine, false));
+          }
+        } else {
+          // Solo / non-currently-married parents drop straight to the trunk.
+          parentBottoms.forEach(pb => {
+            lines.push(`M ${pb.x} ${pb.y} V ${trunkY}`);
+          });
+        }
+
+        // Horizontal trunk that spans every parent and every kid in this
+        // group, plus drops to each kid.
+        const allX = [...parentBottoms.map(p => p.x), ...kidTops.map(t => t.x)];
+        const trunkLeft  = Math.min(...allX);
+        const trunkRight = Math.max(...allX);
+        if (trunkRight - trunkLeft > 0.5) {
+          lines.push(`M ${trunkLeft} ${trunkY} H ${trunkRight}`);
+        }
+        kidTops.forEach(t => lines.push(`M ${t.x} ${trunkY} V ${t.y}`));
+      });
     }
 
     // Heart connectors between adjacent bio parents and step-parents in the
@@ -2831,7 +2865,10 @@ const MyFamilyView = {
       const yLine = ra.y + CH / 2 + shiftY;
       const leftX  = Math.min(ra.x, rb.x) + CW + shiftX;
       const rightX = Math.max(ra.x, rb.x) + shiftX;
-      lines.push(`M ${leftX} ${yLine} H ${rightX}`);
+      const segment = `M ${leftX} ${yLine} H ${rightX}`;
+      // Ex / divorced connector → dashed bucket so CSS picks it up. Solid
+      // (current marriage) connectors stay in the main lines array.
+      (divorced ? exLines : lines).push(segment);
       hearts.push(heartMarker((leftX + rightX) / 2, yLine, divorced));
     };
     // Divorced bio parents.
@@ -2861,7 +2898,7 @@ const MyFamilyView = {
     });
 
     // Focus + each partner: draw a horizontal line + heart between them.
-    // Current spouse → solid heart; ex-spouses → broken heart.
+    // Current spouse → solid heart; ex-spouses → broken heart + dashed line.
     allPartners.forEach(p => {
       const a = rowFor[focus.id];
       const b = rowFor[p.id];
@@ -2869,9 +2906,9 @@ const MyFamilyView = {
       const yLine = a.y + CH / 2 + shiftY;
       const leftX  = Math.min(a.x, b.x) + CW + shiftX;
       const rightX = Math.max(a.x, b.x) + shiftX;
-      lines.push(`M ${leftX} ${yLine} H ${rightX}`);
-      const heartX = (leftX + rightX) / 2;
       const isEx = p.id !== focus.spouseId;
+      (isEx ? exLines : lines).push(`M ${leftX} ${yLine} H ${rightX}`);
+      const heartX = (leftX + rightX) / 2;
       hearts.push(heartMarker(heartX, yLine, isEx));
     });
 
@@ -2977,6 +3014,9 @@ const MyFamilyView = {
     edges.innerHTML = `
       <g class="myfamily-edge-lines">
         ${lines.map(d => `<path d="${d}" />`).join('')}
+      </g>
+      <g class="myfamily-edge-lines myfamily-edge-ex">
+        ${exLines.map(d => `<path d="${d}" />`).join('')}
       </g>
       <g class="myfamily-hearts">
         ${hearts.join('')}
@@ -8244,6 +8284,16 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.10',
+    date: '2026-05-11',
+    title: 'My Family — per-kid parent routing, step-sibling inclusion, dashed ex-connectors',
+    changes: [
+      'My Family: parent → kids lines are now routed per kid based on their actual visible bio parents. Half-siblings only connect to the parent(s) they actually share. In Suejin Chang\'s view, Jewelia Chang now drops only from her bio mother Mimi Morse instead of having a stray line from Tony Chang.',
+      'My Family: step-siblings (children of a step-parent of focus) are now included in the siblings list. Jewelia surfaces in Suejin\'s view because Mimi is a step-parent; the per-kid router then keeps Jewelia connected only to Mimi.',
+      'My Family: ex-couple heart-lines now render dashed (matching the main Family Tree). The dashed treatment applies to broken hearts between divorced bio parents, between a bio parent and an ex step-parent, and between the focus and their own ex-partners.',
+    ],
+  },
   {
     version: '4.9',
     date: '2026-05-11',

@@ -2239,6 +2239,14 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   shape-rendering: crispEdges;
   opacity: .8;
 }
+/* Past-marriage connectors: dashed + muted so a broken-heart link reads
+   visually distinct from a current marriage at a glance. */
+.myfamily-edges .myfamily-edge-ex path {
+  stroke-dasharray: 6 6;
+  stroke-linecap: round;
+  shape-rendering: auto;
+  opacity: .55;
+}
 .myfamily-edges .spouse-heart .heart-fill { fill: var(--accent-700); }
 .myfamily-edges .spouse-heart.broken .heart-fill { fill: var(--ink-400); }
 .myfamily-edges .spouse-heart .heart-crack {
