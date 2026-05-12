@@ -1398,17 +1398,25 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     return (m.exSpouseIds || []).some(eid => hasParents(Store.byId(eid)));
   };
   const realRoots = all.filter(m => !hasParents(m) && !partnerHasParents(m));
-  // Place the admin's own family on the right so the global view treats them
-  // as the focal point of the tree. For each root, walk the subtree (children
-  // + partners + their children) and check whether the logged-in admin is in
-  // there. Roots that don't contain the admin sort first (laid out leftmost);
-  // roots that do contain the admin sort last (rightmost). This keeps Ted's
-  // archive showing Doan's parents on the left and Ted's parents/grandparents
-  // on the right regardless of how members were added.
+  // Place the admin's own family on the LEFT. For each root, check whether
+  // the admin is reachable through children only — that traces the bio
+  // bloodline. We deliberately do NOT walk through spouses past the root
+  // pair, because going Doan → Ted (her spouse) would falsely classify
+  // Doan's parents' subtree as the admin's family (Ted is reached only via
+  // marriage, not blood). A surname fallback covers floating roots that
+  // aren't yet wired to their grandkids — e.g. a Grandpa Yoo who hasn't
+  // been linked as Bong's parent still slots into the Yoo cluster on the
+  // left because his last name matches the admin.
   const adminMemberId = Auth.current && Auth.current !== 'admin-bootstrap' ? Auth.current : null;
-  const rootContainsAdmin = (rootId) => {
+  const adminMember   = adminMemberId ? Store.byId(adminMemberId) : null;
+  const adminLN       = (adminMember?.lastName || '').trim().toLowerCase();
+  const rootContainsAdminByBlood = (root) => {
     if (!adminMemberId) return false;
-    const queue = [rootId];
+    // Start with the root + their current spouse so we pick up the children
+    // of either parent in the couple, but never walk further through any
+    // spouse (which is how marriage-into-the-family was leaking through).
+    const queue = [root.id];
+    if (root.spouseId && Store.byId(root.spouseId)) queue.push(root.spouseId);
     const seen = new Set();
     while (queue.length) {
       const id = queue.shift();
@@ -1418,14 +1426,20 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
       const mm = Store.byId(id);
       if (!mm) continue;
       (mm.childrenIds || []).forEach(cid => queue.push(cid));
-      if (mm.spouseId) queue.push(mm.spouseId);
-      (mm.exSpouseIds || []).forEach(eid => queue.push(eid));
     }
     return false;
   };
+  const isAdminFamilyRoot = (root) => {
+    if (rootContainsAdminByBlood(root)) return true;
+    if (!adminLN) return false;
+    if ((root.lastName || '').trim().toLowerCase() === adminLN) return true;
+    const sp = root.spouseId ? Store.byId(root.spouseId) : null;
+    if (sp && (sp.lastName || '').trim().toLowerCase() === adminLN) return true;
+    return false;
+  };
   const roots = realRoots.slice().sort((a, b) => {
-    const ra = rootContainsAdmin(a.id) ? 1 : 0;
-    const rb = rootContainsAdmin(b.id) ? 1 : 0;
+    const ra = isAdminFamilyRoot(a) ? 0 : 1;
+    const rb = isAdminFamilyRoot(b) ? 0 : 1;
     return ra - rb;
   });
   let cursor = 0;
@@ -8230,6 +8244,16 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.9',
+    date: '2026-05-11',
+    title: 'Family Tree root sort — admin family on the left + bloodline detection fix',
+    changes: [
+      'Family Tree: root sorting now puts the admin\'s own family on the LEFT side of the canvas (was: right). For Ted\'s archive that means the Yoo branch — Bong/Kum, Grandpa/Grandma Yoo, Wonjoon Yoo — clusters on the left and the Nguyen branch (Doan\'s parents) clusters on the right.',
+      'Family Tree: rewrote the "does this root contain the admin" check to walk children only, never spouses. The previous version walked through Doan\'s marriage to Ted, so Doan\'s parents\' subtree was getting classified as admin\'s family too and the sort never separated them.',
+      'Family Tree: added a surname fallback for floating roots that aren\'t wired to the bloodline yet. A standalone Grandpa Yoo or Wonjoon Yoo now lands in the admin\'s cluster (left) because their last name matches the admin\'s. Once you wire them as Bong\'s parents / sibling, they\'ll slot in under the bloodline directly and the surname rule stops mattering for them.',
+    ],
+  },
   {
     version: '4.8',
     date: '2026-05-11',
