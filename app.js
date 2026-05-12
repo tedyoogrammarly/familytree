@@ -566,6 +566,15 @@ const Store = {
       bootstrapAdminMustChange: true,
       view: { scale: 1, tx: 0, ty: 0 },
       orientation: 'vertical',
+      // Tree layout flags:
+      //   manualLayout — user has taken manual control of card positions.
+      //     When true, autoLayout() is a no-op so adding/removing members
+      //     never reshuffles the user's hand-placed cards.
+      //   editLayout — cards are currently draggable. UI toggle in tree
+      //     toolbar (admin only). Setting editLayout true also forces
+      //     manualLayout true so positions are preserved on save.
+      manualLayout: false,
+      editLayout: false,
       theme: { baseHue: 205 },
       events: [],
       gifts: [],
@@ -1296,7 +1305,12 @@ function computeGenerations() {
 
 // Subtree-width-based auto-layout. Each (couple + descendants) takes only as much
 // space as its subtree needs; parents are centered over their combined children.
-function autoLayout(orientation = Store.state.orientation || 'vertical') {
+function autoLayout(orientation = Store.state.orientation || 'vertical', opts = {}) {
+  // When the user has unlocked the tree and placed cards manually, skip
+  // automatic reshuffles. The only callers that may force a re-layout
+  // are the explicit "Auto-arrange" button + orientation toggle, which
+  // pass { force: true } to override.
+  if (Store.state.manualLayout && !opts.force) return;
   const all = Store.membersList();
   if (!all.length) return;
 
@@ -1853,13 +1867,122 @@ const Canvas = {
 
       // Cards are positioned by the layout — clicking opens the drawer.
       // Non-admins cannot open the profile drawer from the tree.
+      // When edit-layout is on (admin unlocked the layout), the card can be
+      // dragged instead. A drag of more than a few pixels suppresses the
+      // click → drawer behaviour so the user can reposition without
+      // accidentally opening profiles.
+      let pressX = 0, pressY = 0, moved = false;
+      node.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.node-add')) return;
+        if (e.target.closest('.node-toggle')) return;
+        if (!Auth.isAdmin()) return;
+        if (!Store.state.editLayout) return;
+        pressX = e.clientX; pressY = e.clientY; moved = false;
+        TreeEditLayout.beginDrag(node, id, e);
+      });
       node.addEventListener('click', (e) => {
         if (e.target.closest('.node-add')) return;
         if (e.target.closest('.node-toggle')) return;
         if (!Auth.isAdmin()) return;
+        // Skip the drawer if the click followed a drag (>4px movement).
+        const dx = Math.abs(e.clientX - pressX), dy = Math.abs(e.clientY - pressY);
+        if (Store.state.editLayout && (moved || dx > 4 || dy > 4)) return;
         Drawer.open(id);
       });
+      // Expose pointer-move tracking to the drag module so it can flip
+      // the local `moved` flag for the click guard above.
+      node._markMoved = () => { moved = true; };
     });
+  },
+};
+
+// Tree edit-layout: lets admins unlock the auto-arranged tree, drag cards
+// to bespoke positions, and lock the result back in. Manual positions are
+// stored on each member's x/y so they survive page reloads + sync, and
+// autoLayout() becomes a no-op until the user clicks Auto-arrange.
+const TreeEditLayout = {
+  init() {
+    this.syncToolbar();
+    on($('#btn-toggle-edit-layout'), 'click', () => {
+      if (!Auth.isAdmin()) return;
+      Store.state.editLayout = !Store.state.editLayout;
+      // Unlocking implies the user is taking manual control. Once they've
+      // dragged anything (or even just unlocked), the auto-arrange should
+      // not re-run on data changes. Locking later keeps the flag on so
+      // their hand-placed positions persist; only the Auto-arrange button
+      // wipes manualLayout back to false.
+      if (Store.state.editLayout) Store.state.manualLayout = true;
+      Store.save();
+      this.syncToolbar();
+      // Re-render so the body class flips + cursor styling updates.
+      document.body.classList.toggle('tree-edit-mode', Store.state.editLayout);
+      Canvas.renderAll();
+      toast(Store.state.editLayout
+        ? 'Layout unlocked — drag cards to reposition. Click the icon again to lock.'
+        : 'Layout locked — manual positions saved.');
+    });
+    document.body.classList.toggle('tree-edit-mode', !!Store.state.editLayout);
+  },
+  syncToolbar() {
+    const btn = $('#btn-toggle-edit-layout'); if (!btn) return;
+    const locked   = $('#edit-layout-icon-locked');
+    const unlocked = $('#edit-layout-icon-unlocked');
+    const on = !!Store.state.editLayout;
+    if (locked)   locked.hidden   = on;
+    if (unlocked) unlocked.hidden = !on;
+    btn.classList.toggle('is-active', on);
+    btn.title = on
+      ? 'Lock layout — finish editing'
+      : 'Unlock layout — drag cards manually';
+  },
+  // Begin a card drag. The pointer is already down (we got here from the
+  // node's pointerdown handler) and the canvas pan listener already skips
+  // events when e.target.closest('.node') matches, so this drag won't fight
+  // the pan/zoom logic.
+  beginDrag(node, id, downEvent) {
+    const member = Store.byId(id); if (!member) return;
+    const startX = downEvent.clientX;
+    const startY = downEvent.clientY;
+    const mStartX = member.x, mStartY = member.y;
+    const scale = Canvas.scale || 1;
+    let rafScheduled = false;
+    let latestEvent = null;
+
+    const flushMove = () => {
+      rafScheduled = false;
+      if (!latestEvent) return;
+      const dx = (latestEvent.clientX - startX) / scale;
+      const dy = (latestEvent.clientY - startY) / scale;
+      member.x = mStartX + dx;
+      member.y = mStartY + dy;
+      // Preserve the existing transform's CSS variables — only swap the
+      // translate piece — so the generation tint vars on .node stay intact.
+      node.style.transform = `translate(${member.x}px, ${member.y}px)`;
+      // Repaint just the SVG edges; nodes don't need re-rendering since we
+      // already updated this card's transform inline.
+      Canvas.renderEdges();
+    };
+
+    const onMove = (e) => {
+      // Flip the click-guard flag once we've moved past the threshold.
+      const dx = Math.abs(e.clientX - startX);
+      const dy = Math.abs(e.clientY - startY);
+      if ((dx > 4 || dy > 4) && node._markMoved) node._markMoved();
+      latestEvent = e;
+      if (!rafScheduled) {
+        rafScheduled = true;
+        requestAnimationFrame(flushMove);
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      Store.save();
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
   },
 };
 
@@ -7128,7 +7251,19 @@ function bindTreeToolbar() {
   on($('#btn-zoom-out'),   'click', () => Canvas.zoomTo(Canvas.scale / 1.2));
   on($('#btn-zoom-reset'), 'click', () => { Canvas.scale = 1; Canvas.tx = 100; Canvas.ty = 60; Canvas.apply(); });
   on($('#btn-fit'),        'click', () => Canvas.fit());
-  on($('#btn-auto-layout'),'click', () => { autoLayout(); Canvas.renderAll(); Canvas.fit(); toast('Tree arranged.'); });
+  on($('#btn-auto-layout'),'click', () => {
+    // Explicit "Auto-arrange" wipes any manual positioning so the tree
+    // returns to the algorithm-driven layout. If the user wants to fine-
+    // tune again, they unlock the layout from the toolbar after.
+    Store.state.manualLayout = false;
+    Store.state.editLayout = false;
+    autoLayout(undefined, { force: true });
+    Canvas.renderAll();
+    Canvas.fit();
+    Store.save();
+    TreeEditLayout.syncToolbar();
+    toast('Tree arranged.');
+  });
   on($('#btn-expand-all'), 'click', () => { expandAll(); autoLayout(); Canvas.renderAll(); Canvas.fit(); toast('All branches expanded.'); });
   on($('#btn-collapse-all'), 'click', () => { collapseAll(); autoLayout(); Canvas.renderAll(); Canvas.fit(); toast('All branches collapsed.'); });
   on($('#btn-orientation'), 'click', () => {
@@ -7691,6 +7826,7 @@ async function init() {
   ChangePasswordModal.init();
   AdminView.init();
   MyFamilyView.init();
+  TreeEditLayout.init();
   LinkFamilyModal.init();
   CropModal.init();
   EventsView.init();
@@ -8317,6 +8453,16 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.13',
+    date: '2026-05-11',
+    title: 'Family Tree — manual layout: unlock to drag cards, lock to save',
+    changes: [
+      'Family Tree: new "Unlock layout" toggle in the toolbar (lock icon next to Auto-arrange). When unlocked, cards become directly draggable — pointerdown on a card and move it; the parent/child/spouse connectors redraw in real-time. Lock the layout again when finished and the positions stick across reloads + sync.',
+      'Family Tree: while the layout is unlocked, autoLayout() becomes a no-op so adding or removing members never reshuffles your hand-placed cards. Locking the layout keeps that protection in place — positions persist. Clicking Auto-arrange wipes the manual flag and returns to the algorithm-driven layout.',
+      'Family Tree: drag-to-reposition uses a 4px movement threshold to distinguish drags from clicks, so quickly tapping a card in edit mode still opens the profile drawer.',
+    ],
+  },
   {
     version: '4.12',
     date: '2026-05-11',

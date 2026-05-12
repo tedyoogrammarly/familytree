@@ -670,6 +670,25 @@ code {
   border-color: var(--brand-700);
   box-shadow: 0 0 0 3px rgba(47, 107, 89, .15), var(--shadow-lift);
 }
+/* Edit-layout mode: cards become directly grab-able. Strip the hover
+   transform so the card doesn't shift under the cursor while dragging,
+   and bump the cursor + outline so it's obvious cards are draggable.
+   The transition on transform is disabled too — animating during a drag
+   would lag behind the pointer and feel unresponsive. */
+body.tree-edit-mode .tree-canvas .node {
+  cursor: grab;
+  transition: box-shadow .2s var(--ease-out), border-color .2s var(--ease-out);
+  outline: 2px dashed rgba(47, 107, 89, .35);
+  outline-offset: 4px;
+}
+body.tree-edit-mode .tree-canvas .node:hover { transform: none; }
+body.tree-edit-mode .tree-canvas .node:active { cursor: grabbing; }
+/* When an admin has unlocked the layout, give the toolbar toggle button
+   an "active" visual so it's clear the tree is in edit mode. */
+#btn-toggle-edit-layout.is-active {
+  background: rgba(47, 107, 89, .14);
+  color: var(--brand-700);
+}
 /* Self indicator: gold star overlayed on the photo's top-left corner. The
    gen-bar is hidden for self cards so the star is the only top-edge marker. */
 .node.is-self .node-gen-bar { display: none; }
