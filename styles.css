@@ -3528,7 +3528,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .bank-type-pill.credit   { background: rgba(220,38,38,.12); color: #7f1d1d; }
 .bank-type-pill.other    { background: var(--ink-100); color: var(--ink-700); }
 
-.vault-card-photos { display: flex; gap: 8px; margin-top: 8px; }
+.vault-card-photos { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
 .vault-card-photo-thumb {
   display: block;
   width: 100px; height: 64px;
@@ -3539,6 +3539,137 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   transition: transform .15s var(--ease-out);
 }
 .vault-card-photo-thumb:hover { transform: scale(1.04); border-color: var(--brand-500); }
+/* Larger card photos in the read-side view so the user can actually
+   read the policy / group numbers on the card without opening the
+   full-size image. Caption tag overlays the bottom edge. */
+.vault-card-photo-large {
+  display: block;
+  position: relative;
+  width: min(360px, 100%);
+  aspect-ratio: 1.586 / 1;
+  border-radius: 8px;
+  border: 1px solid var(--ink-200);
+  background-size: cover; background-position: center;
+  background-color: #fff;
+  cursor: zoom-in;
+  transition: transform .15s var(--ease-out), border-color .15s var(--ease-out);
+  box-shadow: var(--shadow-soft);
+}
+.vault-card-photo-large:hover { transform: scale(1.02); border-color: var(--brand-500); }
+.vault-card-photo-caption {
+  position: absolute;
+  bottom: 6px; left: 6px;
+  background: rgba(19,24,38,.7);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* Compact two-column key/value grid used in Benefits + Utility cards.
+   Each `<div>` is one fact (icon + label + value). */
+.vault-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 16px;
+}
+.vault-info-grid > div { padding: 1px 0; }
+.vault-info-grid strong { color: var(--ink-700); font-weight: 600; }
+
+.vault-row-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--brand-700);
+  margin-bottom: 2px;
+}
+
+/* Multi-holder checkbox grid in the bank-account editor. */
+.vault-holder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 4px 12px;
+}
+.vault-holder-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.vault-holder-check input[type="checkbox"] {
+  width: 16px; height: 16px;
+  appearance: auto;
+  -webkit-appearance: auto;
+  accent-color: var(--brand-700);
+  margin: 0;
+}
+
+/* Balance history block (Finance view + edit). */
+.vault-balance-summary { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--ink-200); }
+.vault-balance-latest { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.vault-balance-label { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-500); }
+.vault-balance-value { font-family: var(--font-display); font-size: 17px; color: #16a34a; font-variant-numeric: tabular-nums; }
+.vault-balance-log { margin-top: 6px; }
+.vault-balance-log summary { cursor: pointer; }
+.vault-balance-table { width: 100%; margin-top: 8px; border-collapse: collapse; }
+.vault-balance-table th, .vault-balance-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--ink-100); font-size: 13px; }
+.vault-balance-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-500); font-weight: 600; background: var(--paper-soft); }
+
+.vault-balance-edit-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.vault-balance-edit-row {
+  display: grid;
+  grid-template-columns: 140px 140px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.vault-balance-edit-row input {
+  appearance: none;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  font-size: 13.5px;
+  font-family: inherit;
+}
+.vault-balance-add-row {
+  display: grid;
+  grid-template-columns: 140px 140px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ink-200);
+}
+.vault-balance-add-row input {
+  appearance: none;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  font-size: 13.5px;
+  font-family: inherit;
+}
+
+/* Weight / length structured-input row */
+.vault-unit-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.vault-unit-row input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.vault-unit-suffix {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-500);
+}
 
 .vault-photo-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .vault-photo-slot {
