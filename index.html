@@ -760,19 +760,19 @@
 
         <div id="drawer-view" class="drawer-body">
           <dl class="kv">
-            <div><dt>Birthday</dt><dd id="kv-birthday">—</dd></div>
-            <div id="kv-dod-row" hidden><dt>Date of death</dt><dd id="kv-dod">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</dt><dd id="kv-birthday">—</dd></div>
+            <div id="kv-dod-row" hidden><dt><span class="kv-emoji" aria-hidden="true">🕊️</span>Date of death</dt><dd id="kv-dod">—</dd></div>
             <div><dt>Life stage</dt><dd id="kv-lifestage">—</dd></div>
-            <div><dt>Email</dt><dd id="kv-email-cell"><span id="kv-email">—</span><button type="button" id="kv-email-copy" class="kv-copy-btn" title="Copy email" hidden>
+            <div><dt><span class="kv-emoji" aria-hidden="true">📧</span>Email</dt><dd id="kv-email-cell"><span id="kv-email">—</span><button type="button" id="kv-email-copy" class="kv-copy-btn" title="Copy email" hidden>
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
               <span>Copy</span>
             </button></dd></div>
-            <div><dt>Phone</dt><dd id="kv-phone">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">📱</span>Phone</dt><dd id="kv-phone">—</dd></div>
             <div><dt>Address</dt><dd id="kv-address-cell"><span id="kv-address">—</span><button type="button" id="kv-address-copy" class="kv-copy-btn" title="Copy address" hidden>
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
               <span>Copy</span>
             </button></dd></div>
-            <div id="kv-anniv-row" hidden><dt>Anniversary</dt><dd id="kv-anniv">—</dd></div>
+            <div id="kv-anniv-row" hidden><dt><span class="kv-emoji" aria-hidden="true">❤️</span>Anniversary</dt><dd id="kv-anniv">—</dd></div>
             <div><dt>Group</dt><dd id="kv-group">—</dd></div>
             <div><dt>Ethnicity</dt><dd id="kv-ethnicity">—</dd></div>
             <div><dt>Role</dt><dd id="kv-role">—</dd></div>
@@ -809,15 +809,19 @@
             <label class="field"><span>Middle name</span><input name="middleName" placeholder="(optional)" /></label>
             <label class="field"><span>Last name *</span><input name="lastName" required /></label>
           </div>
-          <label class="field"><span>Nickname</span><input name="nickname" /></label>
+          <label class="field"><span>Display name <span class="muted small">(optional — defaults to First Middle Last)</span></span><input name="displayName" placeholder="e.g. Teddy" /></label>
           <div class="grid-2">
             <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
             <label class="field"><span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel" /></label>
           </div>
-          <label class="field">
-            <span>Date of death <span class="muted small">(optional — adds an "In loving memory" badge to the profile)</span></span>
-            <input name="dateOfDeath" type="date" />
-          </label>
+          <div class="field">
+            <label class="field-check">
+              <input type="checkbox" id="edit-has-dod" />
+              <span>Deceased</span>
+              <small>Check to record a date of death — adds an "In loving memory" badge to the profile.</small>
+            </label>
+            <input name="dateOfDeath" id="edit-dod" type="date" hidden />
+          </div>
           <label class="field"><span>Email</span><input name="email" type="email" /></label>
           <label class="field">
             <span>529 plan link <span class="muted small">(URL)</span></span>
@@ -841,6 +845,11 @@
               <select name="role"><option value="user">User</option><option value="admin">Admin</option></select>
             </label>
           </div>
+          <label class="field-check" id="edit-group-events-wrap">
+            <input type="checkbox" name="includeInGroupEvents" id="edit-group-events" />
+            <span>Include in group invites</span>
+            <small>When checked, this person is added when an admin picks "+ Add by group…" on an event.</small>
+          </label>
           <label class="field">
             <span>Ethnicity</span>
             <div class="ethnicity-picker" data-picker="edit-ethnicity"></div>
@@ -905,7 +914,7 @@
             <label class="field"><span>Middle name</span><input name="middleName" placeholder="(optional)" /></label>
             <label class="field"><span>Last name *</span><input name="lastName" required /></label>
           </div>
-          <label class="field"><span>Nickname</span><input name="nickname" /></label>
+          <label class="field"><span>Display name <span class="muted small">(optional — defaults to First Middle Last)</span></span><input name="displayName" placeholder="e.g. Teddy" /></label>
           <div class="grid-2">
             <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
             <label class="field"><span>Gender</span>
