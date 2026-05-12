@@ -115,6 +115,31 @@ $$;
 grant execute on function public.claim_first_admin() to authenticated;
 
 -- =============================================================
+-- Last-activity feed for the Members page
+-- =============================================================
+-- Returns each linked account's last sign-in. SECURITY DEFINER so it can
+-- read auth.users (RLS on that table blocks normal access). Body is gated
+-- on public.is_admin() so non-admins get an empty result set — the
+-- Members page is admin-only anyway.
+--
+-- Email is included so the app can fall back to email-matching for
+-- accounts whose member_accounts.member_id is the 'admin-bootstrap'
+-- sentinel rather than a real member id.
+create or replace function public.member_last_seen()
+returns table(member_id text, email text, last_sign_in_at timestamptz)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select ma.member_id, u.email::text, u.last_sign_in_at
+  from public.member_accounts ma
+  join auth.users u on u.id = ma.user_id
+  where public.is_admin();
+$$;
+grant execute on function public.member_last_seen() to authenticated;
+
+-- =============================================================
 -- Real-time
 -- =============================================================
 -- Enable real-time on the archive row so other devices see edits within ~1s.

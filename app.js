@@ -726,16 +726,6 @@ const Auth = {
     }
     const m = Store.byId(mid);
     this.current = m || (Backend.account.is_admin ? 'admin-bootstrap' : null);
-    // Stamp last-seen on the resolved member so the Members page can show
-    // "Last activity". Debounce-y: skip the write if we already stamped
-    // within the last minute to avoid noisy save churn from repeat reloads.
-    if (m) {
-      const now = Date.now();
-      if (!m.lastLoginAt || now - m.lastLoginAt > 60 * 1000) {
-        m.lastLoginAt = now;
-        Store.save();
-      }
-    }
   },
 
   async logout() {
@@ -3304,6 +3294,7 @@ const AdminView = {
   viewMode: 'table',              // 'table' | 'cards' — toggle in Members panel
   nameSort: 'last',               // 'last' | 'first' — toggled by clicking the Name header
   accountIds: null,               // Set<member_id> known to have a Supabase login (populated async)
+  lastSeenById: null,             // Map<member_id, Date> from auth.users.last_sign_in_at (populated async)
   init() {
     on($('#btn-admin-add'), 'click', () => MemberModal.open());
     on($('#btn-admin-export'), 'click', () => this.exportCSV());
@@ -3344,6 +3335,41 @@ const AdminView = {
     }
     if (Views.current === 'admin') this.render();
   },
+
+  // Pull each linked account's last sign-in from auth.users (via the
+  // member_last_seen SECURITY DEFINER RPC — only admins get rows back).
+  // Builds a Map keyed by member_id. For accounts whose member_id is the
+  // 'admin-bootstrap' sentinel, falls back to matching auth-user email
+  // against member.email so the right row still lights up.
+  async refreshLastSeen() {
+    if (!Backend.client) { this.lastSeenById = new Map(); return; }
+    try {
+      const { data, error } = await Backend.client.rpc('member_last_seen');
+      if (error) throw error;
+      const byEmail = new Map();
+      for (const m of Store.membersList()) {
+        if (m.email) byEmail.set(m.email.toLowerCase(), m.id);
+      }
+      const map = new Map();
+      for (const row of (data || [])) {
+        if (!row.last_sign_in_at) continue;
+        let mid = row.member_id;
+        if (!mid || mid === 'admin-bootstrap') {
+          mid = row.email ? byEmail.get(row.email.toLowerCase()) : null;
+        }
+        if (!mid) continue;
+        const next = new Date(row.last_sign_in_at);
+        const prev = map.get(mid);
+        if (!prev || next > prev) map.set(mid, next);
+      }
+      this.lastSeenById = map;
+    } catch (e) {
+      console.warn('refreshLastSeen:', e.message || e);
+      this.lastSeenById = new Map();
+    }
+    if (Views.current === 'admin') this.render();
+  },
+
   setViewMode(mode) {
     if (mode !== 'table' && mode !== 'cards') return;
     if (this.viewMode === mode) return;
@@ -3378,6 +3404,7 @@ const AdminView = {
     // Fire the account-id probe in the background; it'll re-render with checkmarks
     // when ready. First call only — subsequent renders reuse the cached set.
     if (this.accountIds === null) this.refreshAccountIds();
+    if (this.lastSeenById === null) this.refreshLastSeen();
 
     // View-mode segmented control
     $('#btn-admin-view-table')?.classList.toggle('is-active', this.viewMode === 'table');
@@ -3435,6 +3462,7 @@ const AdminView = {
   },
   renderTable(list) {
     const accountIds = this.accountIds; // may be null while pending
+    const lastSeenById = this.lastSeenById; // may be null while pending
     const rows = list.map(m => {
       const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
       const hasLogin = accountIds ? accountIds.has(m.id) : null;
@@ -3444,6 +3472,12 @@ const AdminView = {
             <input type="checkbox" disabled ${hasLogin ? 'checked' : ''} aria-label="Has Supabase login" />
             <span class="muted small">${hasLogin ? 'Yes' : 'No'}</span>
           </span>`;
+      const lastSeen = lastSeenById ? lastSeenById.get(m.id) : null;
+      const lastSeenCell = lastSeenById == null
+        ? '<span class="muted small">…</span>'
+        : (lastSeen
+            ? `<span title="${lastSeen.toLocaleString()}">${formatDate(lastSeen.toISOString().slice(0,10))}</span>`
+            : '<span class="muted">—</span>');
       return `
         <tr data-id="${m.id}">
           <td>
@@ -3458,13 +3492,10 @@ const AdminView = {
           <td>${m.email
             ? `<span class="admin-email-cell"><code>${escape(m.email)}</code><button class="admin-email-copy" type="button" data-action="copy-email" data-email="${escape(m.email)}" title="Copy email"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`
             : '<span class="muted">—</span>'}</td>
-          <td><span class="role-pill ${m.role}">${m.role}</span></td>
           <td>${m.group ? escape(m.group) : '—'}</td>
           <td>${m.birthday ? formatDate(m.birthday) : '—'}</td>
           <td>${loginCell}</td>
-          <td>${m.lastLoginAt
-            ? `<span title="${new Date(m.lastLoginAt).toLocaleString()}">${formatDate(new Date(m.lastLoginAt).toISOString().slice(0,10))}</span>`
-            : '<span class="muted">—</span>'}</td>
+          <td>${lastSeenCell}</td>
           <td style="text-align:right; white-space:nowrap;">
             <button class="btn btn-ghost btn-sm" data-action="edit">Edit</button>
             <button class="btn btn-ghost btn-sm" data-action="reset">Reset PW</button>
@@ -3472,7 +3503,7 @@ const AdminView = {
           </td>
         </tr>`;
     }).join('');
-    $('#admin-rows').innerHTML = rows || `<tr><td colspan="8" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
+    $('#admin-rows').innerHTML = rows || `<tr><td colspan="7" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
 
     $('#admin-rows').querySelectorAll('button[data-action]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -8605,6 +8636,15 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.19',
+    date: '2026-05-12',
+    title: 'Members: drop Role column, "Last activity" now sourced from Supabase auth',
+    changes: [
+      'Members page: removed the Role column. Role is already visible inside each member\'s profile drawer, so the table column was redundant.',
+      'Members page: "Last activity" now reads auth.users.last_sign_in_at directly via a new SECURITY DEFINER RPC (public.member_last_seen). Every member with a linked Supabase login lights up — not just whoever happens to be in the current session. The previous in-archive lastLoginAt stamping (which only ever wrote for the viewer, and silently skipped admin-bootstrap accounts) is gone. Requires a one-time SQL migration: run the member_last_seen block in supabase/schema.sql.',
+    ],
+  },
   {
     version: '4.18',
     date: '2026-05-11',
