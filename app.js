@@ -1331,57 +1331,41 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     if (spouse) placed.add(spouse.id);
     exes.forEach(ex => placed.add(ex.id));
 
-    // Stack-above rule: when the anchor has BOTH a current spouse AND ex(es),
-    // the current spouse moves onto a vertical heart-line above the anchor and
-    // the ex(es) keep their horizontal slot beside the anchor. Without this,
-    // the current spouse and ex(es) would compete for the same row and one
-    // would end up far from the anchor with no line back. Also catches the
-    // mirror case: when an ex (e.g. Myong) is the layout root, the ex's
-    // current spouse (e.g. Hee → Kimberly) was getting dropped into the
-    // orphan bucket way off to the right.
-    const stackAnchorSpouse = !!(spouse && exes.length);
-    const horizPartners = stackAnchorSpouse ? exes : [spouse, ...exes].filter(Boolean);
-    // Each ex that has its own current spouse (not yet placed) gets that
-    // spouse stacked above the ex card too.
-    const exStacks = []; // { ex, currentSpouse }
+    // Cluster ordering: anchor, then anchor's current spouse, then for each
+    // ex we also pull in the ex's current spouse if any (and not yet placed)
+    // and slot her immediately after the ex. This keeps current marriages
+    // visually adjacent on the row regardless of which side of the cluster
+    // is the anchor, and prevents the "Kimberly orphaned far to the right"
+    // case where Hee's current wife got no slot in the cluster because Myong
+    // (Hee's ex) was the layout root.
+    const orderedPartners = [];
+    if (spouse) orderedPartners.push(spouse);
     exes.forEach(ex => {
+      orderedPartners.push(ex);
       if (ex.spouseId && !placed.has(ex.spouseId)) {
         const cs = Store.byId(ex.spouseId);
-        if (cs) { placed.add(cs.id); exStacks.push({ ex, currentSpouse: cs }); }
+        if (cs && !orderedPartners.includes(cs)) {
+          placed.add(cs.id);
+          orderedPartners.push(cs);
+        }
       }
     });
 
     // When the cluster is collapsed, treat it as a leaf for layout purposes
     // so the tree compresses around the hidden subtree.
-    const isCollapsed = m.collapsed
-      || horizPartners.some(p => p.collapsed)
-      || (stackAnchorSpouse && spouse?.collapsed);
-    // Children include every partner's offspring — horizontal AND stacked.
-    const allKidParents = [spouse, ...exes, ...exStacks.map(s => s.currentSpouse)].filter(Boolean);
+    const isCollapsed = m.collapsed || orderedPartners.some(p => p.collapsed);
+    // Children come from anchor + every cluster member's offspring so the
+    // descendant subtree still hangs centered below the whole cluster.
     const childIds = isCollapsed ? [] : unique([
       ...(m.childrenIds || []),
-      ...allKidParents.flatMap(p => p.childrenIds || []),
+      ...orderedPartners.flatMap(p => p.childrenIds || []),
     ]).filter(cid => !placed.has(cid) && Store.byId(cid));
 
-    const slotCount = 1 + horizPartners.length;
+    const slotCount = 1 + orderedPartners.length;
     const coupleSize = slotCount * SIBLING_SIZE + Math.max(0, slotCount - 1) * SIBLING_GAP;
-    // Stacked partners sit one card-depth + small gap above their anchor card
-    // along the depth axis (above in vertical orientation, left in horizontal).
-    const STACK_GAP = 30;
-    const stackAbove = (anchor, partner) => {
-      if (isVertical) {
-        partner.x = anchor.x;
-        partner.y = anchor.y - DEPTH_SIZE - STACK_GAP;
-      } else {
-        partner.y = anchor.y;
-        partner.x = anchor.x - DEPTH_SIZE - STACK_GAP;
-      }
-    };
     const placePartners = (anchorStart) => {
       placeAt(m, anchorStart, depth);
-      horizPartners.forEach((p, i) => placeAt(p, anchorStart + (i + 1) * (SIBLING_SIZE + SIBLING_GAP), depth));
-      if (stackAnchorSpouse && spouse) stackAbove(m, spouse);
-      exStacks.forEach(({ ex, currentSpouse }) => stackAbove(ex, currentSpouse));
+      orderedPartners.forEach((p, i) => placeAt(p, anchorStart + (i + 1) * (SIBLING_SIZE + SIBLING_GAP), depth));
     };
 
     if (!childIds.length) {
@@ -1401,8 +1385,24 @@ function autoLayout(orientation = Store.state.orientation || 'vertical') {
     return span;
   };
 
-  // Roots = members whose parents aren't in the data set
-  const roots = all.filter(m => !(m.parentIds || []).some(pid => Store.byId(pid)));
+  // Roots = top-of-tree ancestors. A member counts as a "starting root" only
+  // if they themselves have no parents AND every spouse / ex of theirs also
+  // has no parents in the dataset. That filter drops ex-spouses (Myong) and
+  // current spouses (Kimberly) that look root-y on their own but actually
+  // belong inside their partner's deeper subtree — letting them be the
+  // layout root scattered Hee's descendants apart from Kum-Bong's. They get
+  // pulled in via the orderedPartners logic below instead.
+  const hasParents = (m) => m && (m.parentIds || []).some(pid => Store.byId(pid));
+  const partnerHasParents = (m) => {
+    if (m.spouseId && hasParents(Store.byId(m.spouseId))) return true;
+    return (m.exSpouseIds || []).some(eid => hasParents(Store.byId(eid)));
+  };
+  const realRoots = all.filter(m => !hasParents(m) && !partnerHasParents(m));
+  // Reverse the iteration order so the most-recently-added root family lands
+  // on the left and earlier families slide right. For Ted's archive this puts
+  // Doan's parents (Nguyen) on the left and Ted's parents/grandparents (Yoo)
+  // on the right, with the Ted+Doan marriage line nearer the visual center.
+  const roots = realRoots.slice().reverse();
   let cursor = 0;
   roots.forEach(r => {
     if (placed.has(r.id)) return;
@@ -1616,19 +1616,9 @@ const Canvas = {
         if (ps.length === 1) {
           anchorX = cx(ps[0]); anchorY = ps[0].y + NODE_H;
         } else if (areSpouses) {
-          // Stacked couple (same X, different Y): trunk drops from the bottom
-          // edge of the lower card. Otherwise, drop from the midpoint of the
-          // heart-line between the two side-by-side cards.
-          const stacked = Math.abs(ps[0].x - ps[1].x) < 1;
-          if (stacked) {
-            const lower = ps[0].y > ps[1].y ? ps[0] : ps[1];
-            anchorX = lower.x + NODE_W / 2;
-            anchorY = lower.y + NODE_H;
-          } else {
-            const sortedP = ps.slice().sort((a, b) => a.x - b.x);
-            anchorY = Math.max(...ps.map(p => p.y)) + NODE_H * 0.5;
-            anchorX = (sortedP[0].x + NODE_W + sortedP[1].x) / 2;
-          }
+          const sortedP = ps.slice().sort((a, b) => a.x - b.x);
+          anchorY = Math.max(...ps.map(p => p.y)) + NODE_H * 0.5;
+          anchorX = (sortedP[0].x + NODE_W + sortedP[1].x) / 2;
         } else {
           anchorY = Math.max(...ps.map(p => p.y)) + NODE_H;
           anchorX = ps.reduce((s, p) => s + cx(p), 0) / ps.length;
@@ -1709,28 +1699,17 @@ const Canvas = {
     const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
     const drawPair = (m, s, divorced) => {
       let mx, my;
-      // Detect a "stacked" pair: same primary coord, separated by a card-
-      // depth gap. The autoLayout produces these when an anchor has both a
-      // current spouse and an ex — the current spouse gets stacked above.
-      // Regardless of tree orientation, a stacked pair needs a heart-line
-      // along the depth axis instead of the primary axis.
-      const stacked = Math.abs(m.x - s.x) < 1 && Math.abs(m.y - s.y) > NODE_H * 0.6;
-      const cls = divorced ? 'edge spouse ex' : 'edge spouse';
-      if (stacked) {
-        const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
-        const x = top.x + NODE_W / 2;
-        lines.push(`<path class="${cls}" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
-        mx = x;
-        my = (top.y + NODE_H + bot.y) / 2;
-      } else if (orientation === 'vertical') {
+      if (orientation === 'vertical') {
         const left = m.x < s.x ? m : s, right = m.x < s.x ? s : m;
         const y = Math.max(left.y, right.y) + NODE_H * 0.5;
+        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
         lines.push(`<path class="${cls}" d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
         mx = (left.x + NODE_W + right.x) / 2;
         my = y;
       } else {
         const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
         const x = Math.max(top.x, bot.x) + NODE_W * 0.5;
+        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
         lines.push(`<path class="${cls}" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
         mx = x;
         my = (top.y + NODE_H + bot.y) / 2;
@@ -2527,19 +2506,45 @@ const MyFamilyView = {
     }
 
     // Collect the cast.
-    // Parents: union of focus.parentIds and anyone whose childrenIds includes
-    // focus (reverse-lookup catches asymmetric data). We deliberately do NOT
-    // inflate this with each parent's current spouse — that previously pulled
-    // step-parents in as bio parents (e.g. Hee's current wife Kimberly showed
-    // up as Ted's mother because Hee was a parent and Hee was married to her).
-    // The parent/child relationship has to come from explicit data, not from
-    // a marriage. healMissingKeys keeps parentIds ↔ childrenIds symmetric on
-    // load, so the reverse-lookup already covers the legit asymmetric case.
+    // Bio parents: union of focus.parentIds and anyone whose childrenIds
+    // includes focus (reverse-lookup catches asymmetric data) PLUS each
+    // such parent's current spouse — but only when that parent has no
+    // ex-spouses. The "no exes" guard is what tells step-parents apart
+    // from bio co-parents:
+    //   - Duc Nguyen has no exes → his current spouse Cuc Tran is almost
+    //     certainly Doan's bio mother (no remarriage to obscure it).
+    //   - Hee Yoo has an ex (Myong) → his current spouse Kimberly is a
+    //     step-parent, not Ted/Sarah's bio mother.
+    // Step-parents (current spouse of a bio parent who DID remarry) are
+    // collected separately below and shown as in-laws in the parents row
+    // without a parent-line down to the focus.
     const parentIdSet = new Set(focus.parentIds || []);
     Store.membersList().forEach(o => {
       if ((o.childrenIds || []).includes(focus.id)) parentIdSet.add(o.id);
     });
+    [...parentIdSet].forEach(pid => {
+      const p = Store.byId(pid);
+      if (p && p.spouseId && !(p.exSpouseIds || []).length) {
+        parentIdSet.add(p.spouseId);
+      }
+    });
     const parents = [...parentIdSet].map(id => Store.byId(id)).filter(Boolean);
+
+    // Step-parents: each bio parent's current spouse who is NOT a bio
+    // parent themselves. These render in the parents row next to their
+    // spouse with a heart connector but no parent-line down to the focus.
+    const stepParentIds = new Set();
+    parents.forEach(p => {
+      if (p.spouseId && !parentIdSet.has(p.spouseId)) stepParentIds.add(p.spouseId);
+    });
+    const stepParents = [...stepParentIds].map(id => Store.byId(id)).filter(Boolean);
+    // stepParentOf[id] → the bio parent whose current spouse this person is.
+    // Used by the layout to interleave them adjacent to their bio-parent
+    // spouse, and by the edge renderer to draw the spouse heart marker.
+    const stepParentOf = {};
+    parents.forEach(p => {
+      if (p.spouseId && stepParentIds.has(p.spouseId)) stepParentOf[p.spouseId] = p.id;
+    });
 
     const spouse  = focus.spouseId ? Store.byId(focus.spouseId) : null;
     const exes    = (focus.exSpouseIds || [])
@@ -2609,7 +2614,23 @@ const MyFamilyView = {
     const Y_CHILDREN = Y_FOCUS + CH + ROW_GAP;
     const Y_GRAND    = Y_CHILDREN + CH + ROW_GAP;
 
-    placeRow(parents, Y_PARENTS);
+    // Parents row interleaves step-parents adjacent to their bio-parent
+    // spouse so the heart connector reads as a couple. A step-parent that
+    // isn't tied to a visible bio parent (rare) just tails on at the end.
+    const parentsRow = [];
+    const seenInParentsRow = new Set();
+    parents.forEach(p => {
+      if (seenInParentsRow.has(p.id)) return;
+      parentsRow.push(p); seenInParentsRow.add(p.id);
+      if (p.spouseId && stepParentIds.has(p.spouseId) && !seenInParentsRow.has(p.spouseId)) {
+        const sp = Store.byId(p.spouseId);
+        if (sp) { parentsRow.push(sp); seenInParentsRow.add(sp.id); }
+      }
+    });
+    stepParents.forEach(sp => {
+      if (!seenInParentsRow.has(sp.id)) { parentsRow.push(sp); seenInParentsRow.add(sp.id); }
+    });
+    placeRow(parentsRow, Y_PARENTS);
     // Focus row: [current spouse, focus, exes..., siblings...]. Current spouse
     // on the left, exes on the right, siblings tailing after exes — all on
     // the same level since they're peers of the focus.
@@ -2635,7 +2656,7 @@ const MyFamilyView = {
     placeRow(grandchildren, Y_GRAND);
 
     // World bounds — compute min/max so we can center the canvas.
-    const all = [focus, ...parents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
+    const all = [focus, ...parents, ...stepParents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
     let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
     all.forEach(m => {
       const p = rowFor[m.id];
@@ -2657,7 +2678,7 @@ const MyFamilyView = {
     world.style.height = `${worldH + padTop * 2}px`;
 
     // -------- nodes --------
-    const renderableMembers = [focus, ...parents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
+    const renderableMembers = [focus, ...parents, ...stepParents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
     nodes.innerHTML = renderableMembers.map(m => {
       const p = rowFor[m.id]; if (!p) return '';
       const html = nodeHTML(m);
@@ -2724,6 +2745,46 @@ const MyFamilyView = {
       lines.push(`M ${trunkLeft} ${trunkY} H ${trunkRight}`);
       dropTops.forEach(t => lines.push(`M ${t.x} ${trunkY} V ${t.y}`));
     }
+
+    // Heart connectors between adjacent bio parents and step-parents in the
+    // parents row. Two cases:
+    //   1. Two bio parents are listed as each other's ex → broken heart
+    //      (e.g. Myong + Hee in Ted's view).
+    //   2. A bio parent + their current spouse who is a step-parent → solid
+    //      heart (e.g. Hee + Kimberly). No parent-line drops from the step
+    //      parent because they aren't a bio parent of the focus.
+    const drawnParentPair = new Set();
+    const parentPairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+    const drawParentHeart = (a, b, divorced) => {
+      const ra = rowFor[a.id], rb = rowFor[b.id]; if (!ra || !rb) return;
+      const yLine = ra.y + CH / 2 + shiftY;
+      const leftX  = Math.min(ra.x, rb.x) + CW + shiftX;
+      const rightX = Math.max(ra.x, rb.x) + shiftX;
+      lines.push(`M ${leftX} ${yLine} H ${rightX}`);
+      hearts.push(heartMarker((leftX + rightX) / 2, yLine, divorced));
+    };
+    // Divorced bio parents.
+    for (let i = 0; i < parents.length; i++) {
+      for (let j = i + 1; j < parents.length; j++) {
+        const a = parents[i], b = parents[j];
+        if ((a.exSpouseIds || []).includes(b.id) || (b.exSpouseIds || []).includes(a.id)) {
+          const key = parentPairKey(a.id, b.id);
+          if (drawnParentPair.has(key)) continue;
+          drawnParentPair.add(key);
+          drawParentHeart(a, b, true);
+        }
+      }
+    }
+    // Bio parent → step-parent (current marriage).
+    stepParents.forEach(sp => {
+      const bioId = stepParentOf[sp.id];
+      const bio = bioId ? Store.byId(bioId) : null;
+      if (!bio) return;
+      const key = parentPairKey(bio.id, sp.id);
+      if (drawnParentPair.has(key)) return;
+      drawnParentPair.add(key);
+      drawParentHeart(bio, sp, false);
+    });
 
     // Focus + each partner: draw a horizontal line + heart between them.
     // Current spouse → solid heart; ex-spouses → broken heart.
@@ -5797,7 +5858,7 @@ const CalendarView = {
       const dayReminders = (Store.state.reminders || []).filter(r => reminderOccursOn(r, iso));
       dayReminders.forEach(r => {
         chips.push(`<button type="button" class="cal-chip cal-chip-reminder" data-reminder-id="${r.id}" title="${escape(r.title)} — click to edit">
-          <span class="cal-chip-icon">🔔</span><span class="cal-chip-text">${escape(r.title)}</span>
+          <span class="cal-chip-icon">${escape(r.icon || '🔔')}</span><span class="cal-chip-text">${escape(r.title)}</span>
         </button>`);
       });
 
@@ -7601,6 +7662,13 @@ const RemindersModal = {
     on($('#reminder-recurrence'), 'change', () => this.syncCustomPanel());
     // Custom unit change → only "week" exposes the day-of-week chips.
     on($('#reminder-custom-unit'), 'change', () => this.syncCustomPanel());
+    // Icon picker: same emoji-input pattern as the Events modal — typing into
+    // the text field is allowed; the browse button opens the EmojiPicker
+    // which writes back the chosen glyph.
+    on($('#reminder-icon-browse'), 'click', (e) => {
+      e.stopPropagation();
+      EmojiPicker.open($('#reminder-icon'), $('#reminder-icon-browse'));
+    });
   },
   syncCustomPanel() {
     const rec = $('#reminder-recurrence')?.value;
@@ -7624,6 +7692,7 @@ const RemindersModal = {
         f.recurrence.value = r.recurrence || 'none';
         f.color.value = r.color || 'amber';
         f.notes.value = r.notes || '';
+        $('#reminder-icon').value = r.icon || '🔔';
         // Custom recurrence fields: only restored when the saved value is 'custom'.
         if (r.recurrence === 'custom') {
           if (f.customInterval) f.customInterval.value = r.customInterval || 1;
@@ -7640,6 +7709,7 @@ const RemindersModal = {
       f.color.value = 'amber';
       if (f.customInterval) f.customInterval.value = 1;
       if (f.customUnit)     f.customUnit.value     = 'day';
+      $('#reminder-icon').value = '🔔';
     }
     this.syncCustomPanel();
     $('#reminder-modal').setAttribute('aria-hidden', 'false');
@@ -7658,6 +7728,7 @@ const RemindersModal = {
       recurrence,
       color: (fd.get('color') || 'amber').toString(),
       notes: (fd.get('notes') || '').toString().trim(),
+      icon: ((fd.get('icon') || '🔔').toString().trim() || '🔔'),
     };
     // Custom recurrence: capture interval + unit, and the day-of-week selection
     // only when the unit is "week" (Google Calendar parity).
@@ -7922,7 +7993,7 @@ const DashboardView = {
       const occs = expandReminder(r, today, horizon);
       occs.forEach(d => items.push({
         date: d, sort: d.getTime(), kind: 'reminder',
-        title: r.title, sub: r.recurrence === 'none' ? '' : `Repeats ${reminderRecurrenceLabel(r)}`, icon: '🔔',
+        title: r.title, sub: r.recurrence === 'none' ? '' : `Repeats ${reminderRecurrenceLabel(r)}`, icon: r.icon || '🔔',
         onClick: () => { Views.show('calendar'); setTimeout(() => RemindersModal.open(r.id), 60); },
       }));
     });
@@ -8081,6 +8152,19 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.7',
+    date: '2026-05-11',
+    title: 'Reminder icons, My Family step-parent display, Family Tree side-by-side spouses + root order',
+    changes: [
+      'Calendar reminders: each reminder now has a customizable icon (defaults to 🔔). The Repeats modal got an Icon field with the same emoji-input + browse button used by Events. The chosen icon shows on the calendar chip and the Dashboard upcoming list.',
+      'My Family: spouse-inferred bio parents are back — but only when the bio parent has no ex-spouses. Doan\'s mother Cuc Tran now appears automatically when viewing Doan, while Ted\'s view still does not falsely list Kimberly as a parent (Hee has an ex).',
+      'My Family: a bio parent\'s current spouse who is not themselves a bio parent now appears as a step-parent in the parents row, with a solid heart connector to their bio-parent spouse and no parent-line down to the focus.',
+      'My Family: divorced bio parents now show a broken heart between them in the parents row, matching how the main Family Tree page renders ex-couples.',
+      'Family Tree: reverted v4.6\'s stacked-spouse layout. Current spouse, anchor, and ex(es) are all side-by-side again. The orphan-prevention behaviour is kept by pulling each ex\'s current spouse into the same cluster row immediately after the ex, so nobody ends up dumped far to the right.',
+      'Family Tree: root iteration now filters to true top-of-tree members (a member with no parents whose spouses and exes also have no parents). Reversed the iteration order so Doan\'s parents (Nguyen) lay out on the left and Ted\'s parents/grandparents (Yoo) on the right, keeping the Ted+Doan marriage near the visual center.',
+    ],
+  },
   {
     version: '4.6',
     date: '2026-05-11',

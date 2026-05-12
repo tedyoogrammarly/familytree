@@ -200,7 +200,18 @@
           </button>
         </header>
         <form id="reminder-form" class="modal-body">
-          <label class="field"><span>Title *</span><input name="title" required maxlength="80" placeholder="Trash day, Bills due, Yoga class…" /></label>
+          <div class="grid-2">
+            <label class="field">
+              <span>Icon</span>
+              <div class="emoji-input">
+                <input name="icon" id="reminder-icon" placeholder="🔔" maxlength="4" value="🔔" />
+                <button type="button" class="emoji-input-browse" id="reminder-icon-browse" data-emoji-trigger title="Browse emojis">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="1.4"/><circle cx="6" cy="7" r=".9" fill="currentColor"/><circle cx="10" cy="7" r=".9" fill="currentColor"/><path d="M5.5 10c.6 1 1.5 1.5 2.5 1.5s1.9-.5 2.5-1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+            </label>
+            <label class="field"><span>Title *</span><input name="title" required maxlength="80" placeholder="Trash day, Bills due, Yoga class…" /></label>
+          </div>
           <div class="grid-2">
             <label class="field"><span>Start date *</span><input name="startDate" type="date" required /></label>
             <label class="field"><span>Color</span>
