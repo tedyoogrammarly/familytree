@@ -993,6 +993,19 @@ body.is-admin .node.is-selected::after {
   box-shadow: 0 0 0 3px rgba(47,107,89,.15);
 }
 .mp-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.mp-show-all {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--ink-200);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--brand-700);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: -0.005em;
+}
+.mp-show-all:hover { border-color: var(--brand-500); background: var(--paper-veil); }
 .mp-option {
   display: flex; align-items: center; gap: 10px;
   padding: 6px 10px;
@@ -1208,12 +1221,12 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
 .drawer-nick { color: rgba(247,243,236,.72); font-style: italic; margin: 4px 0 0; font-size: 14px; }
 .node-memoriam {
   position: absolute;
-  top: -11px; left: 50%;
+  top: -14px; left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
-  padding: 3px 10px;
+  padding: 4px 14px;
   border-radius: 999px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.2;
   letter-spacing: .12em;
   text-transform: uppercase;
@@ -1224,19 +1237,26 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
   font-weight: 600;
   font-family: var(--font-display);
   pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
+.node-memoriam-icon { font-size: 13px; line-height: 1; letter-spacing: 0; }
 .drawer-remembering {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 0 8px;
-  padding: 4px 10px;
+  padding: 4px 12px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: .14em;
   text-transform: uppercase;
   background: rgba(247,243,236,.14);
   color: var(--accent-200);
   border: 1px solid rgba(247,243,236,.2);
 }
+.drawer-remembering::before { content: "🕊️"; font-size: 14px; letter-spacing: 0; }
 .drawer-notes {
   margin: 0;
   white-space: pre-wrap;
@@ -1343,7 +1363,7 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
 }
 .kv-copy-btn:hover { background: #fff; border-color: var(--brand-500); color: var(--brand-900); }
 .kv dt { font-size: 12px; color: var(--ink-500); margin: 0; text-transform: uppercase; letter-spacing: .06em; display: inline-flex; align-items: center; gap: 6px; }
-.kv-emoji { font-size: 13px; line-height: 1; text-transform: none; letter-spacing: 0; }
+.kv-emoji { font-size: 13px; line-height: 1; text-transform: none; letter-spacing: 0; margin-right: 6px; display: inline-block; }
 .kv dd { margin: 0; font-size: 14px; color: var(--ink-900); word-break: break-word; }
 
 .drawer-section { margin-top: 22px; }
@@ -1949,6 +1969,97 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   padding: 8px 16px;
 }
 .gift-total td { background: #fff; padding: 14px 16px; border-top: 2px solid var(--ink-200); }
+
+/* ===== Gifts → Reports dashboard ===== */
+#gift-reports-panel { padding: 20px; }
+.report-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.report-stat {
+  background: var(--paper-soft);
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.report-stat-eyebrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-500); font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.report-stat-num { font-family: var(--font-display); font-size: 30px; line-height: 1.05; color: var(--ink-900); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.report-stat-sub { font-size: 12.5px; color: var(--ink-500); line-height: 1.35; }
+
+.report-section { margin-top: 20px; }
+.report-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ink-200);
+}
+.report-section-head h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 18px;
+  margin: 0;
+  color: var(--ink-900);
+}
+.report-legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-700); }
+.report-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.report-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+
+.report-chart-scroll { overflow-x: auto; padding-bottom: 4px; }
+.report-month-chart { display: block; }
+.report-month-chart .report-bar-label,
+.report-month-chart .report-bar-sublabel {
+  font-size: 11px;
+  fill: var(--ink-500);
+  font-family: inherit;
+  text-transform: capitalize;
+}
+.report-month-chart .report-bar-sublabel { fill: var(--ink-400); font-size: 10.5px; }
+
+.report-two-up {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+.report-list { display: flex; flex-direction: column; gap: 8px; }
+.report-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--paper-soft);
+  border: 1px solid transparent;
+  transition: border-color .15s var(--ease-out), background-color .15s var(--ease-out);
+}
+.report-row[data-report-mid] { cursor: pointer; }
+.report-row[data-report-mid]:hover { border-color: var(--brand-500); background: #fff; }
+.report-row-occasion { grid-template-columns: 1fr auto; }
+.report-row-avatar {
+  width: 32px; height: 32px; border-radius: 999px;
+  background-size: cover; background-position: center;
+  flex-shrink: 0;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--ink-200);
+}
+.report-row-avatar.is-male   { background-color: var(--rose-male-bg, #d4e1ee); }
+.report-row-avatar.is-female { background-color: var(--rose-female-bg, #f1d8d8); }
+.report-row-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.report-row-label { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-row-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-900); white-space: nowrap; }
+.report-bar-wrap { position: relative; height: 6px; background: var(--ink-100, rgba(19,24,38,.06)); border-radius: 999px; overflow: hidden; display: flex; gap: 1px; }
+.report-bar { height: 100%; border-radius: 999px; }
+.report-bar.is-received { background: #c084fc; }
+.report-bar.is-given    { background: #22c55e; }
+.report-bar-stacked .report-bar { flex: 0 0 auto; }
 
 /* event cover, icon picker, expanded attendee table */
 .event-cover {
@@ -2612,6 +2723,11 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   grid-row: 1 / 3;
   margin: 4px 0 0;
   width: 16px; height: 16px;
+  /* Restore the native checkmark — .field input { appearance: none } strips
+     it on checkboxes when this picker lives inside a .field wrapper
+     (e.g. the "Deceased" toggle). */
+  appearance: auto;
+  -webkit-appearance: auto;
   accent-color: var(--brand-700, hsl(163 38% 30%));
 }
 .field-check > span {
