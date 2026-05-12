@@ -704,18 +704,14 @@ const Store = {
       // private fields live under member.private; the household-shared
       // sections live here.
       vault: {
-        banks: [],        // [{ id, bankName, accountNumber, routingNumber, accountType, holderId, notes }]
-        insurances: [],   // [{ id, kind, insurer, memberId, policyNumber, groupNumber, phone, frontPhoto, backPhoto, notes }]
-        utilities: [],    // [{ id, name, website, phone, accountNumber, notes }]
-        hoa: {            // single record
-          name: '', contact: '', title: '', address: '',
-          phone: '', fax: '', website: '', email: '', notes: '',
-        },
-        codes: {          // single record — gate / pool / clubhouse / building access codes
-          pedestrianGate: '', carGate: '', pool: '', clubhouse: '',
-          buildings: [],  // [{ id, label, code }]
-          notes: '',
-        },
+        banks: [],        // [{ id, bankName, nickname, accountNumber, routingNumber, accountType,
+                          //   holderIds[], balanceHistory[{id,date,amount,notes}], notes }]
+        insurances: [],   // [{ id, kind, insurer, memberId, policyNumber, planNumber, groupNumber,
+                          //   naicNumber, effectiveDate, expirationDate, phone,
+                          //   frontPhoto, backPhoto, notes }]
+        utilities: [],    // [{ id, emoji, name, website, phone, accountNumber, notes }]
+        hoas: [],         // [{ id, propertyLabel, name, contact, title, address, phone, fax, website, email, notes }]
+        codeSets: [],     // [{ id, propertyLabel, pedestrianGate, carGate, pool, clubhouse, buildings[], notes }]
       },
       vaultAccessIds: [], // optional extra member ids granted vault access
     };
@@ -775,33 +771,121 @@ const Store = {
           ktn: '',
           rapidRewards: '',
           instagram: '',
-          birth: { place: '', hospital: '', weight: '', length: '', time: '', notes: '' },
+          googleDrive: '',
+          birth: { place: '', hospital: '', weightLbs: '', weightOz: '', lengthIn: '', time: '', notes: '' },
         };
       } else {
         if (!Array.isArray(m.private.driversLicenses)) m.private.driversLicenses = [];
         if (typeof m.private.birth !== 'object' || m.private.birth === null) {
-          m.private.birth = { place: '', hospital: '', weight: '', length: '', time: '', notes: '' };
+          m.private.birth = { place: '', hospital: '', weightLbs: '', weightOz: '', lengthIn: '', time: '', notes: '' };
         }
-        ['passport', 'ktn', 'rapidRewards', 'instagram'].forEach(k => {
+        ['passport', 'ktn', 'rapidRewards', 'instagram', 'googleDrive'].forEach(k => {
           if (m.private[k] === undefined) m.private[k] = '';
         });
-        ['place', 'hospital', 'weight', 'length', 'time', 'notes'].forEach(k => {
+        ['place', 'hospital', 'time', 'notes'].forEach(k => {
           if (m.private.birth[k] === undefined) m.private.birth[k] = '';
         });
+        // v4.23: weight/length structure. Parse legacy free-text "7 lbs 4 oz"
+        // / "20.5 in" strings into structured fields once; drop the originals.
+        const b = m.private.birth;
+        if (b.weightLbs === undefined) b.weightLbs = '';
+        if (b.weightOz  === undefined) b.weightOz  = '';
+        if (b.lengthIn  === undefined) b.lengthIn  = '';
+        if (b.weight && !b.weightLbs && !b.weightOz) {
+          const lbsM = /(\d+(?:\.\d+)?)\s*lb/i.exec(b.weight);
+          const ozM  = /(\d+(?:\.\d+)?)\s*oz/i.exec(b.weight);
+          if (lbsM) b.weightLbs = lbsM[1];
+          if (ozM)  b.weightOz  = ozM[1];
+        }
+        if (b.length && !b.lengthIn) {
+          const inM = /(\d+(?:\.\d+)?)\s*(?:in|inches?|")/i.exec(b.length);
+          if (inM) b.lengthIn = inM[1];
+        }
+        delete b.weight;
+        delete b.length;
       }
     }
-    // v4.22: heal the vault sub-state — defaults() already returns a vault
-    // object, but existing archives won't have it yet. Same for vaultAccessIds.
+    // v4.22+v4.23: heal the vault sub-state — defaults() already returns a vault
+    // object, but existing archives won't have it. v4.23 also migrates the
+    // singletons (vault.hoa, vault.codes) into lists (vault.hoas[], vault.codeSets[]).
     if (!this.state.vault || typeof this.state.vault !== 'object') {
-      this.state.vault = def.vault;
+      this.state.vault = JSON.parse(JSON.stringify(def.vault));
     } else {
       const v = this.state.vault;
       if (!Array.isArray(v.banks)) v.banks = [];
       if (!Array.isArray(v.insurances)) v.insurances = [];
       if (!Array.isArray(v.utilities)) v.utilities = [];
-      if (!v.hoa || typeof v.hoa !== 'object') v.hoa = { ...def.vault.hoa };
-      if (!v.codes || typeof v.codes !== 'object') v.codes = { ...def.vault.codes };
-      if (!Array.isArray(v.codes.buildings)) v.codes.buildings = [];
+
+      // v4.23: banks — single holderId → holderIds[]; new nickname, balanceHistory.
+      v.banks.forEach(b => {
+        if (!Array.isArray(b.holderIds)) {
+          b.holderIds = b.holderId ? [b.holderId] : [];
+        }
+        delete b.holderId;
+        if (b.nickname === undefined) b.nickname = '';
+        if (!Array.isArray(b.balanceHistory)) b.balanceHistory = [];
+        if (b.notes === undefined) b.notes = '';
+      });
+
+      // v4.23: insurances — new fields (plan, NAIC, dates).
+      v.insurances.forEach(i => {
+        ['planNumber', 'naicNumber', 'effectiveDate', 'expirationDate'].forEach(k => {
+          if (i[k] === undefined) i[k] = '';
+        });
+      });
+
+      // v4.23: utilities — new emoji prefix.
+      v.utilities.forEach(u => {
+        if (u.emoji === undefined) u.emoji = '';
+      });
+
+      // v4.23: HOAs/codes: singletons → lists. If the old single record had
+      // any value at all, lift it into the new list under a "Primary"
+      // propertyLabel so the data isn't lost on first load.
+      if (!Array.isArray(v.hoas)) v.hoas = [];
+      if (v.hoa && typeof v.hoa === 'object') {
+        const hasAny = Object.values(v.hoa).some(x => Array.isArray(x) ? x.length : !!x);
+        if (hasAny) {
+          v.hoas.push({
+            id: uid('hoa'),
+            propertyLabel: 'Primary',
+            name: v.hoa.name || '', contact: v.hoa.contact || '',
+            title: v.hoa.title || '', address: v.hoa.address || '',
+            phone: v.hoa.phone || '', fax: v.hoa.fax || '',
+            website: v.hoa.website || '', email: v.hoa.email || '',
+            notes: v.hoa.notes || '',
+          });
+        }
+        delete v.hoa;
+      }
+      v.hoas.forEach(h => {
+        if (!h.id) h.id = uid('hoa');
+        if (h.propertyLabel === undefined) h.propertyLabel = '';
+      });
+
+      if (!Array.isArray(v.codeSets)) v.codeSets = [];
+      if (v.codes && typeof v.codes === 'object') {
+        const hasAny = ['pedestrianGate', 'carGate', 'pool', 'clubhouse', 'notes']
+          .some(k => !!v.codes[k]) || (Array.isArray(v.codes.buildings) && v.codes.buildings.length);
+        if (hasAny) {
+          v.codeSets.push({
+            id: uid('cs'),
+            propertyLabel: 'Primary',
+            pedestrianGate: v.codes.pedestrianGate || '',
+            carGate: v.codes.carGate || '',
+            pool: v.codes.pool || '',
+            clubhouse: v.codes.clubhouse || '',
+            buildings: Array.isArray(v.codes.buildings) ? v.codes.buildings.slice() : [],
+            notes: v.codes.notes || '',
+          });
+        }
+        delete v.codes;
+      }
+      v.codeSets.forEach(cs => {
+        if (!cs.id) cs.id = uid('cs');
+        if (cs.propertyLabel === undefined) cs.propertyLabel = '';
+        if (!Array.isArray(cs.buildings)) cs.buildings = [];
+      });
     }
     if (!Array.isArray(this.state.vaultAccessIds)) this.state.vaultAccessIds = [];
     // Heal asymmetric parent/child links: if A says "B is my parent", make
@@ -9134,6 +9218,18 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.23',
+    date: '2026-05-12',
+    title: 'Admin page polish — Finance multi-holder + balance log, Benefits new fields + larger photos, multi-HOA/codes, structured birth fields',
+    changes: [
+      'Finance: bank accounts now support multiple account holders (checkbox list restricted to nuclear-family members), a Nickname field that renders inline with the bank name ("Chase — Joint checking"), and a Balance history log so a savings account\'s growth can be tracked over time. The account number is now shown in full (no more ••••) — these records are admin-only behind RLS anyway. View card shows the latest balance + an expandable history table.',
+      'Benefits: added Car insurance as a Type option, plus four new fields per card — Plan #, NAIC #, Effective date, Expiration date. Insurance card photos render larger on the read-side view (up to 360px wide at credit-card aspect ratio) with a small caption tag so you can actually read what\'s on the card before clicking through to the full-size image.',
+      'Home: HOA / Property management is now a list — each entry has a Property label (e.g. "Primary home", "Lake house") so multiple HOAs can coexist. Same for Gate / amenity codes — each code set has its own property label. Existing single-record HOAs and codes are auto-migrated into the first entry under the "Primary" label.',
+      'Home: utilities get an emoji prefix field (e.g. ⚡ NV Energy, 🔥 Southwest Gas) shown before the name, and the saved-row layout was reformatted to match the HOA card style — separate lines with emoji-prefixed website/phone/account-# rather than a cramped single line.',
+      'Family: structured birth-detail inputs — Time uses the native time picker, Weight splits into lbs + oz number inputs, Length is inches (number with decimal step). Legacy free-text "7 lbs 4 oz" strings are parsed and migrated automatically. Added a Google Drive URL field (type=url) per member, rendered as a clickable link in the view.',
+    ],
+  },
+  {
     version: '4.22',
     date: '2026-05-12',
     title: 'New Admin (vault) page — household private records: family IDs, bank accounts, insurance cards, utilities, HOA, gate codes',
@@ -9570,15 +9666,29 @@ const VaultView = {
     rows.push(['🎁', 'Rapid Rewards', p.rapidRewards || '—']);
     rows.push(['📸', 'Instagram', p.instagram ? `@${p.instagram.replace(/^@/, '')}` : '—']);
     const b = p.birth || {};
+    const formatTime = (t) => {
+      if (!t) return '';
+      const m = /^(\d{2}):(\d{2})$/.exec(t);
+      if (!m) return t;
+      let h = +m[1]; const mm = m[2];
+      const ap = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${h}:${mm} ${ap}`;
+    };
+    const weightStr = b.weightLbs || b.weightOz ? `${b.weightLbs || 0} lbs ${b.weightOz || 0} oz` : '';
+    const lengthStr = b.lengthIn ? `${b.lengthIn}"` : '';
     const bits = [
       b.place    && `📍 ${b.place}`,
       b.hospital && `🏥 ${b.hospital}`,
-      b.time     && `🕐 ${b.time}`,
-      b.weight   && `⚖️ ${b.weight}`,
-      b.length   && `📏 ${b.length}`,
+      b.time     && `🕐 ${formatTime(b.time)}`,
+      weightStr  && `⚖️ ${weightStr}`,
+      lengthStr  && `📏 ${lengthStr}`,
     ].filter(Boolean);
     const birthValue = bits.length || b.notes
       ? `<div class="vault-birth">${bits.map(x => `<span>${escape(x)}</span>`).join('')}${b.notes ? `<div class="muted small" style="margin-top:6px;">${escape(b.notes)}</div>` : ''}</div>`
+      : '—';
+    const gdriveValue = p.googleDrive
+      ? `<a href="${escape(p.googleDrive)}" target="_blank" rel="noopener">${escape(p.googleDrive)}</a>`
       : '—';
     return `<dl class="vault-kv">
       ${rows.map(([emoji, label, value]) => `
@@ -9587,6 +9697,10 @@ const VaultView = {
           <dd>${escape(value)}</dd>
         </div>`).join('')}
       <div>
+        <dt><span class="kv-emoji" aria-hidden="true">💾</span>Google Drive</dt>
+        <dd>${gdriveValue}</dd>
+      </div>
+      <div style="grid-column: 1 / -1;">
         <dt><span class="kv-emoji" aria-hidden="true">👶</span>Birth details</dt>
         <dd>${birthValue}</dd>
       </div>
@@ -9654,6 +9768,10 @@ const VaultView = {
           <span class="vault-edit-label">📸 Instagram</span>
           <input name="instagram" placeholder="username (no @)" value="${escape(p.instagram)}" />
         </label>
+        <label class="vault-edit-field" style="grid-column: 1 / -1;">
+          <span class="vault-edit-label">💾 Google Drive</span>
+          <input name="googleDrive" type="url" placeholder="https://drive.google.com/…" value="${escape(p.googleDrive || '')}" />
+        </label>
       </div>
       <fieldset class="vault-edit-fieldset">
         <legend>👶 Birth details</legend>
@@ -9668,15 +9786,23 @@ const VaultView = {
           </label>
           <label class="vault-edit-field">
             <span class="vault-edit-label">Time of birth</span>
-            <input name="birth-time" placeholder="08:05 AM" value="${escape(b.time)}" />
+            <input name="birth-time" type="time" value="${escape(b.time)}" />
           </label>
           <label class="vault-edit-field">
             <span class="vault-edit-label">Weight</span>
-            <input name="birth-weight" placeholder="7 lbs 4 oz" value="${escape(b.weight)}" />
+            <div class="vault-unit-row">
+              <input name="birth-weight-lbs" type="number" min="0" step="1" placeholder="0" value="${escape(b.weightLbs || '')}" />
+              <span class="vault-unit-suffix">lbs</span>
+              <input name="birth-weight-oz" type="number" min="0" max="15.9" step="0.1" placeholder="0" value="${escape(b.weightOz || '')}" />
+              <span class="vault-unit-suffix">oz</span>
+            </div>
           </label>
           <label class="vault-edit-field">
             <span class="vault-edit-label">Length</span>
-            <input name="birth-length" placeholder='20"' value="${escape(b.length)}" />
+            <div class="vault-unit-row">
+              <input name="birth-length-in" type="number" min="0" max="100" step="0.25" placeholder="0" value="${escape(b.lengthIn || '')}" />
+              <span class="vault-unit-suffix">in</span>
+            </div>
           </label>
           <label class="vault-edit-field" style="grid-column: 1 / -1;">
             <span class="vault-edit-label">Notes</span>
@@ -9709,13 +9835,15 @@ const VaultView = {
       ktn: v('ktn'),
       rapidRewards: v('rapidRewards'),
       instagram: v('instagram').replace(/^@/, ''),
+      googleDrive: v('googleDrive'),
       birth: {
-        place:    v('birth-place'),
-        hospital: v('birth-hospital'),
-        time:     v('birth-time'),
-        weight:   v('birth-weight'),
-        length:   v('birth-length'),
-        notes:    v('birth-notes'),
+        place:     v('birth-place'),
+        hospital:  v('birth-hospital'),
+        time:      v('birth-time'),
+        weightLbs: v('birth-weight-lbs'),
+        weightOz:  v('birth-weight-oz'),
+        lengthIn:  v('birth-length-in'),
+        notes:     v('birth-notes'),
       },
     };
     Store.save();
@@ -9724,77 +9852,186 @@ const VaultView = {
   },
 
   // ---------------- Finance section ----------------
+  // Currency formatter for balance entries. Tabular-num font in CSS keeps
+  // the column aligned regardless of value width.
+  fmtMoney(n) {
+    const num = parseFloat(n);
+    if (!isFinite(num)) return '';
+    return num.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+  },
+
   renderFinance() {
     const host = $('#vault-finance');
     const banks = Store.state.vault.banks;
-    const memberOptions = (selectedId) => {
-      const opts = ['<option value="">(unassigned / joint)</option>',
-        ...sortMembers(Store.membersList()).map(m =>
-          `<option value="${m.id}" ${m.id === selectedId ? 'selected' : ''}>${escape(displayName(m))}</option>`)
-      ];
-      return opts.join('');
-    };
-    const last4 = (n) => {
-      const s = (n || '').replace(/\D/g, '');
-      return s ? `••••${s.slice(-4)}` : '';
-    };
+    const householdMembers = this.householdIds()
+      .map(id => Store.byId(id))
+      .filter(Boolean);
     host.innerHTML = `
       <header class="vault-section-head">
         <h3>💳 Bank accounts</h3>
         <button class="btn btn-primary btn-sm" data-action="add-bank">+ Add bank account</button>
       </header>
       ${banks.length ? `<div class="vault-list">
-        ${banks.map(b => `
-          <div class="vault-row" data-bid="${b.id}">
-            <div class="vault-row-view" data-role="view">
-              <div class="vault-row-main">
-                <div class="vault-row-title">${escape(b.bankName || 'Unnamed bank')}</div>
-                <div class="vault-row-sub muted small">
-                  ${b.accountType ? `<span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span>` : ''}
-                  ${last4(b.accountNumber) ? `Acct ${last4(b.accountNumber)}` : ''}
-                  ${b.routingNumber ? ` · Routing ${escape(b.routingNumber)}` : ''}
-                  ${b.holderId && Store.byId(b.holderId) ? ` · ${escape(displayName(Store.byId(b.holderId)))}` : ''}
-                </div>
-                ${b.notes ? `<div class="muted small" style="margin-top:4px;">${escape(b.notes)}</div>` : ''}
-              </div>
-              <div class="vault-row-actions">
-                <button class="btn btn-ghost btn-sm" data-action="edit-bank">Edit</button>
-                <button class="btn btn-danger-ghost btn-sm" data-action="delete-bank">Delete</button>
-              </div>
-            </div>
-            <form class="vault-row-edit" data-role="edit" hidden>
-              <div class="vault-edit-grid">
-                <label class="vault-edit-field"><span class="vault-edit-label">Bank name</span><input name="bankName" value="${escape(b.bankName || '')}" /></label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Account type</span>
-                  <select name="accountType">
-                    <option value="checking" ${b.accountType === 'checking' ? 'selected' : ''}>Checking</option>
-                    <option value="savings"  ${b.accountType === 'savings'  ? 'selected' : ''}>Savings</option>
-                    <option value="credit"   ${b.accountType === 'credit'   ? 'selected' : ''}>Credit card</option>
-                    <option value="other"    ${b.accountType === 'other'    ? 'selected' : ''}>Other</option>
-                  </select>
-                </label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Account number</span><input name="accountNumber" value="${escape(b.accountNumber || '')}" /></label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Routing number</span><input name="routingNumber" value="${escape(b.routingNumber || '')}" /></label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Account holder</span><select name="holderId">${memberOptions(b.holderId)}</select></label>
-                <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(b.notes || '')}</textarea></label>
-              </div>
-              <div class="vault-edit-actions">
-                <button class="btn btn-primary btn-sm" type="button" data-action="save-bank">Save</button>
-                <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-bank">Cancel</button>
-              </div>
-            </form>
-          </div>`).join('')}
+        ${banks.map(b => this.renderBankRow(b, householdMembers)).join('')}
       </div>` : '<p class="muted" style="padding:24px; text-align:center;">No bank accounts yet. Click + Add bank account to start.</p>'}
     `;
     on(host.querySelector('[data-action=add-bank]'), 'click', () => this.addBank());
     host.querySelectorAll('.vault-row').forEach(row => this.wireBankRow(row));
   },
 
+  // Bank row view + edit form. The "title" is "Bank — Nickname" so a single
+  // glance distinguishes "Chase — Joint checking" from "Chase — Olive's 529".
+  renderBankRow(b, householdMembers) {
+    const holderNames = (b.holderIds || [])
+      .map(id => Store.byId(id))
+      .filter(Boolean)
+      .map(m => displayName(m));
+    const title = b.bankName
+      ? (b.nickname ? `${b.bankName} — ${b.nickname}` : b.bankName)
+      : 'Unnamed bank';
+    const historyView = this.renderBalanceHistoryView(b);
+    const historyEdit = this.renderBalanceHistoryEdit(b);
+    return `
+      <div class="vault-row" data-bid="${b.id}">
+        <div class="vault-row-view" data-role="view">
+          <div class="vault-row-main">
+            <div class="vault-row-title">${escape(title)}</div>
+            <div class="vault-row-sub muted small">
+              ${b.accountType ? `<span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span>` : ''}
+              ${b.accountNumber ? `Acct ${escape(b.accountNumber)}` : ''}
+              ${b.routingNumber ? ` · Routing ${escape(b.routingNumber)}` : ''}
+              ${holderNames.length ? ` · ${escape(holderNames.join(', '))}` : ''}
+            </div>
+            ${b.notes ? `<div class="muted small" style="margin-top:4px;">${escape(b.notes)}</div>` : ''}
+            ${historyView}
+          </div>
+          <div class="vault-row-actions">
+            <button class="btn btn-ghost btn-sm" data-action="edit-bank">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" data-action="delete-bank">Delete</button>
+          </div>
+        </div>
+        <form class="vault-row-edit" data-role="edit" hidden>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">Bank name</span><input name="bankName" value="${escape(b.bankName || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Nickname <span class="muted small">(optional)</span></span><input name="nickname" placeholder="e.g. Joint checking" value="${escape(b.nickname || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Account type</span>
+              <select name="accountType">
+                <option value="checking" ${b.accountType === 'checking' ? 'selected' : ''}>Checking</option>
+                <option value="savings"  ${b.accountType === 'savings'  ? 'selected' : ''}>Savings</option>
+                <option value="credit"   ${b.accountType === 'credit'   ? 'selected' : ''}>Credit card</option>
+                <option value="other"    ${b.accountType === 'other'    ? 'selected' : ''}>Other</option>
+              </select>
+            </label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Account number</span><input name="accountNumber" value="${escape(b.accountNumber || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Routing number</span><input name="routingNumber" value="${escape(b.routingNumber || '')}" /></label>
+          </div>
+          <fieldset class="vault-edit-fieldset">
+            <legend>Account holder(s) <span class="muted small">— pick one or more</span></legend>
+            ${householdMembers.length
+              ? `<div class="vault-holder-grid">
+                  ${householdMembers.map(m => `
+                    <label class="vault-holder-check">
+                      <input type="checkbox" name="holderIds" value="${m.id}" ${(b.holderIds || []).includes(m.id) ? 'checked' : ''} />
+                      <span>${escape(displayName(m))}</span>
+                    </label>`).join('')}
+                </div>`
+              : '<p class="muted small" style="margin:0;">No nuclear-family members resolved yet. Save without a holder for now.</p>'}
+          </fieldset>
+          <label class="vault-edit-field"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(b.notes || '')}</textarea></label>
+          ${historyEdit}
+          <div class="vault-edit-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-action="save-bank">Save</button>
+            <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-bank">Cancel</button>
+          </div>
+        </form>
+      </div>`;
+  },
+
+  // Read-side balance history. Always shows the latest entry inline; the
+  // full list is collapsed behind a <details> so old entries don't dominate
+  // a tall stack of accounts.
+  renderBalanceHistoryView(b) {
+    const entries = [...(b.balanceHistory || [])].sort((a, z) => (z.date || '').localeCompare(a.date || ''));
+    if (!entries.length) return '';
+    const latest = entries[0];
+    return `
+      <div class="vault-balance-summary">
+        <div class="vault-balance-latest">
+          <span class="vault-balance-label">Latest balance:</span>
+          <strong class="vault-balance-value">${escape(this.fmtMoney(latest.amount))}</strong>
+          <span class="muted small">as of ${escape(latest.date ? formatDate(latest.date) : '—')}</span>
+        </div>
+        ${entries.length > 1 ? `<details class="vault-balance-log">
+          <summary class="muted small">View history (${entries.length} entries)</summary>
+          <table class="vault-balance-table">
+            <thead><tr><th>Date</th><th>Amount</th><th>Notes</th></tr></thead>
+            <tbody>
+              ${entries.map(e => `<tr>
+                <td>${escape(e.date ? formatDate(e.date) : '—')}</td>
+                <td class="vault-balance-value">${escape(this.fmtMoney(e.amount))}</td>
+                <td class="muted small">${escape(e.notes || '')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </details>` : ''}
+      </div>`;
+  },
+
+  // Edit-side balance history. Each existing entry is its own row with a
+  // remove button; the "Add entry" form at the bottom appends a fresh row
+  // without a save round-trip (so the user can queue several before hitting
+  // Save on the parent bank form).
+  renderBalanceHistoryEdit(b) {
+    const entries = [...(b.balanceHistory || [])].sort((a, z) => (z.date || '').localeCompare(a.date || ''));
+    return `
+      <fieldset class="vault-edit-fieldset">
+        <legend>📈 Balance history</legend>
+        <div data-role="balance-list" class="vault-balance-edit-list">
+          ${entries.map(e => this.renderBalanceEditRow(e)).join('')}
+        </div>
+        <div class="vault-balance-add-row">
+          <input type="date" data-role="new-balance-date" />
+          <input type="number" step="0.01" placeholder="$ Amount" data-role="new-balance-amount" />
+          <input type="text"  placeholder="Notes (optional)"     data-role="new-balance-notes" />
+          <button type="button" class="btn btn-secondary btn-sm" data-action="add-balance-entry">+ Add</button>
+        </div>
+      </fieldset>`;
+  },
+
+  renderBalanceEditRow(e) {
+    return `<div class="vault-balance-edit-row" data-eid="${e.id}">
+      <input type="date" name="be-date"   value="${escape(e.date || '')}" />
+      <input type="number" step="0.01" name="be-amount" value="${escape(e.amount || '')}" placeholder="0.00" />
+      <input type="text"  name="be-notes" value="${escape(e.notes || '')}" placeholder="Notes" />
+      <button type="button" class="btn btn-ghost btn-sm vault-row-remove" data-action="remove-balance-entry" aria-label="Remove">×</button>
+    </div>`;
+  },
+
+  wireBalanceList(form) {
+    const list = form.querySelector('[data-role=balance-list]');
+    if (!list) return;
+    list.querySelectorAll('[data-action=remove-balance-entry]').forEach(btn => {
+      btn.onclick = () => btn.closest('.vault-balance-edit-row').remove();
+    });
+    const addBtn = form.querySelector('[data-action=add-balance-entry]');
+    on(addBtn, 'click', () => {
+      const date    = form.querySelector('[data-role=new-balance-date]').value;
+      const amount  = form.querySelector('[data-role=new-balance-amount]').value;
+      const notes   = form.querySelector('[data-role=new-balance-notes]').value;
+      if (!date && !amount) { toast('Enter a date or amount.', 'warn'); return; }
+      list.insertAdjacentHTML('afterbegin', this.renderBalanceEditRow({ id: uid('be'), date, amount, notes }));
+      form.querySelector('[data-role=new-balance-date]').value = '';
+      form.querySelector('[data-role=new-balance-amount]').value = '';
+      form.querySelector('[data-role=new-balance-notes]').value = '';
+      this.wireBalanceList(form);
+    });
+  },
+
   wireBankRow(row) {
     const bid = row.dataset.bid;
     const view = row.querySelector('[data-role=view]');
     const edit = row.querySelector('[data-role=edit]');
-    on(row.querySelector('[data-action=edit-bank]'),    'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=edit-bank]'),    'click', () => { view.hidden = true; edit.hidden = false; this.wireBalanceList(edit); });
     on(row.querySelector('[data-action=cancel-bank]'),  'click', () => { view.hidden = false; edit.hidden = true; });
     on(row.querySelector('[data-action=save-bank]'),    'click', () => this.saveBank(bid));
     on(row.querySelector('[data-action=delete-bank]'),  'click', () => this.deleteBank(bid));
@@ -9804,8 +10041,8 @@ const VaultView = {
     if (!Auth.canAccessVault()) return;
     Store.state.vault.banks.push({
       id: uid('bank'),
-      bankName: '', accountNumber: '', routingNumber: '',
-      accountType: 'checking', holderId: '', notes: '',
+      bankName: '', nickname: '', accountNumber: '', routingNumber: '',
+      accountType: 'checking', holderIds: [], balanceHistory: [], notes: '',
     });
     Store.save();
     this.renderFinance();
@@ -9821,11 +10058,21 @@ const VaultView = {
     const row = document.querySelector(`.vault-row[data-bid="${bid}"]`);
     const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
     b.bankName      = v('bankName');
+    b.nickname      = v('nickname');
     b.accountType   = v('accountType') || 'checking';
     b.accountNumber = v('accountNumber');
     b.routingNumber = v('routingNumber');
-    b.holderId      = v('holderId');
+    b.holderIds     = [...row.querySelectorAll('input[name="holderIds"]:checked')].map(i => i.value);
     b.notes         = v('notes');
+    // Collect balance history rows. Skip blank rows so accidental "+ Add"
+    // clicks with no values don't leave noise behind.
+    const eids   = [...row.querySelectorAll('.vault-balance-edit-row')];
+    b.balanceHistory = eids.map(rw => ({
+      id:     rw.dataset.eid || uid('be'),
+      date:   rw.querySelector('input[name="be-date"]').value,
+      amount: rw.querySelector('input[name="be-amount"]').value,
+      notes:  rw.querySelector('input[name="be-notes"]').value.trim(),
+    })).filter(e => e.date || e.amount || e.notes);
     Store.save();
     toast('Bank account saved.');
     this.renderFinance();
@@ -9851,7 +10098,8 @@ const VaultView = {
       ];
       return opts.join('');
     };
-    const kindIcon = { health: '🩺', dental: '🦷', vision: '👓', other: '📄' };
+    const kindIcon = { health: '🩺', dental: '🦷', vision: '👓', car: '🚗', other: '📄' };
+    const kindLabel = { health: 'Health', dental: 'Dental', vision: 'Vision', car: 'Car insurance', other: 'Other' };
     host.innerHTML = `
       <header class="vault-section-head">
         <h3>🩺 Insurance &amp; benefits</h3>
@@ -9862,17 +10110,21 @@ const VaultView = {
           <div class="vault-row vault-row-ins" data-iid="${i.id}">
             <div class="vault-row-view" data-role="view">
               <div class="vault-row-main">
-                <div class="vault-row-title">${kindIcon[i.kind] || '📄'} ${escape(i.insurer || 'Unnamed plan')} <span class="muted small">· ${capitalize(i.kind || 'other')}</span></div>
-                <div class="vault-row-sub muted small">
-                  ${i.policyNumber ? `Policy ${escape(i.policyNumber)}` : ''}
-                  ${i.groupNumber  ? ` · Group ${escape(i.groupNumber)}` : ''}
-                  ${i.phone        ? ` · ${escape(i.phone)}` : ''}
-                  ${i.memberId && Store.byId(i.memberId) ? ` · ${escape(displayName(Store.byId(i.memberId)))}` : ''}
+                <div class="vault-row-title">${kindIcon[i.kind] || '📄'} ${escape(i.insurer || 'Unnamed plan')} <span class="muted small">· ${escape(kindLabel[i.kind] || 'Other')}</span></div>
+                <div class="vault-info-grid muted small">
+                  ${i.policyNumber   ? `<div>📇 <strong>Member ID / Policy:</strong> ${escape(i.policyNumber)}</div>` : ''}
+                  ${i.planNumber     ? `<div>📋 <strong>Plan #:</strong> ${escape(i.planNumber)}</div>` : ''}
+                  ${i.groupNumber    ? `<div>👥 <strong>Group #:</strong> ${escape(i.groupNumber)}</div>` : ''}
+                  ${i.naicNumber     ? `<div>🏷️ <strong>NAIC #:</strong> ${escape(i.naicNumber)}</div>` : ''}
+                  ${i.phone          ? `<div>📞 ${escape(i.phone)}</div>` : ''}
+                  ${i.memberId && Store.byId(i.memberId) ? `<div>👤 ${escape(displayName(Store.byId(i.memberId)))}</div>` : ''}
+                  ${i.effectiveDate  ? `<div>📅 <strong>Effective:</strong> ${escape(formatDate(i.effectiveDate))}</div>` : ''}
+                  ${i.expirationDate ? `<div>⌛ <strong>Expires:</strong> ${escape(formatDate(i.expirationDate))}</div>` : ''}
                 </div>
-                ${i.notes ? `<div class="muted small" style="margin-top:4px;">${escape(i.notes)}</div>` : ''}
+                ${i.notes ? `<div class="muted small" style="margin-top:6px;">${escape(i.notes)}</div>` : ''}
                 ${(i.frontPhoto || i.backPhoto) ? `<div class="vault-card-photos">
-                  ${i.frontPhoto ? `<a class="vault-card-photo-thumb" href="${i.frontPhoto}" target="_blank" rel="noopener" style="background-image:url('${i.frontPhoto}')" title="Front of card"></a>` : ''}
-                  ${i.backPhoto  ? `<a class="vault-card-photo-thumb" href="${i.backPhoto}"  target="_blank" rel="noopener" style="background-image:url('${i.backPhoto}')"  title="Back of card"></a>` : ''}
+                  ${i.frontPhoto ? `<a class="vault-card-photo-large" href="${i.frontPhoto}" target="_blank" rel="noopener" style="background-image:url('${i.frontPhoto}')" title="Front of card — click to enlarge"><span class="vault-card-photo-caption">Front</span></a>` : ''}
+                  ${i.backPhoto  ? `<a class="vault-card-photo-large" href="${i.backPhoto}"  target="_blank" rel="noopener" style="background-image:url('${i.backPhoto}')"  title="Back of card — click to enlarge"><span class="vault-card-photo-caption">Back</span></a>` : ''}
                 </div>` : ''}
               </div>
               <div class="vault-row-actions">
@@ -9887,12 +10139,17 @@ const VaultView = {
                     <option value="health" ${i.kind === 'health' ? 'selected' : ''}>Health</option>
                     <option value="dental" ${i.kind === 'dental' ? 'selected' : ''}>Dental</option>
                     <option value="vision" ${i.kind === 'vision' ? 'selected' : ''}>Vision</option>
+                    <option value="car"    ${i.kind === 'car'    ? 'selected' : ''}>Car insurance</option>
                     <option value="other"  ${i.kind === 'other'  ? 'selected' : ''}>Other</option>
                   </select>
                 </label>
                 <label class="vault-edit-field"><span class="vault-edit-label">Insurance company</span><input name="insurer" value="${escape(i.insurer || '')}" /></label>
                 <label class="vault-edit-field"><span class="vault-edit-label">Member ID / Policy #</span><input name="policyNumber" value="${escape(i.policyNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Plan #</span><input name="planNumber" value="${escape(i.planNumber || '')}" /></label>
                 <label class="vault-edit-field"><span class="vault-edit-label">Group #</span><input name="groupNumber" value="${escape(i.groupNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">NAIC #</span><input name="naicNumber" value="${escape(i.naicNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Effective date</span><input name="effectiveDate" type="date" value="${escape(i.effectiveDate || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Expiration date</span><input name="expirationDate" type="date" value="${escape(i.expirationDate || '')}" /></label>
                 <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(i.phone || '')}" /></label>
                 <label class="vault-edit-field"><span class="vault-edit-label">Covers</span><select name="memberId">${memberOptions(i.memberId)}</select></label>
                 <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(i.notes || '')}</textarea></label>
@@ -9962,8 +10219,9 @@ const VaultView = {
     if (!Auth.canAccessVault()) return;
     Store.state.vault.insurances.push({
       id: uid('ins'), kind: 'health', insurer: '', memberId: '',
-      policyNumber: '', groupNumber: '', phone: '',
-      frontPhoto: '', backPhoto: '', notes: '',
+      policyNumber: '', planNumber: '', groupNumber: '', naicNumber: '',
+      effectiveDate: '', expirationDate: '',
+      phone: '', frontPhoto: '', backPhoto: '', notes: '',
     });
     Store.save();
     this.renderBenefits();
@@ -9977,13 +10235,17 @@ const VaultView = {
     const i = Store.state.vault.insurances.find(x => x.id === iid); if (!i) return;
     const row = document.querySelector(`.vault-row[data-iid="${iid}"]`);
     const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
-    i.kind         = v('kind') || 'other';
-    i.insurer      = v('insurer');
-    i.policyNumber = v('policyNumber');
-    i.groupNumber  = v('groupNumber');
-    i.phone        = v('phone');
-    i.memberId     = v('memberId');
-    i.notes        = v('notes');
+    i.kind           = v('kind') || 'other';
+    i.insurer        = v('insurer');
+    i.policyNumber   = v('policyNumber');
+    i.planNumber     = v('planNumber');
+    i.groupNumber    = v('groupNumber');
+    i.naicNumber     = v('naicNumber');
+    i.effectiveDate  = v('effectiveDate');
+    i.expirationDate = v('expirationDate');
+    i.phone          = v('phone');
+    i.memberId       = v('memberId');
+    i.notes          = v('notes');
     Store.save();
     toast('Insurance saved.');
     this.renderBenefits();
@@ -10001,157 +10263,269 @@ const VaultView = {
   // ---------------- Home section ----------------
   renderHome() {
     const host = $('#vault-home');
-    const utils = Store.state.vault.utilities;
-    const hoa   = Store.state.vault.hoa;
-    const codes = Store.state.vault.codes;
+    const utils    = Store.state.vault.utilities;
+    const hoas     = Store.state.vault.hoas;
+    const codeSets = Store.state.vault.codeSets;
     host.innerHTML = `
       <header class="vault-section-head">
-        <h3>🏠 Utilities</h3>
+        <h3>⚡ Utilities</h3>
         <button class="btn btn-primary btn-sm" data-action="add-util">+ Add utility</button>
       </header>
-      ${utils.length ? `<div class="vault-list">
-        ${utils.map(u => `
-          <div class="vault-row" data-uid="${u.id}">
-            <div class="vault-row-view" data-role="view">
-              <div class="vault-row-main">
-                <div class="vault-row-title">${escape(u.name || 'Unnamed utility')}</div>
-                <div class="vault-row-sub muted small">
-                  ${u.website ? `<a href="${escape(u.website)}" target="_blank" rel="noopener">${escape(u.website)}</a>` : ''}
-                  ${u.phone ? ` · ${escape(u.phone)}` : ''}
-                  ${u.accountNumber ? ` · Acct ${escape(u.accountNumber)}` : ''}
-                </div>
-                ${u.notes ? `<div class="muted small" style="margin-top:4px;">${escape(u.notes)}</div>` : ''}
-              </div>
-              <div class="vault-row-actions">
-                <button class="btn btn-ghost btn-sm" data-action="edit-util">Edit</button>
-                <button class="btn btn-danger-ghost btn-sm" data-action="delete-util">Delete</button>
-              </div>
-            </div>
-            <form class="vault-row-edit" data-role="edit" hidden>
-              <div class="vault-edit-grid">
-                <label class="vault-edit-field"><span class="vault-edit-label">Name</span><input name="name" placeholder="e.g. NV Energy" value="${escape(u.name || '')}" /></label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="website" type="url" placeholder="https://" value="${escape(u.website || '')}" /></label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(u.phone || '')}" /></label>
-                <label class="vault-edit-field"><span class="vault-edit-label">Account #</span><input name="accountNumber" value="${escape(u.accountNumber || '')}" /></label>
-                <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(u.notes || '')}</textarea></label>
-              </div>
-              <div class="vault-edit-actions">
-                <button class="btn btn-primary btn-sm" type="button" data-action="save-util">Save</button>
-                <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-util">Cancel</button>
-              </div>
-            </form>
-          </div>`).join('')}
-      </div>` : '<p class="muted" style="padding:16px; text-align:center;">No utilities yet.</p>'}
+      ${utils.length
+        ? `<div class="vault-list">${utils.map(u => this.renderUtilityRow(u)).join('')}</div>`
+        : '<p class="muted" style="padding:16px; text-align:center;">No utilities yet.</p>'}
 
-      <header class="vault-section-head" style="margin-top:24px;">
+      <header class="vault-section-head" style="margin-top:28px;">
         <h3>🏢 HOA / Property management</h3>
-        <button class="btn btn-secondary btn-sm" data-action="edit-hoa">Edit</button>
+        <button class="btn btn-primary btn-sm" data-action="add-hoa">+ Add HOA</button>
       </header>
-      <div class="vault-row" data-role="hoa">
+      ${hoas.length
+        ? `<div class="vault-list">${hoas.map(h => this.renderHOARow(h)).join('')}</div>`
+        : '<p class="muted" style="padding:16px; text-align:center;">No HOAs yet. Click + Add HOA to record management contact info.</p>'}
+
+      <header class="vault-section-head" style="margin-top:28px;">
+        <h3>🔢 Gate / amenity codes</h3>
+        <button class="btn btn-primary btn-sm" data-action="add-codes">+ Add property codes</button>
+      </header>
+      ${codeSets.length
+        ? `<div class="vault-list">${codeSets.map(c => this.renderCodeSetRow(c)).join('')}</div>`
+        : '<p class="muted" style="padding:16px; text-align:center;">No code sets yet. Click + Add property codes to record gate / pool / clubhouse codes.</p>'}
+    `;
+    on(host.querySelector('[data-action=add-util]'),  'click', () => this.addUtility());
+    on(host.querySelector('[data-action=add-hoa]'),   'click', () => this.addHOA());
+    on(host.querySelector('[data-action=add-codes]'), 'click', () => this.addCodeSet());
+    host.querySelectorAll('.vault-row[data-uid]').forEach(row => this.wireUtilityRow(row));
+    host.querySelectorAll('.vault-row[data-hid]').forEach(row => this.wireHOARow(row));
+    host.querySelectorAll('.vault-row[data-cid]').forEach(row => this.wireCodeSetRow(row));
+  },
+
+  // -------- Utility (formatted like HOA card, with emoji prefix on name) --------
+  renderUtilityRow(u) {
+    const titlePrefix = u.emoji ? `${u.emoji} ` : '';
+    const websiteHref = u.website && !u.website.startsWith('http') ? `https://${u.website}` : (u.website || '');
+    return `
+      <div class="vault-row" data-uid="${u.id}">
         <div class="vault-row-view" data-role="view">
-          ${(hoa.name || hoa.contact || hoa.address || hoa.email || hoa.phone) ? `
-            <div class="vault-row-main">
-              <div class="vault-row-title">${escape(hoa.name || 'HOA')}</div>
-              <div class="muted small" style="margin-top:4px; white-space:pre-line;">${escape([hoa.contact, hoa.title].filter(Boolean).join(' · '))}</div>
-              ${hoa.address ? `<div class="muted small" style="white-space:pre-line;">${escape(hoa.address)}</div>` : ''}
-              <div class="muted small" style="margin-top:4px;">
-                ${hoa.phone ? `📞 ${escape(hoa.phone)}` : ''}
-                ${hoa.fax ? ` · fax ${escape(hoa.fax)}` : ''}
-              </div>
-              ${hoa.website ? `<div class="muted small">🌐 <a href="${escape(hoa.website.startsWith('http') ? hoa.website : 'https://' + hoa.website)}" target="_blank" rel="noopener">${escape(hoa.website)}</a></div>` : ''}
-              ${hoa.email ? `<div class="muted small">✉️ ${escape(hoa.email)}</div>` : ''}
-              ${hoa.notes ? `<div class="muted small" style="margin-top:6px;">${escape(hoa.notes)}</div>` : ''}
+          <div class="vault-row-main">
+            <div class="vault-row-title">${escape(titlePrefix)}${escape(u.name || 'Unnamed utility')}</div>
+            <div class="vault-info-grid muted small" style="margin-top:6px;">
+              ${u.website       ? `<div>🌐 <a href="${escape(websiteHref)}" target="_blank" rel="noopener">${escape(u.website)}</a></div>` : ''}
+              ${u.phone         ? `<div>📞 ${escape(u.phone)}</div>` : ''}
+              ${u.accountNumber ? `<div>#️⃣ <strong>Account:</strong> ${escape(u.accountNumber)}</div>` : ''}
             </div>
-          ` : `<div class="muted small" style="padding:8px;">No HOA info yet — click Edit to add.</div>`}
+            ${u.notes ? `<div class="muted small" style="margin-top:6px;">${escape(u.notes)}</div>` : ''}
+          </div>
+          <div class="vault-row-actions">
+            <button class="btn btn-ghost btn-sm" data-action="edit-util">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" data-action="delete-util">Delete</button>
+          </div>
         </div>
         <form class="vault-row-edit" data-role="edit" hidden>
           <div class="vault-edit-grid">
-            <label class="vault-edit-field"><span class="vault-edit-label">HOA / Property name</span><input name="hoa-name" value="${escape(hoa.name || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Contact person</span><input name="hoa-contact" value="${escape(hoa.contact || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Title</span><input name="hoa-title" value="${escape(hoa.title || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="hoa-phone" type="tel" value="${escape(hoa.phone || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Fax</span><input name="hoa-fax" value="${escape(hoa.fax || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Email</span><input name="hoa-email" type="email" value="${escape(hoa.email || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="hoa-website" type="url" placeholder="https://" value="${escape(hoa.website || '')}" /></label>
-            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Address</span><textarea name="hoa-address" rows="2">${escape(hoa.address || '')}</textarea></label>
-            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="hoa-notes" rows="2">${escape(hoa.notes || '')}</textarea></label>
+            <label class="vault-edit-field" style="max-width:120px;"><span class="vault-edit-label">Emoji</span><input name="emoji" placeholder="⚡" value="${escape(u.emoji || '')}" maxlength="4" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Name</span><input name="name" placeholder="e.g. NV Energy" value="${escape(u.name || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="website" type="url" placeholder="https://" value="${escape(u.website || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(u.phone || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Account #</span><input name="accountNumber" value="${escape(u.accountNumber || '')}" /></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(u.notes || '')}</textarea></label>
+          </div>
+          <div class="vault-edit-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-action="save-util">Save</button>
+            <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-util">Cancel</button>
+          </div>
+        </form>
+      </div>`;
+  },
+
+  wireUtilityRow(row) {
+    const uid_ = row.dataset.uid;
+    const view = row.querySelector('[data-role=view]');
+    const edit = row.querySelector('[data-role=edit]');
+    on(row.querySelector('[data-action=edit-util]'),   'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=cancel-util]'), 'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-util]'),   'click', () => this.saveUtility(uid_));
+    on(row.querySelector('[data-action=delete-util]'), 'click', () => this.deleteUtility(uid_));
+  },
+
+  addUtility() {
+    if (!Auth.canAccessVault()) return;
+    Store.state.vault.utilities.push({ id: uid('util'), emoji: '', name: '', website: '', phone: '', accountNumber: '', notes: '' });
+    Store.save();
+    this.renderHome();
+    const last = Store.state.vault.utilities[Store.state.vault.utilities.length - 1];
+    const row = document.querySelector(`.vault-row[data-uid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-util]')?.click();
+  },
+
+  saveUtility(uid_) {
+    if (!Auth.canAccessVault()) return;
+    const u = Store.state.vault.utilities.find(x => x.id === uid_); if (!u) return;
+    const row = document.querySelector(`.vault-row[data-uid="${uid_}"]`);
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    u.emoji         = v('emoji');
+    u.name          = v('name');
+    u.website       = v('website');
+    u.phone         = v('phone');
+    u.accountNumber = v('accountNumber');
+    u.notes         = v('notes');
+    Store.save();
+    toast('Utility saved.');
+    this.renderHome();
+  },
+
+  deleteUtility(uid_) {
+    if (!Auth.canAccessVault()) return;
+    const u = Store.state.vault.utilities.find(x => x.id === uid_); if (!u) return;
+    if (!confirm(`Delete ${u.name || 'this utility'}?`)) return;
+    Store.state.vault.utilities = Store.state.vault.utilities.filter(x => x.id !== uid_);
+    Store.save();
+    this.renderHome();
+  },
+
+  // -------- HOAs (list) --------
+  renderHOARow(h) {
+    const websiteHref = h.website && !h.website.startsWith('http') ? `https://${h.website}` : (h.website || '');
+    const hasAny = h.name || h.contact || h.address || h.email || h.phone;
+    return `
+      <div class="vault-row" data-hid="${h.id}">
+        <div class="vault-row-view" data-role="view">
+          ${hasAny ? `
+            <div class="vault-row-main">
+              ${h.propertyLabel ? `<div class="vault-row-eyebrow">${escape(h.propertyLabel)}</div>` : ''}
+              <div class="vault-row-title">${escape(h.name || 'HOA')}</div>
+              ${h.contact || h.title ? `<div class="muted small" style="margin-top:4px;">${escape([h.contact, h.title].filter(Boolean).join(' · '))}</div>` : ''}
+              ${h.address ? `<div class="muted small" style="white-space:pre-line;">${escape(h.address)}</div>` : ''}
+              <div class="vault-info-grid muted small" style="margin-top:6px;">
+                ${h.phone   ? `<div>📞 ${escape(h.phone)}${h.fax ? ` · fax ${escape(h.fax)}` : ''}</div>` : ''}
+                ${h.website ? `<div>🌐 <a href="${escape(websiteHref)}" target="_blank" rel="noopener">${escape(h.website)}</a></div>` : ''}
+                ${h.email   ? `<div>✉️ ${escape(h.email)}</div>` : ''}
+              </div>
+              ${h.notes ? `<div class="muted small" style="margin-top:6px;">${escape(h.notes)}</div>` : ''}
+            </div>
+          ` : `<div class="muted small" style="padding:8px;">No HOA info yet — click Edit to add.</div>`}
+          <div class="vault-row-actions">
+            <button class="btn btn-ghost btn-sm" data-action="edit-hoa">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" data-action="delete-hoa">Delete</button>
+          </div>
+        </div>
+        <form class="vault-row-edit" data-role="edit" hidden>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">Property label <span class="muted small">(e.g. "Primary home", "Lake house")</span></span><input name="hoa-propertyLabel" placeholder="Primary home" value="${escape(h.propertyLabel || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">HOA / Property name</span><input name="hoa-name" value="${escape(h.name || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Contact person</span><input name="hoa-contact" value="${escape(h.contact || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Title</span><input name="hoa-title" value="${escape(h.title || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="hoa-phone" type="tel" value="${escape(h.phone || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Fax</span><input name="hoa-fax" value="${escape(h.fax || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Email</span><input name="hoa-email" type="email" value="${escape(h.email || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="hoa-website" type="url" placeholder="https://" value="${escape(h.website || '')}" /></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Address</span><textarea name="hoa-address" rows="2">${escape(h.address || '')}</textarea></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="hoa-notes" rows="2">${escape(h.notes || '')}</textarea></label>
           </div>
           <div class="vault-edit-actions">
             <button class="btn btn-primary btn-sm" type="button" data-action="save-hoa">Save</button>
             <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-hoa">Cancel</button>
           </div>
         </form>
-      </div>
+      </div>`;
+  },
 
-      <header class="vault-section-head" style="margin-top:24px;">
-        <h3>🔢 Gate / amenity codes</h3>
-        <button class="btn btn-secondary btn-sm" data-action="edit-codes">Edit</button>
-      </header>
-      <div class="vault-row" data-role="codes">
+  wireHOARow(row) {
+    const hid = row.dataset.hid;
+    const view = row.querySelector('[data-role=view]');
+    const edit = row.querySelector('[data-role=edit]');
+    on(row.querySelector('[data-action=edit-hoa]'),   'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=cancel-hoa]'), 'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-hoa]'),   'click', () => this.saveHOA(hid));
+    on(row.querySelector('[data-action=delete-hoa]'), 'click', () => this.deleteHOA(hid));
+  },
+
+  addHOA() {
+    if (!Auth.canAccessVault()) return;
+    Store.state.vault.hoas.push({
+      id: uid('hoa'), propertyLabel: '', name: '', contact: '', title: '',
+      address: '', phone: '', fax: '', website: '', email: '', notes: '',
+    });
+    Store.save();
+    this.renderHome();
+    const last = Store.state.vault.hoas[Store.state.vault.hoas.length - 1];
+    const row = document.querySelector(`.vault-row[data-hid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-hoa]')?.click();
+  },
+
+  saveHOA(hid) {
+    if (!Auth.canAccessVault()) return;
+    const h = Store.state.vault.hoas.find(x => x.id === hid); if (!h) return;
+    const row = document.querySelector(`.vault-row[data-hid="${hid}"]`);
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    h.propertyLabel = v('hoa-propertyLabel');
+    h.name    = v('hoa-name');
+    h.contact = v('hoa-contact');
+    h.title   = v('hoa-title');
+    h.address = v('hoa-address');
+    h.phone   = v('hoa-phone');
+    h.fax     = v('hoa-fax');
+    h.website = v('hoa-website');
+    h.email   = v('hoa-email');
+    h.notes   = v('hoa-notes');
+    Store.save();
+    toast('HOA saved.');
+    this.renderHome();
+  },
+
+  deleteHOA(hid) {
+    if (!Auth.canAccessVault()) return;
+    const h = Store.state.vault.hoas.find(x => x.id === hid); if (!h) return;
+    if (!confirm(`Delete ${h.name || h.propertyLabel || 'this HOA'}?`)) return;
+    Store.state.vault.hoas = Store.state.vault.hoas.filter(x => x.id !== hid);
+    Store.save();
+    this.renderHome();
+  },
+
+  // -------- Code sets (list) --------
+  renderCodeSetRow(c) {
+    return `
+      <div class="vault-row" data-cid="${c.id}">
         <div class="vault-row-view" data-role="view">
-          <dl class="vault-kv">
-            <div><dt><span class="kv-emoji">🚪</span>Pedestrian gate</dt><dd>${escape(codes.pedestrianGate || '—')}</dd></div>
-            <div><dt><span class="kv-emoji">🚗</span>Car gate</dt><dd>${escape(codes.carGate || '—')}</dd></div>
-            <div><dt><span class="kv-emoji">🏊</span>Pool</dt><dd>${escape(codes.pool || '—')}</dd></div>
-            <div><dt><span class="kv-emoji">🏠</span>Clubhouse</dt><dd>${escape(codes.clubhouse || '—')}</dd></div>
-            ${(codes.buildings || []).length ? `<div style="grid-column: 1 / -1;">
-              <dt><span class="kv-emoji">🏢</span>Building codes</dt>
-              <dd>${codes.buildings.map(c => `<div><strong>${escape(c.label || '?')}:</strong> ${escape(c.code || '—')}</div>`).join('')}</dd>
-            </div>` : ''}
-            ${codes.notes ? `<div style="grid-column: 1 / -1;"><dt>Notes</dt><dd>${escape(codes.notes)}</dd></div>` : ''}
-          </dl>
+          <div class="vault-row-main">
+            ${c.propertyLabel ? `<div class="vault-row-eyebrow">${escape(c.propertyLabel)}</div>` : ''}
+            <div class="vault-row-title">Gate &amp; amenity codes</div>
+            <dl class="vault-kv" style="margin-top:8px;">
+              <div><dt><span class="kv-emoji">🚪</span>Pedestrian gate</dt><dd>${escape(c.pedestrianGate || '—')}</dd></div>
+              <div><dt><span class="kv-emoji">🚗</span>Car gate</dt><dd>${escape(c.carGate || '—')}</dd></div>
+              <div><dt><span class="kv-emoji">🏊</span>Pool</dt><dd>${escape(c.pool || '—')}</dd></div>
+              <div><dt><span class="kv-emoji">🏠</span>Clubhouse</dt><dd>${escape(c.clubhouse || '—')}</dd></div>
+              ${(c.buildings || []).length ? `<div style="grid-column: 1 / -1;">
+                <dt><span class="kv-emoji">🏢</span>Building codes</dt>
+                <dd>${c.buildings.map(b => `<div><strong>${escape(b.label || '?')}:</strong> ${escape(b.code || '—')}</div>`).join('')}</dd>
+              </div>` : ''}
+              ${c.notes ? `<div style="grid-column: 1 / -1;"><dt>Notes</dt><dd>${escape(c.notes)}</dd></div>` : ''}
+            </dl>
+          </div>
+          <div class="vault-row-actions">
+            <button class="btn btn-ghost btn-sm" data-action="edit-codes">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" data-action="delete-codes">Delete</button>
+          </div>
         </div>
         <form class="vault-row-edit" data-role="edit" hidden>
+          <label class="vault-edit-field"><span class="vault-edit-label">Property label <span class="muted small">(e.g. "Primary home", "Lake house")</span></span><input name="codes-propertyLabel" placeholder="Primary home" value="${escape(c.propertyLabel || '')}" /></label>
           <div class="vault-edit-grid">
-            <label class="vault-edit-field"><span class="vault-edit-label">🚪 Pedestrian gate</span><input name="codes-pedestrianGate" value="${escape(codes.pedestrianGate || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">🚗 Car gate</span><input name="codes-carGate" value="${escape(codes.carGate || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">🏊 Pool</span><input name="codes-pool" value="${escape(codes.pool || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">🏠 Clubhouse</span><input name="codes-clubhouse" value="${escape(codes.clubhouse || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🚪 Pedestrian gate</span><input name="codes-pedestrianGate" value="${escape(c.pedestrianGate || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🚗 Car gate</span><input name="codes-carGate" value="${escape(c.carGate || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🏊 Pool</span><input name="codes-pool" value="${escape(c.pool || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🏠 Clubhouse</span><input name="codes-clubhouse" value="${escape(c.clubhouse || '')}" /></label>
           </div>
           <fieldset class="vault-edit-fieldset">
             <legend>🏢 Building codes</legend>
-            <div data-role="bld-list" class="vault-dl-list">${(codes.buildings || []).map(b => this.renderBuildingRow(b)).join('')}</div>
+            <div data-role="bld-list" class="vault-dl-list">${(c.buildings || []).map(b => this.renderBuildingRow(b)).join('')}</div>
             <button type="button" class="btn btn-ghost btn-sm" data-action="add-bld">+ Add building</button>
           </fieldset>
-          <label class="vault-edit-field"><span class="vault-edit-label">Notes</span><textarea name="codes-notes" rows="2">${escape(codes.notes || '')}</textarea></label>
+          <label class="vault-edit-field"><span class="vault-edit-label">Notes</span><textarea name="codes-notes" rows="2">${escape(c.notes || '')}</textarea></label>
           <div class="vault-edit-actions">
             <button class="btn btn-primary btn-sm" type="button" data-action="save-codes">Save</button>
             <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-codes">Cancel</button>
           </div>
         </form>
-      </div>
-    `;
-
-    on(host.querySelector('[data-action=add-util]'), 'click', () => this.addUtility());
-    host.querySelectorAll('.vault-row[data-uid]').forEach(row => this.wireUtilityRow(row));
-    // HOA
-    const hoaRow = host.querySelector('[data-role=hoa]');
-    on(hoaRow.querySelector('[data-action=edit-hoa]') || host.querySelector('[data-action=edit-hoa]'), 'click', () => {
-      hoaRow.querySelector('[data-role=view]').hidden = true;
-      hoaRow.querySelector('[data-role=edit]').hidden = false;
-    });
-    on(hoaRow.querySelector('[data-action=cancel-hoa]'), 'click', () => {
-      hoaRow.querySelector('[data-role=view]').hidden = false;
-      hoaRow.querySelector('[data-role=edit]').hidden = true;
-    });
-    on(hoaRow.querySelector('[data-action=save-hoa]'), 'click', () => this.saveHOA());
-    // Codes
-    const codesRow = host.querySelector('[data-role=codes]');
-    on(host.querySelector('[data-action=edit-codes]'), 'click', () => {
-      codesRow.querySelector('[data-role=view]').hidden = true;
-      codesRow.querySelector('[data-role=edit]').hidden = false;
-      this.wireBuildingRows(codesRow);
-    });
-    on(codesRow.querySelector('[data-action=cancel-codes]'), 'click', () => {
-      codesRow.querySelector('[data-role=view]').hidden = false;
-      codesRow.querySelector('[data-role=edit]').hidden = true;
-    });
-    on(codesRow.querySelector('[data-action=save-codes]'), 'click', () => this.saveCodes());
-    on(codesRow.querySelector('[data-action=add-bld]'), 'click', () => {
-      const wrap = codesRow.querySelector('[data-role=bld-list]');
-      wrap.insertAdjacentHTML('beforeend', this.renderBuildingRow({ label: '', code: '' }));
-      this.wireBuildingRows(codesRow);
-    });
+      </div>`;
   },
 
   renderBuildingRow(b) {
@@ -10168,73 +10542,39 @@ const VaultView = {
     });
   },
 
-  wireUtilityRow(row) {
-    const uid_ = row.dataset.uid;
+  wireCodeSetRow(row) {
+    const cid = row.dataset.cid;
     const view = row.querySelector('[data-role=view]');
     const edit = row.querySelector('[data-role=edit]');
-    on(row.querySelector('[data-action=edit-util]'),   'click', () => { view.hidden = true; edit.hidden = false; });
-    on(row.querySelector('[data-action=cancel-util]'), 'click', () => { view.hidden = false; edit.hidden = true; });
-    on(row.querySelector('[data-action=save-util]'),   'click', () => this.saveUtility(uid_));
-    on(row.querySelector('[data-action=delete-util]'), 'click', () => this.deleteUtility(uid_));
+    on(row.querySelector('[data-action=edit-codes]'),   'click', () => { view.hidden = true; edit.hidden = false; this.wireBuildingRows(edit); });
+    on(row.querySelector('[data-action=cancel-codes]'), 'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-codes]'),   'click', () => this.saveCodeSet(cid));
+    on(row.querySelector('[data-action=delete-codes]'), 'click', () => this.deleteCodeSet(cid));
+    on(row.querySelector('[data-action=add-bld]'),      'click', () => {
+      const wrap = row.querySelector('[data-role=bld-list]');
+      wrap.insertAdjacentHTML('beforeend', this.renderBuildingRow({ label: '', code: '' }));
+      this.wireBuildingRows(row);
+    });
   },
 
-  addUtility() {
+  addCodeSet() {
     if (!Auth.canAccessVault()) return;
-    Store.state.vault.utilities.push({ id: uid('util'), name: '', website: '', phone: '', accountNumber: '', notes: '' });
+    Store.state.vault.codeSets.push({
+      id: uid('cs'), propertyLabel: '',
+      pedestrianGate: '', carGate: '', pool: '', clubhouse: '',
+      buildings: [], notes: '',
+    });
     Store.save();
     this.renderHome();
-    const last = Store.state.vault.utilities[Store.state.vault.utilities.length - 1];
-    const row = document.querySelector(`.vault-row[data-uid="${last.id}"]`);
-    if (row) row.querySelector('[data-action=edit-util]')?.click();
+    const last = Store.state.vault.codeSets[Store.state.vault.codeSets.length - 1];
+    const row = document.querySelector(`.vault-row[data-cid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-codes]')?.click();
   },
 
-  saveUtility(uid_) {
+  saveCodeSet(cid) {
     if (!Auth.canAccessVault()) return;
-    const u = Store.state.vault.utilities.find(x => x.id === uid_); if (!u) return;
-    const row = document.querySelector(`.vault-row[data-uid="${uid_}"]`);
-    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
-    u.name = v('name');
-    u.website = v('website');
-    u.phone = v('phone');
-    u.accountNumber = v('accountNumber');
-    u.notes = v('notes');
-    Store.save();
-    toast('Utility saved.');
-    this.renderHome();
-  },
-
-  deleteUtility(uid_) {
-    if (!Auth.canAccessVault()) return;
-    const u = Store.state.vault.utilities.find(x => x.id === uid_); if (!u) return;
-    if (!confirm(`Delete ${u.name || 'this utility'}?`)) return;
-    Store.state.vault.utilities = Store.state.vault.utilities.filter(x => x.id !== uid_);
-    Store.save();
-    this.renderHome();
-  },
-
-  saveHOA() {
-    if (!Auth.canAccessVault()) return;
-    const row = document.querySelector('[data-role=hoa]');
-    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
-    Store.state.vault.hoa = {
-      name:    v('hoa-name'),
-      contact: v('hoa-contact'),
-      title:   v('hoa-title'),
-      address: v('hoa-address'),
-      phone:   v('hoa-phone'),
-      fax:     v('hoa-fax'),
-      website: v('hoa-website'),
-      email:   v('hoa-email'),
-      notes:   v('hoa-notes'),
-    };
-    Store.save();
-    toast('HOA saved.');
-    this.renderHome();
-  },
-
-  saveCodes() {
-    if (!Auth.canAccessVault()) return;
-    const row = document.querySelector('[data-role=codes]');
+    const c = Store.state.vault.codeSets.find(x => x.id === cid); if (!c) return;
+    const row = document.querySelector(`.vault-row[data-cid="${cid}"]`);
     const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
     const labels = [...row.querySelectorAll('input[name="bld-label"]')];
     const codes  = [...row.querySelectorAll('input[name="bld-code"]')];
@@ -10244,16 +10584,24 @@ const VaultView = {
       const cde = codes[i]?.value.trim() || '';
       if (lbl || cde) buildings.push({ id: uid('bld'), label: lbl, code: cde });
     }
-    Store.state.vault.codes = {
-      pedestrianGate: v('codes-pedestrianGate'),
-      carGate:        v('codes-carGate'),
-      pool:           v('codes-pool'),
-      clubhouse:      v('codes-clubhouse'),
-      buildings,
-      notes:          v('codes-notes'),
-    };
+    c.propertyLabel  = v('codes-propertyLabel');
+    c.pedestrianGate = v('codes-pedestrianGate');
+    c.carGate        = v('codes-carGate');
+    c.pool           = v('codes-pool');
+    c.clubhouse      = v('codes-clubhouse');
+    c.buildings      = buildings;
+    c.notes          = v('codes-notes');
     Store.save();
     toast('Codes saved.');
+    this.renderHome();
+  },
+
+  deleteCodeSet(cid) {
+    if (!Auth.canAccessVault()) return;
+    const c = Store.state.vault.codeSets.find(x => x.id === cid); if (!c) return;
+    if (!confirm(`Delete codes for ${c.propertyLabel || 'this property'}?`)) return;
+    Store.state.vault.codeSets = Store.state.vault.codeSets.filter(x => x.id !== cid);
+    Store.save();
     this.renderHome();
   },
 };
