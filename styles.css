@@ -3327,3 +3327,237 @@ body.is-admin label[data-admin-only] { display: flex !important; }
 body.is-admin .grid-2[data-admin-only] { display: grid !important; }
 body.is-admin section[data-admin-only],
 body.is-admin div[data-admin-only] { display: block !important; }
+
+/* Admin (vault) page is even more restricted than is-admin — only the
+   household head + spouse + system admin should see it. Toggled via the
+   `is-vault-authorized` body class, set by Auth.refreshBodyClasses(). */
+[data-vault-only] { display: none !important; }
+body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !important; }
+
+/* ===== Admin / vault page ===== */
+.vault-tabs {
+  display: inline-flex; gap: 4px;
+  background: var(--paper-veil);
+  border: 1px solid var(--ink-200);
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 16px;
+}
+.vault-tab {
+  padding: 7px 16px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-700);
+  font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+  transition: background-color .15s var(--ease-out), color .15s var(--ease-out);
+}
+.vault-tab:hover { color: var(--ink-900); }
+.vault-tab.is-active {
+  background: #fff;
+  color: var(--brand-900);
+  box-shadow: var(--shadow-soft);
+}
+.vault-panel { display: flex; flex-direction: column; gap: 14px; }
+
+.vault-section-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 4px 0 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ink-200);
+}
+.vault-section-head h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  margin: 0;
+  color: var(--ink-900);
+}
+
+.vault-card {
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow-soft);
+}
+.vault-card + .vault-card { margin-top: 14px; }
+.vault-card-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.vault-card-photo {
+  width: 56px; height: 56px;
+  border-radius: 999px;
+  background-size: cover; background-position: center;
+  flex-shrink: 0;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--ink-200);
+  display: grid; place-items: center;
+}
+.vault-card-photo.is-male   { background-color: var(--rose-male-bg); }
+.vault-card-photo.is-female { background-color: var(--rose-female-bg); }
+.vault-card-id h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+  margin: 0;
+  color: var(--ink-900);
+  letter-spacing: -0.01em;
+}
+.vault-card-body { }
+.vault-card-edit { display: flex; flex-direction: column; gap: 14px; }
+
+.vault-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+}
+.vault-kv > div { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--ink-100); }
+.vault-kv dt { font-size: 11.5px; color: var(--ink-500); margin: 0; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.vault-kv dd { margin: 0; font-size: 14px; color: var(--ink-900); word-break: break-word; font-variant-numeric: tabular-nums; }
+.vault-birth { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; }
+
+.vault-edit-fieldset {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius-sm);
+  background: var(--paper-soft);
+}
+.vault-edit-fieldset legend {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--ink-700);
+  padding: 0 6px;
+}
+.vault-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.vault-edit-field { display: flex; flex-direction: column; gap: 4px; }
+.vault-edit-label { font-size: 12.5px; font-weight: 600; color: var(--ink-700); }
+.vault-edit-field input,
+.vault-edit-field select,
+.vault-edit-field textarea {
+  appearance: none;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: var(--ink-900);
+}
+.vault-edit-field textarea { resize: vertical; min-height: 60px; }
+.vault-edit-field input:focus,
+.vault-edit-field select:focus,
+.vault-edit-field textarea:focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px rgba(47,107,89,.15);
+}
+.vault-edit-actions { display: flex; gap: 8px; }
+
+.vault-dl-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.vault-dl-row {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.vault-dl-row input {
+  appearance: none;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  font-size: 13.5px;
+  font-family: inherit;
+}
+.vault-row-remove {
+  padding: 4px 10px !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  color: var(--ink-500);
+}
+.vault-row-remove:hover { color: #dc2626; }
+
+.vault-list { display: flex; flex-direction: column; gap: 10px; }
+.vault-row {
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-soft);
+}
+.vault-row-view {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 12px;
+}
+.vault-row-main { min-width: 0; }
+.vault-row-title { font-family: var(--font-display); font-weight: 500; font-size: 16px; color: var(--ink-900); margin-bottom: 4px; }
+.vault-row-sub { display: flex; flex-wrap: wrap; gap: 0 6px; align-items: center; }
+.vault-row-sub a { color: var(--brand-700); text-decoration: none; }
+.vault-row-sub a:hover { text-decoration: underline; }
+.vault-row-actions { display: flex; gap: 6px; align-items: center; }
+.vault-row-edit { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+
+.bank-type-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+.bank-type-pill.checking { background: rgba(47,107,89,.14); color: var(--brand-900); }
+.bank-type-pill.savings  { background: rgba(91,143,199,.18); color: #234a72; }
+.bank-type-pill.credit   { background: rgba(220,38,38,.12); color: #7f1d1d; }
+.bank-type-pill.other    { background: var(--ink-100); color: var(--ink-700); }
+
+.vault-card-photos { display: flex; gap: 8px; margin-top: 8px; }
+.vault-card-photo-thumb {
+  display: block;
+  width: 100px; height: 64px;
+  border-radius: 6px;
+  border: 1px solid var(--ink-200);
+  background-size: cover; background-position: center;
+  cursor: zoom-in;
+  transition: transform .15s var(--ease-out);
+}
+.vault-card-photo-thumb:hover { transform: scale(1.04); border-color: var(--brand-500); }
+
+.vault-photo-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.vault-photo-slot {
+  background: var(--paper-soft);
+  border: 1px dashed var(--ink-200);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vault-photo-label { font-size: 12px; font-weight: 600; color: var(--ink-700); }
+.vault-photo-preview {
+  width: 100%;
+  aspect-ratio: 1.586 / 1; /* standard credit-card ratio */
+  border-radius: 6px;
+  background: #fff;
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--ink-200);
+}
+.vault-photo-actions { display: flex; gap: 6px; }

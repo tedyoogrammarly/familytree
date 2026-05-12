@@ -699,6 +699,25 @@ const Store = {
         lastSync: 0,
         showEvents: true,
       },
+      // Private/Admin-only data. The whole vault page (Family ID fields,
+      // Finance, Benefits, Home) reads + writes here. Each member's per-person
+      // private fields live under member.private; the household-shared
+      // sections live here.
+      vault: {
+        banks: [],        // [{ id, bankName, accountNumber, routingNumber, accountType, holderId, notes }]
+        insurances: [],   // [{ id, kind, insurer, memberId, policyNumber, groupNumber, phone, frontPhoto, backPhoto, notes }]
+        utilities: [],    // [{ id, name, website, phone, accountNumber, notes }]
+        hoa: {            // single record
+          name: '', contact: '', title: '', address: '',
+          phone: '', fax: '', website: '', email: '', notes: '',
+        },
+        codes: {          // single record — gate / pool / clubhouse / building access codes
+          pedestrianGate: '', carGate: '', pool: '', clubhouse: '',
+          buildings: [],  // [{ id, label, code }]
+          notes: '',
+        },
+      },
+      vaultAccessIds: [], // optional extra member ids granted vault access
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -745,7 +764,46 @@ const Store = {
       // members keep their current behavior — they still get added when
       // an admin picks "+ Add by group…" on an event.
       if (m.includeInGroupEvents === undefined) m.includeInGroupEvents = true;
+      // v4.22: per-member private fields for the Admin/vault page. Only
+      // populated for the household's nuclear-family members, but every
+      // member gets the empty container so save handlers can assign without
+      // null-checks.
+      if (!m.private || typeof m.private !== 'object') {
+        m.private = {
+          driversLicenses: [], // [{ id, state, number }]
+          passport: '',
+          ktn: '',
+          rapidRewards: '',
+          instagram: '',
+          birth: { place: '', hospital: '', weight: '', length: '', time: '', notes: '' },
+        };
+      } else {
+        if (!Array.isArray(m.private.driversLicenses)) m.private.driversLicenses = [];
+        if (typeof m.private.birth !== 'object' || m.private.birth === null) {
+          m.private.birth = { place: '', hospital: '', weight: '', length: '', time: '', notes: '' };
+        }
+        ['passport', 'ktn', 'rapidRewards', 'instagram'].forEach(k => {
+          if (m.private[k] === undefined) m.private[k] = '';
+        });
+        ['place', 'hospital', 'weight', 'length', 'time', 'notes'].forEach(k => {
+          if (m.private.birth[k] === undefined) m.private.birth[k] = '';
+        });
+      }
     }
+    // v4.22: heal the vault sub-state — defaults() already returns a vault
+    // object, but existing archives won't have it yet. Same for vaultAccessIds.
+    if (!this.state.vault || typeof this.state.vault !== 'object') {
+      this.state.vault = def.vault;
+    } else {
+      const v = this.state.vault;
+      if (!Array.isArray(v.banks)) v.banks = [];
+      if (!Array.isArray(v.insurances)) v.insurances = [];
+      if (!Array.isArray(v.utilities)) v.utilities = [];
+      if (!v.hoa || typeof v.hoa !== 'object') v.hoa = { ...def.vault.hoa };
+      if (!v.codes || typeof v.codes !== 'object') v.codes = { ...def.vault.codes };
+      if (!Array.isArray(v.codes.buildings)) v.codes.buildings = [];
+    }
+    if (!Array.isArray(this.state.vaultAccessIds)) this.state.vaultAccessIds = [];
     // Heal asymmetric parent/child links: if A says "B is my parent", make
     // sure B says "A is my child". This fixes profiles where one parent
     // shows up in the drawer but the other doesn't because childrenIds got
@@ -830,6 +888,27 @@ const Auth = {
   },
   isSelf(memberId) {
     return this.current && this.current !== 'admin-bootstrap' && this.current.id === memberId;
+  },
+
+  // Gate for the "Admin" private-vault page. Stricter than isAdmin(): only
+  // Ted Yoo, Doan Yoo, and the bootstrap-admin sentinel get in. Match by
+  // legal name (first + last) so a custom displayName override doesn't
+  // accidentally lock the household out.
+  //
+  // To grant access to another household member without code changes, set
+  // their member.role = 'admin' AND ensure their legal first/last matches
+  // one of the names below — or add their id to state.vaultAccessIds.
+  canAccessVault() {
+    if (!this.isAdmin()) return false;
+    if (this.current === 'admin-bootstrap') return true;
+    const me = this.current;
+    if (!me) return false;
+    const extra = (Store?.state?.vaultAccessIds || []);
+    if (extra.includes(me.id)) return true;
+    const f = (me.firstName || '').trim().toLowerCase();
+    const l = (me.lastName  || '').trim().toLowerCase();
+    if (l !== 'yoo') return false;
+    return f === 'ted' || f === 'doan';
   },
 
   // Resolve who the logged-in Supabase user *is* in family terms. Reads
@@ -2809,6 +2888,7 @@ const Views = {
   _renderTimer: null,
   show(name) {
     if ((name === 'admin' || name === 'gifts' || name === 'calendar' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
+    if (name === 'vault' && !Auth.canAccessVault()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
     this.current = name;
     // Synchronous visibility flip — cheap and gives the click immediate
@@ -2818,6 +2898,7 @@ const Views = {
     $('#view-tree').hidden       = name !== 'tree';
     $('#view-myfamily').hidden   = name !== 'myfamily';
     $('#view-admin').hidden      = name !== 'admin';
+    $('#view-vault').hidden      = name !== 'vault';
     $('#view-history').hidden    = name !== 'history';
     $('#view-events').hidden     = name !== 'events';
     $('#view-calendar').hidden   = name !== 'calendar';
@@ -2834,6 +2915,7 @@ const Views = {
       if (this.current !== name) return;
       if (name === 'dashboard') DashboardView.render();
       if (name === 'admin')     AdminView.render();
+      if (name === 'vault')     VaultView.render();
       if (name === 'history')   HistoryView.render();
       if (name === 'events')    EventsView.render();
       if (name === 'calendar')  CalendarView.render();
@@ -7476,6 +7558,7 @@ const UserChip = {
       }
     }
     document.body.classList.toggle('is-admin', Auth.isAdmin());
+    document.body.classList.toggle('is-vault-authorized', Auth.canAccessVault());
   },
 };
 
@@ -7748,6 +7831,7 @@ function applyRemoteState(state) {
   document.body.classList.toggle('is-admin', Auth.isAdmin());
   if (Canvas?.renderAll) Canvas.renderAll();
   if (Views?.current === 'admin')    AdminView.render();
+  if (Views?.current === 'vault')    VaultView.render();
   if (Views?.current === 'dashboard') DashboardView.render();
   if (Views?.current === 'events')   EventsView.render();
   if (Views?.current === 'calendar') CalendarView.render();
@@ -8398,6 +8482,7 @@ async function init() {
   EventsView.init();
   CalendarView.init();
   GiftsView.init();
+  VaultView.init();
   RemindersModal.init();
   DashboardView.init();
   PageEmojis.init();
@@ -9049,6 +9134,19 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.22',
+    date: '2026-05-12',
+    title: 'New Admin (vault) page — household private records: family IDs, bank accounts, insurance cards, utilities, HOA, gate codes',
+    changes: [
+      'New "Admin" nav tab — a private records vault visible only to Ted Yoo, Doan Yoo, and the system admin (admin-bootstrap). Other admins and regular users can\'t see the tab or reach the page; Views.show bounces them back to the tree. Gated via Auth.canAccessVault(), surfaced on the body as is-vault-authorized.',
+      'Family sub-tab: auto-populates a profile card for each member in the logged-in user\'s nuclear family (self + spouse + children). Each card holds the new private fields: Driver\'s Licenses (multi-state, add/remove rows), Passport #, Known Traveler #, Rapid Rewards, Instagram, and structured Birth details (place, hospital, time, weight, length, notes). Fields live under member.private — they do not surface in the regular profile drawer.',
+      'Finance sub-tab: bank account list with add / inline-edit / delete. Each entry holds bank name, account #, routing #, type (Checking / Savings / Credit / Other), holder member, and notes. Tinted pill on the row shows the account type.',
+      'Benefits sub-tab: insurance card list with add / inline-edit / delete. Each card holds type (Health / Dental / Vision / Other), insurer, policy #, group #, phone, covered member, notes, and front + back card photos (uploaded inline as auto-downscaled JPEGs via the new downscaleImageFile helper). Thumbnails open the full-size image in a new tab.',
+      'Home sub-tab: utility account list (name, website, phone, account #, notes), HOA / property-management contact card, and gate / amenity codes (pedestrian gate, car gate, pool, clubhouse, plus a buildings list).',
+      'Data model: archive grows a state.vault sub-tree { banks[], insurances[], utilities[], hoa{}, codes{} } and a state.vaultAccessIds[] escape hatch for granting access to other members by id. healMissingKeys backfills both on every load. Member records gain m.private = { driversLicenses[], passport, ktn, rapidRewards, instagram, birth{place,hospital,time,weight,length,notes} }.',
+    ],
+  },
+  {
     version: '4.21',
     date: '2026-05-12',
     title: 'More profile emojis, Deceased-checkbox fix, bigger heart + memoriam tag, Gifts Reports dashboard',
@@ -9365,6 +9463,829 @@ const CHANGELOG = [
     ],
   },
 ];
+
+// -------------------- VAULT / ADMIN VIEW --------------------
+// Private records for the household. Strict access gate (Auth.canAccessVault)
+// means only Ted, Doan, or the bootstrap-admin sentinel can land on this view
+// in the first place — Views.show bounces everyone else back to the tree, and
+// the nav tab itself is hidden via the [data-vault-only] CSS rule unless the
+// body class `is-vault-authorized` is set.
+//
+// Data layout:
+//   Per-member  → m.private = { driversLicenses[], passport, ktn, rapidRewards, instagram, birth{} }
+//   Per-house   → state.vault = { banks[], insurances[], utilities[], hoa{}, codes{} }
+const VaultView = {
+  section: 'family',
+
+  init() {
+    $$('.vault-tab').forEach(t => on(t, 'click', () => {
+      this.section = t.dataset.vaultSection;
+      $$('.vault-tab').forEach(x => x.classList.toggle('is-active', x === t));
+      $$('.vault-panel').forEach(p => { p.hidden = p.id !== `vault-${this.section}`; });
+      this.render();
+    }));
+  },
+
+  // Returns the member ids whose profiles render in the Family tab. Self +
+  // spouse + children of whoever's logged in. The bootstrap-admin sentinel
+  // has no member record, so we fall back to looking up "Ted Yoo" by name
+  // (that's whose household this app belongs to) and using his family.
+  householdIds() {
+    const me = Auth.current;
+    const collect = (root) => {
+      const ids = new Set([root.id]);
+      if (root.spouseId) ids.add(root.spouseId);
+      (root.childrenIds || []).forEach(id => ids.add(id));
+      return [...ids];
+    };
+    if (me && me !== 'admin-bootstrap') return collect(me);
+    const ted = Store.membersList().find(m =>
+      (m.firstName || '').trim().toLowerCase() === 'ted' &&
+      (m.lastName  || '').trim().toLowerCase() === 'yoo'
+    );
+    return ted ? collect(ted) : [];
+  },
+
+  render() {
+    if (!Auth.canAccessVault()) return;
+    if (this.section === 'family')   this.renderFamily();
+    if (this.section === 'finance')  this.renderFinance();
+    if (this.section === 'benefits') this.renderBenefits();
+    if (this.section === 'home')     this.renderHome();
+  },
+
+  // ---------------- Family section ----------------
+  renderFamily() {
+    const host = $('#vault-family');
+    const ids = this.householdIds();
+    if (!ids.length) {
+      host.innerHTML = '<p class="muted" style="padding:24px; text-align:center;">No household members linked to your account yet. Link yourself to a member in Members → edit the row, or seed Ted/Doan/Olive/Harvey first.</p>';
+      return;
+    }
+    // Order: self → spouse → children oldest-first.
+    const me = Auth.current;
+    const members = ids.map(id => Store.byId(id)).filter(Boolean);
+    members.sort((a, b) => {
+      if (me && me !== 'admin-bootstrap') {
+        if (a.id === me.id) return -1;
+        if (b.id === me.id) return 1;
+        if (a.id === me.spouseId) return -1;
+        if (b.id === me.spouseId) return 1;
+      }
+      return (a.birthday || '9999').localeCompare(b.birthday || '9999');
+    });
+    host.innerHTML = members.map(m => this.renderMemberCard(m)).join('');
+    host.querySelectorAll('[data-vault-edit]').forEach(btn => {
+      on(btn, 'click', () => this.startEditMember(btn.dataset.vaultEdit));
+    });
+  },
+
+  renderMemberCard(m) {
+    return `
+      <article class="vault-card" data-mid="${m.id}">
+        <header class="vault-card-head">
+          <div class="vault-card-photo is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}>${m.photo ? '' : Silhouettes.for(m)}</div>
+          <div class="vault-card-id">
+            <h3>${escape(displayName(m))}</h3>
+            <p class="muted small">${m.birthday ? formatDate(m.birthday) : 'No birthday'}${m.dateOfDeath ? ` — ${formatDate(m.dateOfDeath)}` : ''}</p>
+          </div>
+          <button class="btn btn-secondary btn-sm" data-vault-edit="${m.id}">Edit</button>
+        </header>
+        <div class="vault-card-body" data-vault-view="${m.id}">${this.renderMemberView(m)}</div>
+        <form class="vault-card-edit" data-vault-form="${m.id}" hidden></form>
+      </article>`;
+  },
+
+  renderMemberView(m) {
+    const p = m.private || {};
+    const rows = [];
+    const dls = p.driversLicenses || [];
+    if (dls.length) {
+      dls.forEach(dl => rows.push(['🪪', `${dl.state || '—'} Driver's License`, dl.number || '—']));
+    } else {
+      rows.push(['🪪', "Driver's License", '—']);
+    }
+    rows.push(['📘', 'Passport', p.passport || '—']);
+    rows.push(['✈️', 'Known Traveler #', p.ktn || '—']);
+    rows.push(['🎁', 'Rapid Rewards', p.rapidRewards || '—']);
+    rows.push(['📸', 'Instagram', p.instagram ? `@${p.instagram.replace(/^@/, '')}` : '—']);
+    const b = p.birth || {};
+    const bits = [
+      b.place    && `📍 ${b.place}`,
+      b.hospital && `🏥 ${b.hospital}`,
+      b.time     && `🕐 ${b.time}`,
+      b.weight   && `⚖️ ${b.weight}`,
+      b.length   && `📏 ${b.length}`,
+    ].filter(Boolean);
+    const birthValue = bits.length || b.notes
+      ? `<div class="vault-birth">${bits.map(x => `<span>${escape(x)}</span>`).join('')}${b.notes ? `<div class="muted small" style="margin-top:6px;">${escape(b.notes)}</div>` : ''}</div>`
+      : '—';
+    return `<dl class="vault-kv">
+      ${rows.map(([emoji, label, value]) => `
+        <div>
+          <dt><span class="kv-emoji" aria-hidden="true">${emoji}</span>${escape(label)}</dt>
+          <dd>${escape(value)}</dd>
+        </div>`).join('')}
+      <div>
+        <dt><span class="kv-emoji" aria-hidden="true">👶</span>Birth details</dt>
+        <dd>${birthValue}</dd>
+      </div>
+    </dl>`;
+  },
+
+  startEditMember(mid) {
+    const m = Store.byId(mid); if (!m) return;
+    const card = document.querySelector(`.vault-card[data-mid="${mid}"]`); if (!card) return;
+    const viewBody = card.querySelector('[data-vault-view]');
+    const form = card.querySelector('[data-vault-form]');
+    viewBody.hidden = true;
+    form.hidden = false;
+    form.innerHTML = this.renderEditForm(m);
+    on(form.querySelector('[data-action=save]'),   'click', () => this.saveMember(mid));
+    on(form.querySelector('[data-action=cancel]'), 'click', () => {
+      viewBody.hidden = false; form.hidden = true; form.innerHTML = '';
+    });
+    on(form.querySelector('[data-action=add-dl]'), 'click', () => {
+      const wrap = form.querySelector('[data-role=dl-list]');
+      wrap.insertAdjacentHTML('beforeend', this.renderDLRow({ state: '', number: '' }));
+      this.wireDLRemovers(form);
+    });
+    this.wireDLRemovers(form);
+  },
+
+  wireDLRemovers(form) {
+    form.querySelectorAll('[data-action=remove-dl]').forEach(btn => {
+      btn.onclick = () => btn.closest('.vault-dl-row').remove();
+    });
+  },
+
+  renderDLRow(dl) {
+    return `<div class="vault-dl-row">
+      <input name="dl-state"  placeholder="ST" maxlength="3" value="${escape(dl.state  || '')}" />
+      <input name="dl-number" placeholder="License number" value="${escape(dl.number || '')}" />
+      <button type="button" class="btn btn-ghost btn-sm vault-row-remove" data-action="remove-dl" aria-label="Remove">×</button>
+    </div>`;
+  },
+
+  renderEditForm(m) {
+    const p = m.private;
+    const b = p.birth;
+    const dls = p.driversLicenses.length ? p.driversLicenses : [{ state: '', number: '' }];
+    return `
+      <fieldset class="vault-edit-fieldset">
+        <legend>🪪 Driver's Licenses</legend>
+        <div data-role="dl-list" class="vault-dl-list">${dls.map(dl => this.renderDLRow(dl)).join('')}</div>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="add-dl">+ Add another state</button>
+      </fieldset>
+      <div class="vault-edit-grid">
+        <label class="vault-edit-field">
+          <span class="vault-edit-label">📘 Passport #</span>
+          <input name="passport" value="${escape(p.passport)}" />
+        </label>
+        <label class="vault-edit-field">
+          <span class="vault-edit-label">✈️ Known Traveler #</span>
+          <input name="ktn" value="${escape(p.ktn)}" />
+        </label>
+        <label class="vault-edit-field">
+          <span class="vault-edit-label">🎁 Rapid Rewards</span>
+          <input name="rapidRewards" value="${escape(p.rapidRewards)}" />
+        </label>
+        <label class="vault-edit-field">
+          <span class="vault-edit-label">📸 Instagram</span>
+          <input name="instagram" placeholder="username (no @)" value="${escape(p.instagram)}" />
+        </label>
+      </div>
+      <fieldset class="vault-edit-fieldset">
+        <legend>👶 Birth details</legend>
+        <div class="vault-edit-grid">
+          <label class="vault-edit-field">
+            <span class="vault-edit-label">Place of birth</span>
+            <input name="birth-place" placeholder="City, State" value="${escape(b.place)}" />
+          </label>
+          <label class="vault-edit-field">
+            <span class="vault-edit-label">Hospital</span>
+            <input name="birth-hospital" value="${escape(b.hospital)}" />
+          </label>
+          <label class="vault-edit-field">
+            <span class="vault-edit-label">Time of birth</span>
+            <input name="birth-time" placeholder="08:05 AM" value="${escape(b.time)}" />
+          </label>
+          <label class="vault-edit-field">
+            <span class="vault-edit-label">Weight</span>
+            <input name="birth-weight" placeholder="7 lbs 4 oz" value="${escape(b.weight)}" />
+          </label>
+          <label class="vault-edit-field">
+            <span class="vault-edit-label">Length</span>
+            <input name="birth-length" placeholder='20"' value="${escape(b.length)}" />
+          </label>
+          <label class="vault-edit-field" style="grid-column: 1 / -1;">
+            <span class="vault-edit-label">Notes</span>
+            <textarea name="birth-notes" rows="2" placeholder="Anything else worth remembering">${escape(b.notes)}</textarea>
+          </label>
+        </div>
+      </fieldset>
+      <div class="vault-edit-actions">
+        <button class="btn btn-primary btn-sm" type="button" data-action="save">Save</button>
+        <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel">Cancel</button>
+      </div>`;
+  },
+
+  saveMember(mid) {
+    if (!Auth.canAccessVault()) return;
+    const m = Store.byId(mid); if (!m) return;
+    const form = document.querySelector(`[data-vault-form="${mid}"]`); if (!form) return;
+    const v = (sel) => (form.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    const stateInputs  = [...form.querySelectorAll('input[name="dl-state"]')];
+    const numberInputs = [...form.querySelectorAll('input[name="dl-number"]')];
+    const dls = [];
+    for (let i = 0; i < numberInputs.length; i++) {
+      const num = numberInputs[i].value.trim();
+      const st  = (stateInputs[i]?.value || '').trim().toUpperCase().slice(0, 3);
+      if (num || st) dls.push({ id: uid('dl'), state: st, number: num });
+    }
+    m.private = {
+      driversLicenses: dls,
+      passport: v('passport'),
+      ktn: v('ktn'),
+      rapidRewards: v('rapidRewards'),
+      instagram: v('instagram').replace(/^@/, ''),
+      birth: {
+        place:    v('birth-place'),
+        hospital: v('birth-hospital'),
+        time:     v('birth-time'),
+        weight:   v('birth-weight'),
+        length:   v('birth-length'),
+        notes:    v('birth-notes'),
+      },
+    };
+    Store.save();
+    toast('Profile saved.');
+    this.renderFamily();
+  },
+
+  // ---------------- Finance section ----------------
+  renderFinance() {
+    const host = $('#vault-finance');
+    const banks = Store.state.vault.banks;
+    const memberOptions = (selectedId) => {
+      const opts = ['<option value="">(unassigned / joint)</option>',
+        ...sortMembers(Store.membersList()).map(m =>
+          `<option value="${m.id}" ${m.id === selectedId ? 'selected' : ''}>${escape(displayName(m))}</option>`)
+      ];
+      return opts.join('');
+    };
+    const last4 = (n) => {
+      const s = (n || '').replace(/\D/g, '');
+      return s ? `••••${s.slice(-4)}` : '';
+    };
+    host.innerHTML = `
+      <header class="vault-section-head">
+        <h3>💳 Bank accounts</h3>
+        <button class="btn btn-primary btn-sm" data-action="add-bank">+ Add bank account</button>
+      </header>
+      ${banks.length ? `<div class="vault-list">
+        ${banks.map(b => `
+          <div class="vault-row" data-bid="${b.id}">
+            <div class="vault-row-view" data-role="view">
+              <div class="vault-row-main">
+                <div class="vault-row-title">${escape(b.bankName || 'Unnamed bank')}</div>
+                <div class="vault-row-sub muted small">
+                  ${b.accountType ? `<span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span>` : ''}
+                  ${last4(b.accountNumber) ? `Acct ${last4(b.accountNumber)}` : ''}
+                  ${b.routingNumber ? ` · Routing ${escape(b.routingNumber)}` : ''}
+                  ${b.holderId && Store.byId(b.holderId) ? ` · ${escape(displayName(Store.byId(b.holderId)))}` : ''}
+                </div>
+                ${b.notes ? `<div class="muted small" style="margin-top:4px;">${escape(b.notes)}</div>` : ''}
+              </div>
+              <div class="vault-row-actions">
+                <button class="btn btn-ghost btn-sm" data-action="edit-bank">Edit</button>
+                <button class="btn btn-danger-ghost btn-sm" data-action="delete-bank">Delete</button>
+              </div>
+            </div>
+            <form class="vault-row-edit" data-role="edit" hidden>
+              <div class="vault-edit-grid">
+                <label class="vault-edit-field"><span class="vault-edit-label">Bank name</span><input name="bankName" value="${escape(b.bankName || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Account type</span>
+                  <select name="accountType">
+                    <option value="checking" ${b.accountType === 'checking' ? 'selected' : ''}>Checking</option>
+                    <option value="savings"  ${b.accountType === 'savings'  ? 'selected' : ''}>Savings</option>
+                    <option value="credit"   ${b.accountType === 'credit'   ? 'selected' : ''}>Credit card</option>
+                    <option value="other"    ${b.accountType === 'other'    ? 'selected' : ''}>Other</option>
+                  </select>
+                </label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Account number</span><input name="accountNumber" value="${escape(b.accountNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Routing number</span><input name="routingNumber" value="${escape(b.routingNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Account holder</span><select name="holderId">${memberOptions(b.holderId)}</select></label>
+                <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(b.notes || '')}</textarea></label>
+              </div>
+              <div class="vault-edit-actions">
+                <button class="btn btn-primary btn-sm" type="button" data-action="save-bank">Save</button>
+                <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-bank">Cancel</button>
+              </div>
+            </form>
+          </div>`).join('')}
+      </div>` : '<p class="muted" style="padding:24px; text-align:center;">No bank accounts yet. Click + Add bank account to start.</p>'}
+    `;
+    on(host.querySelector('[data-action=add-bank]'), 'click', () => this.addBank());
+    host.querySelectorAll('.vault-row').forEach(row => this.wireBankRow(row));
+  },
+
+  wireBankRow(row) {
+    const bid = row.dataset.bid;
+    const view = row.querySelector('[data-role=view]');
+    const edit = row.querySelector('[data-role=edit]');
+    on(row.querySelector('[data-action=edit-bank]'),    'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=cancel-bank]'),  'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-bank]'),    'click', () => this.saveBank(bid));
+    on(row.querySelector('[data-action=delete-bank]'),  'click', () => this.deleteBank(bid));
+  },
+
+  addBank() {
+    if (!Auth.canAccessVault()) return;
+    Store.state.vault.banks.push({
+      id: uid('bank'),
+      bankName: '', accountNumber: '', routingNumber: '',
+      accountType: 'checking', holderId: '', notes: '',
+    });
+    Store.save();
+    this.renderFinance();
+    // Pop open edit on the newly-added row.
+    const last = Store.state.vault.banks[Store.state.vault.banks.length - 1];
+    const row = document.querySelector(`.vault-row[data-bid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-bank]')?.click();
+  },
+
+  saveBank(bid) {
+    if (!Auth.canAccessVault()) return;
+    const b = Store.state.vault.banks.find(x => x.id === bid); if (!b) return;
+    const row = document.querySelector(`.vault-row[data-bid="${bid}"]`);
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    b.bankName      = v('bankName');
+    b.accountType   = v('accountType') || 'checking';
+    b.accountNumber = v('accountNumber');
+    b.routingNumber = v('routingNumber');
+    b.holderId      = v('holderId');
+    b.notes         = v('notes');
+    Store.save();
+    toast('Bank account saved.');
+    this.renderFinance();
+  },
+
+  deleteBank(bid) {
+    if (!Auth.canAccessVault()) return;
+    const b = Store.state.vault.banks.find(x => x.id === bid); if (!b) return;
+    if (!confirm(`Delete ${b.bankName || 'this bank account'}?`)) return;
+    Store.state.vault.banks = Store.state.vault.banks.filter(x => x.id !== bid);
+    Store.save();
+    this.renderFinance();
+  },
+
+  // ---------------- Benefits section ----------------
+  renderBenefits() {
+    const host = $('#vault-benefits');
+    const items = Store.state.vault.insurances;
+    const memberOptions = (selectedId) => {
+      const opts = ['<option value="">(family plan / unassigned)</option>',
+        ...sortMembers(Store.membersList()).map(m =>
+          `<option value="${m.id}" ${m.id === selectedId ? 'selected' : ''}>${escape(displayName(m))}</option>`)
+      ];
+      return opts.join('');
+    };
+    const kindIcon = { health: '🩺', dental: '🦷', vision: '👓', other: '📄' };
+    host.innerHTML = `
+      <header class="vault-section-head">
+        <h3>🩺 Insurance &amp; benefits</h3>
+        <button class="btn btn-primary btn-sm" data-action="add-ins">+ Add insurance card</button>
+      </header>
+      ${items.length ? `<div class="vault-list">
+        ${items.map(i => `
+          <div class="vault-row vault-row-ins" data-iid="${i.id}">
+            <div class="vault-row-view" data-role="view">
+              <div class="vault-row-main">
+                <div class="vault-row-title">${kindIcon[i.kind] || '📄'} ${escape(i.insurer || 'Unnamed plan')} <span class="muted small">· ${capitalize(i.kind || 'other')}</span></div>
+                <div class="vault-row-sub muted small">
+                  ${i.policyNumber ? `Policy ${escape(i.policyNumber)}` : ''}
+                  ${i.groupNumber  ? ` · Group ${escape(i.groupNumber)}` : ''}
+                  ${i.phone        ? ` · ${escape(i.phone)}` : ''}
+                  ${i.memberId && Store.byId(i.memberId) ? ` · ${escape(displayName(Store.byId(i.memberId)))}` : ''}
+                </div>
+                ${i.notes ? `<div class="muted small" style="margin-top:4px;">${escape(i.notes)}</div>` : ''}
+                ${(i.frontPhoto || i.backPhoto) ? `<div class="vault-card-photos">
+                  ${i.frontPhoto ? `<a class="vault-card-photo-thumb" href="${i.frontPhoto}" target="_blank" rel="noopener" style="background-image:url('${i.frontPhoto}')" title="Front of card"></a>` : ''}
+                  ${i.backPhoto  ? `<a class="vault-card-photo-thumb" href="${i.backPhoto}"  target="_blank" rel="noopener" style="background-image:url('${i.backPhoto}')"  title="Back of card"></a>` : ''}
+                </div>` : ''}
+              </div>
+              <div class="vault-row-actions">
+                <button class="btn btn-ghost btn-sm" data-action="edit-ins">Edit</button>
+                <button class="btn btn-danger-ghost btn-sm" data-action="delete-ins">Delete</button>
+              </div>
+            </div>
+            <form class="vault-row-edit" data-role="edit" hidden>
+              <div class="vault-edit-grid">
+                <label class="vault-edit-field"><span class="vault-edit-label">Type</span>
+                  <select name="kind">
+                    <option value="health" ${i.kind === 'health' ? 'selected' : ''}>Health</option>
+                    <option value="dental" ${i.kind === 'dental' ? 'selected' : ''}>Dental</option>
+                    <option value="vision" ${i.kind === 'vision' ? 'selected' : ''}>Vision</option>
+                    <option value="other"  ${i.kind === 'other'  ? 'selected' : ''}>Other</option>
+                  </select>
+                </label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Insurance company</span><input name="insurer" value="${escape(i.insurer || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Member ID / Policy #</span><input name="policyNumber" value="${escape(i.policyNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Group #</span><input name="groupNumber" value="${escape(i.groupNumber || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(i.phone || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Covers</span><select name="memberId">${memberOptions(i.memberId)}</select></label>
+                <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(i.notes || '')}</textarea></label>
+              </div>
+              <div class="vault-photo-row">
+                <div class="vault-photo-slot" data-slot="frontPhoto">
+                  <div class="vault-photo-label">Front of card</div>
+                  <div class="vault-photo-preview" ${i.frontPhoto ? `style="background-image:url('${i.frontPhoto}')"` : ''}></div>
+                  <div class="vault-photo-actions">
+                    <label class="btn btn-secondary btn-sm">Upload<input type="file" accept="image/*" data-photo-target="frontPhoto" hidden /></label>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="clear-photo" data-photo-target="frontPhoto">Clear</button>
+                  </div>
+                </div>
+                <div class="vault-photo-slot" data-slot="backPhoto">
+                  <div class="vault-photo-label">Back of card</div>
+                  <div class="vault-photo-preview" ${i.backPhoto ? `style="background-image:url('${i.backPhoto}')"` : ''}></div>
+                  <div class="vault-photo-actions">
+                    <label class="btn btn-secondary btn-sm">Upload<input type="file" accept="image/*" data-photo-target="backPhoto" hidden /></label>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="clear-photo" data-photo-target="backPhoto">Clear</button>
+                  </div>
+                </div>
+              </div>
+              <div class="vault-edit-actions">
+                <button class="btn btn-primary btn-sm" type="button" data-action="save-ins">Save</button>
+                <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-ins">Cancel</button>
+              </div>
+            </form>
+          </div>`).join('')}
+      </div>` : '<p class="muted" style="padding:24px; text-align:center;">No insurance cards yet. Click + Add insurance card to start.</p>'}
+    `;
+    on(host.querySelector('[data-action=add-ins]'), 'click', () => this.addInsurance());
+    host.querySelectorAll('.vault-row-ins').forEach(row => this.wireInsuranceRow(row));
+  },
+
+  wireInsuranceRow(row) {
+    const iid = row.dataset.iid;
+    const view = row.querySelector('[data-role=view]');
+    const edit = row.querySelector('[data-role=edit]');
+    on(row.querySelector('[data-action=edit-ins]'),   'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=cancel-ins]'), 'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-ins]'),   'click', () => this.saveInsurance(iid));
+    on(row.querySelector('[data-action=delete-ins]'), 'click', () => this.deleteInsurance(iid));
+    // photo uploads — read file, downscale, store as data URL on the insurance record.
+    row.querySelectorAll('input[type=file][data-photo-target]').forEach(input => {
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0]; if (!file) return;
+        const target = input.dataset.photoTarget;
+        try {
+          const dataUrl = await downscaleImageFile(file, 1400, 0.85);
+          const ins = Store.state.vault.insurances.find(x => x.id === iid);
+          if (ins) { ins[target] = dataUrl; Store.save(); toast('Photo attached.'); this.renderBenefits(); }
+        } catch (e) {
+          toast('Could not load image: ' + e.message, 'warn');
+        }
+      });
+    });
+    row.querySelectorAll('[data-action=clear-photo]').forEach(btn => {
+      on(btn, 'click', () => {
+        const target = btn.dataset.photoTarget;
+        const ins = Store.state.vault.insurances.find(x => x.id === iid);
+        if (ins) { ins[target] = ''; Store.save(); this.renderBenefits(); }
+      });
+    });
+  },
+
+  addInsurance() {
+    if (!Auth.canAccessVault()) return;
+    Store.state.vault.insurances.push({
+      id: uid('ins'), kind: 'health', insurer: '', memberId: '',
+      policyNumber: '', groupNumber: '', phone: '',
+      frontPhoto: '', backPhoto: '', notes: '',
+    });
+    Store.save();
+    this.renderBenefits();
+    const last = Store.state.vault.insurances[Store.state.vault.insurances.length - 1];
+    const row = document.querySelector(`.vault-row[data-iid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-ins]')?.click();
+  },
+
+  saveInsurance(iid) {
+    if (!Auth.canAccessVault()) return;
+    const i = Store.state.vault.insurances.find(x => x.id === iid); if (!i) return;
+    const row = document.querySelector(`.vault-row[data-iid="${iid}"]`);
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    i.kind         = v('kind') || 'other';
+    i.insurer      = v('insurer');
+    i.policyNumber = v('policyNumber');
+    i.groupNumber  = v('groupNumber');
+    i.phone        = v('phone');
+    i.memberId     = v('memberId');
+    i.notes        = v('notes');
+    Store.save();
+    toast('Insurance saved.');
+    this.renderBenefits();
+  },
+
+  deleteInsurance(iid) {
+    if (!Auth.canAccessVault()) return;
+    const i = Store.state.vault.insurances.find(x => x.id === iid); if (!i) return;
+    if (!confirm(`Delete ${i.insurer || 'this insurance card'}?`)) return;
+    Store.state.vault.insurances = Store.state.vault.insurances.filter(x => x.id !== iid);
+    Store.save();
+    this.renderBenefits();
+  },
+
+  // ---------------- Home section ----------------
+  renderHome() {
+    const host = $('#vault-home');
+    const utils = Store.state.vault.utilities;
+    const hoa   = Store.state.vault.hoa;
+    const codes = Store.state.vault.codes;
+    host.innerHTML = `
+      <header class="vault-section-head">
+        <h3>🏠 Utilities</h3>
+        <button class="btn btn-primary btn-sm" data-action="add-util">+ Add utility</button>
+      </header>
+      ${utils.length ? `<div class="vault-list">
+        ${utils.map(u => `
+          <div class="vault-row" data-uid="${u.id}">
+            <div class="vault-row-view" data-role="view">
+              <div class="vault-row-main">
+                <div class="vault-row-title">${escape(u.name || 'Unnamed utility')}</div>
+                <div class="vault-row-sub muted small">
+                  ${u.website ? `<a href="${escape(u.website)}" target="_blank" rel="noopener">${escape(u.website)}</a>` : ''}
+                  ${u.phone ? ` · ${escape(u.phone)}` : ''}
+                  ${u.accountNumber ? ` · Acct ${escape(u.accountNumber)}` : ''}
+                </div>
+                ${u.notes ? `<div class="muted small" style="margin-top:4px;">${escape(u.notes)}</div>` : ''}
+              </div>
+              <div class="vault-row-actions">
+                <button class="btn btn-ghost btn-sm" data-action="edit-util">Edit</button>
+                <button class="btn btn-danger-ghost btn-sm" data-action="delete-util">Delete</button>
+              </div>
+            </div>
+            <form class="vault-row-edit" data-role="edit" hidden>
+              <div class="vault-edit-grid">
+                <label class="vault-edit-field"><span class="vault-edit-label">Name</span><input name="name" placeholder="e.g. NV Energy" value="${escape(u.name || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="website" type="url" placeholder="https://" value="${escape(u.website || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(u.phone || '')}" /></label>
+                <label class="vault-edit-field"><span class="vault-edit-label">Account #</span><input name="accountNumber" value="${escape(u.accountNumber || '')}" /></label>
+                <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(u.notes || '')}</textarea></label>
+              </div>
+              <div class="vault-edit-actions">
+                <button class="btn btn-primary btn-sm" type="button" data-action="save-util">Save</button>
+                <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-util">Cancel</button>
+              </div>
+            </form>
+          </div>`).join('')}
+      </div>` : '<p class="muted" style="padding:16px; text-align:center;">No utilities yet.</p>'}
+
+      <header class="vault-section-head" style="margin-top:24px;">
+        <h3>🏢 HOA / Property management</h3>
+        <button class="btn btn-secondary btn-sm" data-action="edit-hoa">Edit</button>
+      </header>
+      <div class="vault-row" data-role="hoa">
+        <div class="vault-row-view" data-role="view">
+          ${(hoa.name || hoa.contact || hoa.address || hoa.email || hoa.phone) ? `
+            <div class="vault-row-main">
+              <div class="vault-row-title">${escape(hoa.name || 'HOA')}</div>
+              <div class="muted small" style="margin-top:4px; white-space:pre-line;">${escape([hoa.contact, hoa.title].filter(Boolean).join(' · '))}</div>
+              ${hoa.address ? `<div class="muted small" style="white-space:pre-line;">${escape(hoa.address)}</div>` : ''}
+              <div class="muted small" style="margin-top:4px;">
+                ${hoa.phone ? `📞 ${escape(hoa.phone)}` : ''}
+                ${hoa.fax ? ` · fax ${escape(hoa.fax)}` : ''}
+              </div>
+              ${hoa.website ? `<div class="muted small">🌐 <a href="${escape(hoa.website.startsWith('http') ? hoa.website : 'https://' + hoa.website)}" target="_blank" rel="noopener">${escape(hoa.website)}</a></div>` : ''}
+              ${hoa.email ? `<div class="muted small">✉️ ${escape(hoa.email)}</div>` : ''}
+              ${hoa.notes ? `<div class="muted small" style="margin-top:6px;">${escape(hoa.notes)}</div>` : ''}
+            </div>
+          ` : `<div class="muted small" style="padding:8px;">No HOA info yet — click Edit to add.</div>`}
+        </div>
+        <form class="vault-row-edit" data-role="edit" hidden>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">HOA / Property name</span><input name="hoa-name" value="${escape(hoa.name || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Contact person</span><input name="hoa-contact" value="${escape(hoa.contact || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Title</span><input name="hoa-title" value="${escape(hoa.title || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="hoa-phone" type="tel" value="${escape(hoa.phone || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Fax</span><input name="hoa-fax" value="${escape(hoa.fax || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Email</span><input name="hoa-email" type="email" value="${escape(hoa.email || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="hoa-website" type="url" placeholder="https://" value="${escape(hoa.website || '')}" /></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Address</span><textarea name="hoa-address" rows="2">${escape(hoa.address || '')}</textarea></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="hoa-notes" rows="2">${escape(hoa.notes || '')}</textarea></label>
+          </div>
+          <div class="vault-edit-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-action="save-hoa">Save</button>
+            <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-hoa">Cancel</button>
+          </div>
+        </form>
+      </div>
+
+      <header class="vault-section-head" style="margin-top:24px;">
+        <h3>🔢 Gate / amenity codes</h3>
+        <button class="btn btn-secondary btn-sm" data-action="edit-codes">Edit</button>
+      </header>
+      <div class="vault-row" data-role="codes">
+        <div class="vault-row-view" data-role="view">
+          <dl class="vault-kv">
+            <div><dt><span class="kv-emoji">🚪</span>Pedestrian gate</dt><dd>${escape(codes.pedestrianGate || '—')}</dd></div>
+            <div><dt><span class="kv-emoji">🚗</span>Car gate</dt><dd>${escape(codes.carGate || '—')}</dd></div>
+            <div><dt><span class="kv-emoji">🏊</span>Pool</dt><dd>${escape(codes.pool || '—')}</dd></div>
+            <div><dt><span class="kv-emoji">🏠</span>Clubhouse</dt><dd>${escape(codes.clubhouse || '—')}</dd></div>
+            ${(codes.buildings || []).length ? `<div style="grid-column: 1 / -1;">
+              <dt><span class="kv-emoji">🏢</span>Building codes</dt>
+              <dd>${codes.buildings.map(c => `<div><strong>${escape(c.label || '?')}:</strong> ${escape(c.code || '—')}</div>`).join('')}</dd>
+            </div>` : ''}
+            ${codes.notes ? `<div style="grid-column: 1 / -1;"><dt>Notes</dt><dd>${escape(codes.notes)}</dd></div>` : ''}
+          </dl>
+        </div>
+        <form class="vault-row-edit" data-role="edit" hidden>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">🚪 Pedestrian gate</span><input name="codes-pedestrianGate" value="${escape(codes.pedestrianGate || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🚗 Car gate</span><input name="codes-carGate" value="${escape(codes.carGate || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🏊 Pool</span><input name="codes-pool" value="${escape(codes.pool || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">🏠 Clubhouse</span><input name="codes-clubhouse" value="${escape(codes.clubhouse || '')}" /></label>
+          </div>
+          <fieldset class="vault-edit-fieldset">
+            <legend>🏢 Building codes</legend>
+            <div data-role="bld-list" class="vault-dl-list">${(codes.buildings || []).map(b => this.renderBuildingRow(b)).join('')}</div>
+            <button type="button" class="btn btn-ghost btn-sm" data-action="add-bld">+ Add building</button>
+          </fieldset>
+          <label class="vault-edit-field"><span class="vault-edit-label">Notes</span><textarea name="codes-notes" rows="2">${escape(codes.notes || '')}</textarea></label>
+          <div class="vault-edit-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-action="save-codes">Save</button>
+            <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-codes">Cancel</button>
+          </div>
+        </form>
+      </div>
+    `;
+
+    on(host.querySelector('[data-action=add-util]'), 'click', () => this.addUtility());
+    host.querySelectorAll('.vault-row[data-uid]').forEach(row => this.wireUtilityRow(row));
+    // HOA
+    const hoaRow = host.querySelector('[data-role=hoa]');
+    on(hoaRow.querySelector('[data-action=edit-hoa]') || host.querySelector('[data-action=edit-hoa]'), 'click', () => {
+      hoaRow.querySelector('[data-role=view]').hidden = true;
+      hoaRow.querySelector('[data-role=edit]').hidden = false;
+    });
+    on(hoaRow.querySelector('[data-action=cancel-hoa]'), 'click', () => {
+      hoaRow.querySelector('[data-role=view]').hidden = false;
+      hoaRow.querySelector('[data-role=edit]').hidden = true;
+    });
+    on(hoaRow.querySelector('[data-action=save-hoa]'), 'click', () => this.saveHOA());
+    // Codes
+    const codesRow = host.querySelector('[data-role=codes]');
+    on(host.querySelector('[data-action=edit-codes]'), 'click', () => {
+      codesRow.querySelector('[data-role=view]').hidden = true;
+      codesRow.querySelector('[data-role=edit]').hidden = false;
+      this.wireBuildingRows(codesRow);
+    });
+    on(codesRow.querySelector('[data-action=cancel-codes]'), 'click', () => {
+      codesRow.querySelector('[data-role=view]').hidden = false;
+      codesRow.querySelector('[data-role=edit]').hidden = true;
+    });
+    on(codesRow.querySelector('[data-action=save-codes]'), 'click', () => this.saveCodes());
+    on(codesRow.querySelector('[data-action=add-bld]'), 'click', () => {
+      const wrap = codesRow.querySelector('[data-role=bld-list]');
+      wrap.insertAdjacentHTML('beforeend', this.renderBuildingRow({ label: '', code: '' }));
+      this.wireBuildingRows(codesRow);
+    });
+  },
+
+  renderBuildingRow(b) {
+    return `<div class="vault-dl-row">
+      <input name="bld-label" placeholder="Building #" value="${escape(b.label || '')}" />
+      <input name="bld-code"  placeholder="Code" value="${escape(b.code  || '')}" />
+      <button type="button" class="btn btn-ghost btn-sm vault-row-remove" data-action="remove-bld" aria-label="Remove">×</button>
+    </div>`;
+  },
+
+  wireBuildingRows(scope) {
+    scope.querySelectorAll('[data-action=remove-bld]').forEach(btn => {
+      btn.onclick = () => btn.closest('.vault-dl-row').remove();
+    });
+  },
+
+  wireUtilityRow(row) {
+    const uid_ = row.dataset.uid;
+    const view = row.querySelector('[data-role=view]');
+    const edit = row.querySelector('[data-role=edit]');
+    on(row.querySelector('[data-action=edit-util]'),   'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=cancel-util]'), 'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-util]'),   'click', () => this.saveUtility(uid_));
+    on(row.querySelector('[data-action=delete-util]'), 'click', () => this.deleteUtility(uid_));
+  },
+
+  addUtility() {
+    if (!Auth.canAccessVault()) return;
+    Store.state.vault.utilities.push({ id: uid('util'), name: '', website: '', phone: '', accountNumber: '', notes: '' });
+    Store.save();
+    this.renderHome();
+    const last = Store.state.vault.utilities[Store.state.vault.utilities.length - 1];
+    const row = document.querySelector(`.vault-row[data-uid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-util]')?.click();
+  },
+
+  saveUtility(uid_) {
+    if (!Auth.canAccessVault()) return;
+    const u = Store.state.vault.utilities.find(x => x.id === uid_); if (!u) return;
+    const row = document.querySelector(`.vault-row[data-uid="${uid_}"]`);
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    u.name = v('name');
+    u.website = v('website');
+    u.phone = v('phone');
+    u.accountNumber = v('accountNumber');
+    u.notes = v('notes');
+    Store.save();
+    toast('Utility saved.');
+    this.renderHome();
+  },
+
+  deleteUtility(uid_) {
+    if (!Auth.canAccessVault()) return;
+    const u = Store.state.vault.utilities.find(x => x.id === uid_); if (!u) return;
+    if (!confirm(`Delete ${u.name || 'this utility'}?`)) return;
+    Store.state.vault.utilities = Store.state.vault.utilities.filter(x => x.id !== uid_);
+    Store.save();
+    this.renderHome();
+  },
+
+  saveHOA() {
+    if (!Auth.canAccessVault()) return;
+    const row = document.querySelector('[data-role=hoa]');
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    Store.state.vault.hoa = {
+      name:    v('hoa-name'),
+      contact: v('hoa-contact'),
+      title:   v('hoa-title'),
+      address: v('hoa-address'),
+      phone:   v('hoa-phone'),
+      fax:     v('hoa-fax'),
+      website: v('hoa-website'),
+      email:   v('hoa-email'),
+      notes:   v('hoa-notes'),
+    };
+    Store.save();
+    toast('HOA saved.');
+    this.renderHome();
+  },
+
+  saveCodes() {
+    if (!Auth.canAccessVault()) return;
+    const row = document.querySelector('[data-role=codes]');
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    const labels = [...row.querySelectorAll('input[name="bld-label"]')];
+    const codes  = [...row.querySelectorAll('input[name="bld-code"]')];
+    const buildings = [];
+    for (let i = 0; i < labels.length; i++) {
+      const lbl = labels[i].value.trim();
+      const cde = codes[i]?.value.trim() || '';
+      if (lbl || cde) buildings.push({ id: uid('bld'), label: lbl, code: cde });
+    }
+    Store.state.vault.codes = {
+      pedestrianGate: v('codes-pedestrianGate'),
+      carGate:        v('codes-carGate'),
+      pool:           v('codes-pool'),
+      clubhouse:      v('codes-clubhouse'),
+      buildings,
+      notes:          v('codes-notes'),
+    };
+    Store.save();
+    toast('Codes saved.');
+    this.renderHome();
+  },
+};
+
+// Read an image File, draw it onto a canvas downscaled to `maxDim` (longest
+// edge), and return a JPEG data URL. Used by the vault to store insurance
+// card photos inline in the archive blob without bloating it with 5MB
+// originals.
+function downscaleImageFile(file, maxDim = 1400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not decode image'));
+      img.onload = () => {
+        const ratio = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * ratio);
+        const h = Math.round(img.height * ratio);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 const HistoryView = {
   render() {
