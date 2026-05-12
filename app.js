@@ -3239,12 +3239,20 @@ const MyFamilyView = {
       </g>
     `;
 
-    // Card click → drawer (per design decision: clickable for users on My Family)
+    // Card click → drawer. Admins can open any card. Non-admin users may
+    // only open their own card and their current spouse's — every other
+    // card in the mini-tree is read-only for them so they can't pry into
+    // someone else's profile fields (address, email, etc.).
+    const meId       = Auth.current && Auth.current !== 'admin-bootstrap' ? Auth.current : null;
+    const me         = meId ? Store.byId(meId) : null;
+    const allowedIds = new Set([meId, me?.spouseId].filter(Boolean));
     nodes.querySelectorAll('.node').forEach(el => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('.node-add')) return;
         if (e.target.closest('.node-toggle')) return;
-        Drawer.open(el.dataset.id);
+        const id = el.dataset.id;
+        if (!Auth.isAdmin() && !allowedIds.has(id)) return;
+        Drawer.open(id);
       });
     });
   },
@@ -5414,6 +5422,9 @@ const EventsView = {
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
             ${(() => {
+              // Total gifts received is financial info — admin only. Non-
+              // admin users see the attendee list but not the money sum.
+              if (!Auth.isAdmin()) return '';
               // Per-attendee giftTotalForAttendee credits the FULL gift to
               // every contributor (Hee=$500 AND Kim=$500 for a joint $500
               // gift). Summing those would double-count the actual money in
@@ -8520,6 +8531,15 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.16',
+    date: '2026-05-11',
+    title: 'Tightened user-role permissions in My Family and Events',
+    changes: [
+      'My Family: a non-admin user can now only open their own profile card and their current spouse\'s. Clicking any other card (parents, siblings, children, in-laws) is a no-op — the read-only mini-tree stays visible but the drawer with private fields no longer opens.',
+      'Events: the "Total gifts received" summary row in the attendees table is now admin-only. Non-admin users see the attendee list but not the money sum.',
+    ],
+  },
   {
     version: '4.15',
     date: '2026-05-11',
