@@ -1744,6 +1744,9 @@ const Canvas = {
         addBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           if (!Auth.isAdmin()) return;
+          // Drop focus from the button so :focus-within on its node doesn't
+          // keep the "+" visible after the modal opens (and after it closes).
+          addBtn.blur();
           MemberModal.open({ targetId: id });
         });
       }
@@ -2487,6 +2490,20 @@ const MyFamilyView = {
     const exes    = (focus.exSpouseIds || [])
       .map(id => Store.byId(id))
       .filter(Boolean);
+    // Siblings: anyone sharing a parent with focus (union from both
+    // directions, same defense as the parents calculation above).
+    const sibIdSet = new Set();
+    parentIdSet.forEach(pid => {
+      const p = Store.byId(pid); if (!p) return;
+      (p.childrenIds || []).forEach(cid => { if (cid !== focus.id) sibIdSet.add(cid); });
+    });
+    Store.membersList().forEach(o => {
+      // Reverse-lookup: if any sibling-claimed parent of focus also lists
+      // someone else as their child, pick that up too.
+      const sharedParents = (o.parentIds || []).some(pid => parentIdSet.has(pid));
+      if (sharedParents && o.id !== focus.id) sibIdSet.add(o.id);
+    });
+    const siblings = [...sibIdSet].map(id => Store.byId(id)).filter(Boolean);
     // Children: union from focus + current spouse + every ex. A child from
     // a previous marriage still belongs in this view — they're family.
     const allPartners = [...(spouse ? [spouse] : []), ...exes];
@@ -2538,11 +2555,12 @@ const MyFamilyView = {
     const Y_GRAND    = Y_CHILDREN + CH + ROW_GAP;
 
     placeRow(parents, Y_PARENTS);
-    // Focus row: [current spouse, focus, ex1, ex2, ...]. Current spouse to
-    // the left, exes to the right matches the visual the user asked for.
+    // Focus row: [current spouse, focus, exes..., siblings...]. Current spouse
+    // on the left, exes on the right, siblings tailing after exes — all on
+    // the same level since they're peers of the focus.
     const focusRow = spouse
-      ? [spouse, focus, ...exes]
-      : [focus, ...exes];
+      ? [spouse, focus, ...exes, ...siblings]
+      : [focus, ...exes, ...siblings];
     placeRow(focusRow, Y_FOCUS);
     // Children row: each child immediately followed by their spouse if any.
     // Interleaving keeps couples visually together.
@@ -2562,7 +2580,7 @@ const MyFamilyView = {
     placeRow(grandchildren, Y_GRAND);
 
     // World bounds — compute min/max so we can center the canvas.
-    const all = [focus, ...parents, ...allPartners, ...children, ...childSpouses, ...grandchildren];
+    const all = [focus, ...parents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
     let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
     all.forEach(m => {
       const p = rowFor[m.id];
@@ -2584,7 +2602,7 @@ const MyFamilyView = {
     world.style.height = `${worldH + padTop * 2}px`;
 
     // -------- nodes --------
-    const renderableMembers = [focus, ...parents, ...allPartners, ...children, ...childSpouses, ...grandchildren];
+    const renderableMembers = [focus, ...parents, ...allPartners, ...siblings, ...children, ...childSpouses, ...grandchildren];
     nodes.innerHTML = renderableMembers.map(m => {
       const p = rowFor[m.id]; if (!p) return '';
       const html = nodeHTML(m);
@@ -2605,8 +2623,10 @@ const MyFamilyView = {
     const lines = [];
     const hearts = [];
 
-    // Parents → focus: drop from parent-couple midpoint (or single parent) down
-    // to a trunk above focus, then up into focus.
+    // Parents → focus + siblings: drop from parent-couple midpoint to a
+    // horizontal trunk above the focus row, then drop into the focus AND
+    // each sibling. Siblings hang off the same trunk so the shared-parent
+    // relationship reads at a glance.
     if (parents.length) {
       const focusTop = ANCHOR_TOP(focus.id);
       const parentBottoms = parents.map(p => ANCHOR_BOTTOM(p.id));
@@ -2619,29 +2639,29 @@ const MyFamilyView = {
         : parentBottoms[0].x;
 
       // Vertical down from each parent's bottom
-      parentBottoms.forEach((pb, idx) => {
-        // Stop the line at the spouse-line height (where the heart will sit), so
-        // it visually connects through the heart rather than overshooting it.
+      parentBottoms.forEach((pb) => {
         const stopY = couple ? pb.y + 28 : trunkY;
         lines.push(`M ${pb.x} ${pb.y} V ${stopY}`);
       });
 
-      // For a couple: horizontal spouse line and a single drop to trunk
       if (couple) {
         const yLine = parentBottoms[0].y + 28;
         const x0 = Math.min(parentBottoms[0].x, parentBottoms[1].x);
         const x1 = Math.max(parentBottoms[0].x, parentBottoms[1].x);
         lines.push(`M ${x0} ${yLine} H ${x1}`);
-        // drop from midpoint to trunk
         lines.push(`M ${midX} ${yLine} V ${trunkY}`);
-        // heart between parents
         hearts.push(heartMarker(midX, yLine, !!parents[0].divorced || !!parents[1].divorced));
       }
 
-      // horizontal trunk above focus (so it lines up even if midX != focus.x)
-      lines.push(`M ${Math.min(midX, focusTop.x)} ${trunkY} H ${Math.max(midX, focusTop.x)}`);
-      // drop into focus top
-      lines.push(`M ${focusTop.x} ${trunkY} V ${focusTop.y}`);
+      // Drop targets along the trunk: focus + every sibling that shares a
+      // parent we already drew. Compute their top anchors and stretch the
+      // trunk wide enough to reach all of them.
+      const dropTops = [focusTop, ...siblings.map(s => ANCHOR_TOP(s.id))];
+      const allX = [midX, ...dropTops.map(t => t.x)];
+      const trunkLeft  = Math.min(...allX);
+      const trunkRight = Math.max(...allX);
+      lines.push(`M ${trunkLeft} ${trunkY} H ${trunkRight}`);
+      dropTops.forEach(t => lines.push(`M ${t.x} ${trunkY} V ${t.y}`));
     }
 
     // Focus + each partner: draw a horizontal line + heart between them.
@@ -4942,7 +4962,13 @@ const EventsView = {
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
             ${(() => {
-              const sum = attendeesRaw.reduce((s, x) => s + giftTotalForAttendee(x), 0);
+              // Per-attendee giftTotalForAttendee credits the FULL gift to
+              // every contributor (Hee=$500 AND Kim=$500 for a joint $500
+              // gift). Summing those would double-count the actual money in
+              // — so the table footer iterates gifts directly and dedupes.
+              const sum = (Store.state.gifts || [])
+                .filter(g => g.eventId === ev.id && g.direction === 'received')
+                .reduce((s, g) => s + (Number(g.amount) || 0), 0);
               if (sum <= 0) return '';
               return `<tfoot>
                 <tr class="attendance-total-row">
@@ -6287,7 +6313,14 @@ const MemberModal = {
     });
     setTimeout(() => f.firstName.focus(), 50);
   },
-  close() { this.el.setAttribute('aria-hidden', 'true'); },
+  close() {
+    this.el.setAttribute('aria-hidden', 'true');
+    // Blur whatever has focus so the source node's "+" button doesn't stay
+    // visible via :focus-within once the modal goes away.
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
+  },
   updateRelTargets() {
     const f = $('#member-form');
     const lockedId = f.dataset.lockedTargetId || '';
@@ -7894,41 +7927,167 @@ function expandReminder(r, today, horizon) {
 }
 
 // -------------------- HISTORY VIEW (admin only) --------------------
-// Static changelog loaded from /changelog.json. Maintained by hand each time
-// a meaningful change ships. Major version bumps for big features / data
-// model changes; minor (decimal) bumps for tweaks and fixes.
-const HistoryView = {
-  data: null,         // { entries: [...] } — populated on first render
-  loading: false,
-
-  async render() {
-    const list = $('#history-list'); if (!list) return;
-    if (this.data) { this._paint(); return; }
-    if (this.loading) return;
-    this.loading = true;
-    list.innerHTML = '<p class="muted small">Loading change history…</p>';
-    try {
-      const r = await fetch('changelog.json', { cache: 'no-cache' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      this.data = await r.json();
-    } catch (e) {
-      list.innerHTML = `<p class="muted small">Could not load history: ${escape(e.message || 'unknown error')}.</p>`;
-      this.loading = false;
-      return;
-    }
-    this.loading = false;
-    this._paint();
+// Hand-maintained changelog of meaningful shipped changes. Bumped each time a
+// new batch lands. Major version for big features / data-model changes;
+// minor (decimal) for tweaks and fixes. Inlined here (instead of fetched
+// from changelog.json) so deploys with caching weirdness still show the
+// current version chip.
+const CHANGELOG = [
+  {
+    version: '4.5',
+    date: '2026-05-11',
+    title: 'My Family siblings, Dashboard chip colors, gift total dedupe, + button focus fix',
+    changes: [
+      'Family Tree: the "+" add-relative button no longer stays visible after the modal closes — clicking it now blurs the button and the modal\'s close() drops any lingering focus so :focus-within releases.',
+      'Dashboard: Upcoming filter chips are now color-coded to match the Calendar legend (blue events, green birthdays, purple anniversaries, red holidays, amber reminders). Each chip also carries a thin matching left-border when idle.',
+      'Events: attendees-table "Total gifts received" footer used to sum each attendee\'s gift credit, which double-counted joint gifts (Hee + Kim both got credit for the same $500 → footer showed $1000). The footer now iterates gifts directly and sums each gift once.',
+      'My Family: siblings now appear on the focus row after the exes, branched off the same parent trunk as the focus.',
+      'History: changelog is inlined in the bundle instead of fetched from changelog.json so the current-version chip always renders without depending on the static-file route.',
+    ],
   },
+  {
+    version: '4.4',
+    date: '2026-05-11',
+    title: 'My Family parents fix, Dashboard filters and totals, Members rename, History page',
+    changes: [
+      'My Family: parents row unions focus.parentIds + reverse-lookup + each parent\'s current spouse, so a missing co-parent (the Doan Yoo\'s-mother case) surfaces automatically from the spouse link.',
+      'My Family: children row interleaves each child\'s spouse next to them; grandchildren include kids of the in-law too.',
+      'Family Tree: emoji slot in the toolbar is no longer hidden by the global data-admin-only rule.',
+      'Dashboard: Birthdays / Anniversaries / Events / Holidays / Reminders are now clickable filter chips.',
+      'Dashboard: "This month\'s gifts" panel — received, given, net for the current month.',
+      'Dashboard: each event row in Upcoming shows its rolling gift totals.',
+      'Dashboard: gift tracker now only shows direction=given gifts that aren\'t fully purchased + sent.',
+      'Admin tab renamed to Members.',
+      'New History page (this changelog).',
+    ],
+  },
+  {
+    version: '4.3',
+    date: '2026-05-11',
+    title: 'Family Tree card overflow, group filter ancestors, My Family per-child routing',
+    changes: [
+      'Family Tree: .node overflows visible so the "In loving memory" badge and the "+" button aren\'t clipped.',
+      'Family Tree: removed the desaturate-on-death photo filter.',
+      'Family Tree: Group filter keep-set walks every ancestor so the tree stays vertical instead of collapsing into a horizontal row.',
+      'Family Tree: emoji slot moved out of a hidden floating position into the toolbar.',
+      'My Family: per-child routing — each child\'s trunk drops from their actual visible bio parent(s).',
+      'My Family: focus row order is [current spouse, focus, ex1, ex2, ...].',
+      'My Family: added a 4th row for grandchildren.',
+    ],
+  },
+  {
+    version: '4.2',
+    date: '2026-05-11',
+    title: 'Family Tree polish, My Family ex-spouses, Dashboard tweaks, Admin sort and login column, page emojis',
+    changes: [
+      'Family Tree: "In loving memory" badge on the profile card when a date of death is set; age caps at date of death.',
+      'Family Tree: Tree.relations does union-from-both-directions and healMissingKeys heals asymmetric links every load.',
+      'My Family: renders current spouse + every ex on the focus row with broken-heart lines.',
+      'Dashboard: Upcoming horizon 60 days; US holidays merged in.',
+      'Dashboard: gift tracker hides rows where both purchased AND sent are checked.',
+      'Members: Name column header click toggles between by-last and by-first sort; new Login column.',
+      'Page emojis: admins can set an emoji per page; updates both the H2 and the nav tab.',
+    ],
+  },
+  {
+    version: '4.1',
+    date: '2026-05-11',
+    title: 'Dashboard, profile additions, calendar reminders, travel trips',
+    changes: [
+      'Profile drawer: date of death, 529 plan URL, notes, in-drawer gifts section.',
+      'Members table: inline copy-email button per row.',
+      'Calendar: birthday chip recolored green; legend updated.',
+      'Calendar: new Calendar reminder type (recurring, calendar-only).',
+      'Events: travel-trip toggle adds destination, end date, four budget categories, and a daily itinerary editor.',
+      'New Dashboard page (admin-only): Las Vegas clock + weather (Open-Meteo), upcoming list, quick gift tracker, shared grocery list.',
+      'Admins land on Dashboard after sign-in.',
+    ],
+  },
+  {
+    version: '4.0',
+    date: '2026-05-11',
+    title: 'Multiple ex-spouses, photo recrop, Group + My Family tree filters',
+    changes: [
+      'Multi-spouse data model: exSpouseIds[] on every member; canvas draws each ex with a long-dashed broken heart.',
+      'healMissingKeys migrates legacy divorced-flag-on-current-spouse pairs into the new model.',
+      'Profile edit drawer: "Crop photo" button re-runs the cropper on an existing photo.',
+      'Family Tree toolbar: Group dropdown and My Family toggle as mutually-exclusive view filters.',
+    ],
+  },
+  {
+    version: '3.4',
+    date: '2026-05-11',
+    title: 'Edge Function for admin password reset',
+    changes: [
+      'New Supabase Edge Function admin-reset-password (service_role server-side) so admins can set a member\'s password directly from the website.',
+      'Client toast surfaces a deploy-the-function hint when the call fails.',
+    ],
+  },
+  {
+    version: '3.3',
+    date: '2026-05-11',
+    title: 'Smart Reset PW handles missing logins; recovery modal fixes',
+    changes: [
+      'Admin Reset PW probes member_accounts first; if no login exists, it offers to create one on the spot.',
+      'Open the recovery modal directly when the URL has a recovery hash.',
+    ],
+  },
+  {
+    version: '3.2',
+    date: '2026-05-11',
+    title: 'Mirror members into Supabase Auth on create',
+    changes: [
+      'Member-create form gains an Email field; saving creates a Supabase Auth user via a session-less throwaway client (admin stays logged in).',
+      'member_accounts row links the auth user to the in-app member; credentials shown once for the admin to share.',
+    ],
+  },
+  {
+    version: '3.1',
+    date: '2026-05-11',
+    title: 'RLS policy fixes; admin password reset via email',
+    changes: [
+      'Split member_accounts policies per operation to break the infinite-recursion RLS error.',
+      'Add INSERT policy on archive so PostgREST .upsert() works.',
+      'Admin Reset PW uses resetPasswordForEmail and a recovery-mode change-password modal on the receiving end.',
+    ],
+  },
+  {
+    version: '3.0',
+    date: '2026-05-11',
+    title: 'Supabase backend wire-up + auth',
+    changes: [
+      'Replaced localStorage-only storage with Supabase: JSONB-blob single-row archive + member_accounts mapping + RLS.',
+      'Auth flow switched from local username/passwordHash to Supabase email/password with realtime sync.',
+    ],
+  },
+  {
+    version: '2.0',
+    date: '2026-05-11',
+    title: 'Calendar, expenses, anniversaries, photo crop, profile fields',
+    changes: [
+      'Calendar page with events, birthdays, US holidays; Google Calendar sync; per-attendee expenses; anniversary tracking; photo crop modal; profile improvements.',
+    ],
+  },
+  {
+    version: '1.0',
+    date: '2026-05-11',
+    title: 'Initial commit',
+    changes: [
+      'Family Archive web app — vanilla JS, single index.html + app.js + styles.css.',
+    ],
+  },
+];
 
-  _paint() {
+const HistoryView = {
+  render() {
     const list = $('#history-list'); if (!list) return;
-    const entries = (this.data && this.data.entries) || [];
+    const entries = CHANGELOG;
+    const current = $('#history-current-version');
+    if (current) current.textContent = entries.length ? `v${entries[0].version}` : '—';
     if (!entries.length) {
       list.innerHTML = '<p class="muted small">No history entries yet.</p>';
       return;
     }
-    const current = $('#history-current-version');
-    if (current) current.textContent = 'v' + entries[0].version;
     list.innerHTML = entries.map(e => `
       <article class="history-entry">
         <header class="history-entry-head">

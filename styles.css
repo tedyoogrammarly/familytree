@@ -2805,11 +2805,33 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 .dash-filter-chip:hover { background: var(--paper-soft); }
-.dash-filter-chip.is-active {
-  background: var(--brand-800);
-  color: #f7f3ec;
-  border-color: var(--brand-800);
+/* Active state: match the Calendar legend hues so the chip color and the
+   list row chip color tell the same story. Each kind picks its own palette. */
+.dash-filter-chip[data-kind="all"].is-active {
+  background: var(--brand-800); color: #f7f3ec; border-color: var(--brand-800);
 }
+.dash-filter-chip[data-kind="event"].is-active {
+  background: hsl(205 60% 48%); color: #fff; border-color: hsl(205 60% 48%);
+}
+.dash-filter-chip[data-kind="birthday"].is-active {
+  background: hsl(145 55% 42%); color: #fff; border-color: hsl(145 55% 42%);
+}
+.dash-filter-chip[data-kind="anniversary"].is-active {
+  background: hsl(282 50% 52%); color: #fff; border-color: hsl(282 50% 52%);
+}
+.dash-filter-chip[data-kind="holiday"].is-active {
+  background: hsl(0 65% 52%); color: #fff; border-color: hsl(0 65% 52%);
+}
+.dash-filter-chip[data-kind="reminder"].is-active {
+  background: hsl(35 80% 50%); color: #fff; border-color: hsl(35 80% 50%);
+}
+/* Idle chips also tint subtly so the filter row looks like part of the same
+   visual system without needing to be clicked. */
+.dash-filter-chip[data-kind="event"]       { border-left: 3px solid hsl(205 60% 48%); }
+.dash-filter-chip[data-kind="birthday"]    { border-left: 3px solid hsl(145 55% 42%); }
+.dash-filter-chip[data-kind="anniversary"] { border-left: 3px solid hsl(282 50% 52%); }
+.dash-filter-chip[data-kind="holiday"]     { border-left: 3px solid hsl(0 65% 52%); }
+.dash-filter-chip[data-kind="reminder"]    { border-left: 3px solid hsl(35 80% 50%); }
 
 .dash-month-totals { grid-column: 2; grid-row: 2; }
 .dash-grocery     { grid-column: 2; grid-row: 3; }
