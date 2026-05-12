@@ -317,6 +317,9 @@ const MemberPicker = {
       const set = new Set(cur);
       set.has(id) ? set.delete(id) : set.add(id);
       container.dataset.value = [...set].join(',');
+      // Clear the search field so the next pick can find any member without
+      // the previous query still filtering the list.
+      if (search) { search.value = ''; setTimeout(() => search.focus(), 0); }
       render();
     });
     chips.addEventListener('click', (e) => {
@@ -337,6 +340,112 @@ const MemberPicker = {
   write(container, ids) {
     if (container.__set) container.__set(ids);
     else { container.dataset.value = (ids || []).join(','); }
+  },
+};
+
+// Single-select member picker. Same chrome as MemberPicker but holds at most
+// one id and closes on pick. Defaults the popover list to a small "shortlist"
+// (typically the logged-in user's nuclear family) — typing in the search box
+// or clicking "Show all family" expands to the full member list.
+//
+// Usage:
+//   const el = $('#gift-to-member');
+//   SingleMemberPicker.mount(el, { shortlist: [m_a, m_b], placeholder: '+ Pick recipient…' });
+//   SingleMemberPicker.write(el, 'm_xyz');   // pre-select
+//   SingleMemberPicker.read(el);             // returns 'm_xyz' or ''
+const SingleMemberPicker = {
+  mount(container, cfg = {}) {
+    container.dataset.mounted = '1';
+    container.dataset.value = container.dataset.value || '';
+    const shortlist = Array.isArray(cfg.shortlist) ? cfg.shortlist.filter(Boolean) : [];
+    container.__cfg = {
+      shortlist,
+      placeholder: cfg.placeholder || '+ Pick member…',
+      expanded: shortlist.length === 0, // no shortlist → straight to full list
+    };
+    container.innerHTML = `
+      <button type="button" class="mp-trigger" data-role="trigger">
+        <span class="mp-trigger-label" data-role="label"></span>
+        <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+      </button>
+      <div class="mp-pop" data-role="pop" hidden>
+        <input type="search" class="mp-search" data-role="search" placeholder="Search family…" />
+        <div class="mp-list" data-role="list"></div>
+        <button type="button" class="mp-show-all" data-role="showall" hidden>Show all family members</button>
+      </div>
+    `;
+    const trigger = container.querySelector('[data-role=trigger]');
+    const label   = container.querySelector('[data-role=label]');
+    const pop     = container.querySelector('[data-role=pop]');
+    const search  = container.querySelector('[data-role=search]');
+    const list    = container.querySelector('[data-role=list]');
+    const showAll = container.querySelector('[data-role=showall]');
+
+    const render = () => {
+      const id = container.dataset.value || '';
+      const picked = id ? Store.byId(id) : null;
+      label.textContent = picked ? displayName(picked) : container.__cfg.placeholder;
+      const q = (search.value || '').toLowerCase().trim();
+      const cfg = container.__cfg;
+      // Search input always searches the full list. When idle (no query),
+      // show the shortlist unless the user explicitly clicked "Show all".
+      const useShortlist = !q && cfg.shortlist.length && !cfg.expanded;
+      let source = useShortlist
+        ? cfg.shortlist.map(mid => Store.byId(mid)).filter(Boolean)
+        : sortMembers(Store.membersList());
+      const matches = source.filter(m =>
+        !q || (`${m.firstName} ${m.middleName || ''} ${m.lastName} ${m.displayName || ''}`).toLowerCase().includes(q)
+      );
+      list.innerHTML = matches.length
+        ? matches.map(m => `
+          <button type="button" class="mp-option ${m.id === id ? 'is-selected' : ''}" data-pick="${m.id}">
+            <div class="mp-option-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+            <span>${escape(displayName(m))}</span>
+            ${m.id === id ? '<svg viewBox="0 0 16 16" width="12" height="12" style="margin-left:auto;"><path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+          </button>`).join('')
+        : '<div class="mp-empty" style="padding:10px 12px;">No matches.</div>';
+      // "Show all" only matters when a shortlist is active AND we're currently
+      // showing only the shortlist (no query, not yet expanded).
+      showAll.hidden = !useShortlist;
+    };
+
+    container.__set = (id) => { container.dataset.value = id || ''; render(); };
+    container.__reset = () => {
+      container.dataset.value = '';
+      container.__cfg.expanded = container.__cfg.shortlist.length === 0;
+      search.value = '';
+      render();
+    };
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pop.hidden = !pop.hidden;
+      if (!pop.hidden) setTimeout(() => search.focus(), 30);
+    });
+    search.addEventListener('input', render);
+    list.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-pick]'); if (!btn) return;
+      container.dataset.value = btn.dataset.pick;
+      pop.hidden = true;
+      search.value = '';
+      render();
+    });
+    showAll.addEventListener('click', () => {
+      container.__cfg.expanded = true;
+      search.focus();
+      render();
+    });
+    document.addEventListener('click', (e) => {
+      if (pop.hidden) return;
+      if (e.target.closest('.member-picker') === container) return;
+      pop.hidden = true;
+    });
+    render();
+  },
+  read(container) { return container.dataset.value || ''; },
+  write(container, id) {
+    if (container.__set) container.__set(id);
+    else { container.dataset.value = id || ''; }
   },
 };
 
@@ -1312,18 +1421,21 @@ function hexToHue(hex) {
 
 // SVG heart at (x, y). Solid for married, broken (with crack) for divorced.
 function heartMarker(x, y, divorced) {
-  const w = 22, h = 20;
+  // v4.21: bumped visual size — the heart now reads at a glance against the
+  // spouse line. Halo grows proportionally so the paper-soft background
+  // still cleanly contrasts with the underlying connector.
+  const w = 30, h = 27;
   // Heart path centered roughly on (0,0)
   const path = 'M 0 6 C 0 -1, -10 -1, -10 6 C -10 12, 0 16, 0 18 C 0 16, 10 12, 10 6 C 10 -1, 0 -1, 0 6 Z';
-  const halo = `<rect x="${x - w/2}" y="${y - h/2}" width="${w}" height="${h}" rx="4" fill="var(--paper-soft)" opacity=".95"/>`;
+  const halo = `<rect x="${x - w/2}" y="${y - h/2}" width="${w}" height="${h}" rx="5" fill="var(--paper-soft)" opacity=".95"/>`;
   if (!divorced) {
-    return `<g class="spouse-heart" transform="translate(${x} ${y - 2}) scale(.8)">
+    return `<g class="spouse-heart" transform="translate(${x} ${y - 2}) scale(1.1)">
       ${halo}
       <path d="${path}" class="heart-fill"/>
     </g>`;
   }
   // broken: heart fill + a jagged white line down the middle
-  return `<g class="spouse-heart broken" transform="translate(${x} ${y - 2}) scale(.8)">
+  return `<g class="spouse-heart broken" transform="translate(${x} ${y - 2}) scale(1.1)">
     ${halo}
     <path d="${path}" class="heart-fill"/>
     <path d="M -1.4 -0.5 L 1 4 L -1 8 L 1.4 13 L -0.5 17" class="heart-crack"/>
@@ -2112,7 +2224,7 @@ function nodeHTML(m) {
     <div class="node${isSelf}${collapsedClass}${inMemoriam ? ' in-memoriam' : ''}" data-id="${m.id}" data-gen="${gen}" style="${styleVars}">
       <div class="node-gen-bar" aria-hidden="true"></div>
       ${selfStar}
-      ${inMemoriam ? '<div class="node-memoriam" title="In loving memory">In loving memory</div>' : ''}
+      ${inMemoriam ? '<div class="node-memoriam" title="In loving memory"><span class="node-memoriam-icon" aria-hidden="true">🕊️</span>In loving memory</div>' : ''}
       <div class="node-photo is-${m.gender}" ${photoBg}>${inner}</div>
       <div class="node-body">
         ${relation ? `<div class="node-relation">${relation}</div>` : ''}
@@ -6546,6 +6658,11 @@ const GiftsView = {
       $$('.gift-tab').forEach(x => x.classList.toggle('is-active', x === t));
       this.render();
     }));
+    // Delegate report-side member-row clicks → open the drawer for that person.
+    on($('#gift-reports-panel'), 'click', (e) => {
+      const row = e.target.closest('[data-report-mid]');
+      if (row) Drawer.open(row.dataset.reportMid);
+    });
     on($('#gift-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeModal(); });
     on($('#gift-form'), 'submit', (e) => { e.preventDefault(); this.saveModal(); });
     on($('#gift-direction'), 'change', () => this.refreshDirectionLabels());
@@ -6572,11 +6689,25 @@ const GiftsView = {
   },
   rowsForDirection() {
     const all = Store.state.gifts || [];
-    if (this.direction === 'both') return all.slice();
+    // 'reports' isn't a row filter — it's a view mode. Export from there
+    // returns the full set so admins can still hit "Export" while on Reports.
+    if (this.direction === 'both' || this.direction === 'reports') return all.slice();
     return all.filter(g => g.direction === this.direction);
   },
   render() {
     const dir = this.direction;
+    // Reports tab is its own panel — swap visibility and exit early.
+    const listPanel = $('#gift-list-panel');
+    const reportsPanel = $('#gift-reports-panel');
+    if (dir === 'reports') {
+      listPanel.hidden = true;
+      reportsPanel.hidden = false;
+      this.renderReports();
+      return;
+    }
+    listPanel.hidden = false;
+    reportsPanel.hidden = true;
+
     $('#gift-th-from').textContent = dir === 'received' ? 'Giver'
                                      : dir === 'given'  ? 'From (us)'
                                      :                    'From';
@@ -6692,6 +6823,221 @@ const GiftsView = {
       this.render();
     }));
   },
+
+  // Reports dashboard. Renders into #gift-reports-panel. Reads everything
+  // straight from Store.state.gifts — no caching, idempotent re-renders.
+  // Sections:
+  //   1. Headline stat cards (received total, given total, net, gift count)
+  //   2. Last-12-months grouped bar chart (received vs. given per month)
+  //   3. Top recipients (we give to) + Top givers (give to us), side by side
+  //   4. Breakdown by occasion (horizontal bars)
+  renderReports() {
+    const host = $('#gift-reports-panel');
+    const all = Store.state.gifts || [];
+    if (!all.length) {
+      host.innerHTML = `<p class="muted" style="padding:32px; text-align:center;">No gift history to report on yet. Log a gift to start seeing trends here.</p>`;
+      return;
+    }
+    const memMap = Object.fromEntries(Store.membersList().map(m => [m.id, m]));
+    const fmt$ = (n) => (n || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+    const amt = (g) => parseFloat(g.amount) || 0;
+
+    // --- 1. Headline numbers ---
+    let received = 0, given = 0, rcount = 0, gcount = 0;
+    for (const g of all) {
+      if (g.direction === 'received') { received += amt(g); rcount++; }
+      else if (g.direction === 'given') { given += amt(g); gcount++; }
+    }
+    const net = given - received;
+    const netLabel = net >= 0 ? `You've given ${fmt$(net)} more than received` : `You've received ${fmt$(-net)} more than given`;
+
+    // --- 2. Last 12 months grouped bars ---
+    // Build the month buckets going back from today. "YYYY-MM" → totals.
+    const now = new Date();
+    const monthKeys = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      monthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const monthData = Object.fromEntries(monthKeys.map(k => [k, { received: 0, given: 0 }]));
+    for (const g of all) {
+      if (!g.date) continue;
+      const k = g.date.slice(0, 7); // 'YYYY-MM'
+      if (monthData[k]) {
+        if (g.direction === 'received')   monthData[k].received += amt(g);
+        else if (g.direction === 'given') monthData[k].given    += amt(g);
+      }
+    }
+    const peakMonth = Math.max(1, ...monthKeys.flatMap(k => [monthData[k].received, monthData[k].given]));
+    const monthLabel = (k) => {
+      const [y, m] = k.split('-');
+      return new Date(+y, +m - 1, 1).toLocaleDateString(undefined, { month: 'short' });
+    };
+    const chartH = 160;
+    const slotW  = 56;
+    const chartW = monthKeys.length * slotW;
+    const barW   = 18;
+    const gapW   = 4;
+    const monthBars = monthKeys.map((k, i) => {
+      const x = i * slotW + slotW / 2;
+      const r = monthData[k].received;
+      const g = monthData[k].given;
+      const rh = peakMonth > 0 ? Math.round((r / peakMonth) * chartH) : 0;
+      const gh = peakMonth > 0 ? Math.round((g / peakMonth) * chartH) : 0;
+      const rx = x - barW - gapW / 2;
+      const gx = x + gapW / 2;
+      const title = `${monthLabel(k)} ${k.slice(0, 4)}\nReceived: ${fmt$(r)}\nGiven: ${fmt$(g)}`;
+      return `
+        <g class="report-month" transform="translate(${i * slotW}, 0)">
+          <title>${escape(title)}</title>
+          <rect x="${slotW/2 - barW - gapW/2}" y="${chartH - rh + 20}" width="${barW}" height="${rh}" rx="3" fill="#c084fc"></rect>
+          <rect x="${slotW/2 + gapW/2}"        y="${chartH - gh + 20}" width="${barW}" height="${gh}" rx="3" fill="#22c55e"></rect>
+          <text x="${slotW/2}" y="${chartH + 36}" text-anchor="middle" class="report-bar-label">${monthLabel(k)}</text>
+          ${i === 0 || i === monthKeys.length - 1 ? `<text x="${slotW/2}" y="${chartH + 50}" text-anchor="middle" class="report-bar-sublabel">${k.slice(0, 4)}</text>` : ''}
+        </g>`;
+    }).join('');
+
+    // --- 3. Top recipients / top givers ---
+    // "Top recipient" = a real member we have given gifts to (g.direction = 'given')
+    //                   aggregated by g.toMemberId.
+    // "Top giver"     = a real member who gave us gifts (g.direction = 'received')
+    //                   aggregated across g.fromMemberIds (list) + g.fromMemberId (legacy).
+    const recipientTotals = new Map(); // mid → $
+    const giverTotals     = new Map();
+    for (const g of all) {
+      const a = amt(g);
+      if (g.direction === 'given' && g.toMemberId && memMap[g.toMemberId]) {
+        recipientTotals.set(g.toMemberId, (recipientTotals.get(g.toMemberId) || 0) + a);
+      }
+      if (g.direction === 'received') {
+        const fromIds = Array.isArray(g.fromMemberIds) && g.fromMemberIds.length
+          ? g.fromMemberIds
+          : (g.fromMemberId ? [g.fromMemberId] : []);
+        // Multiple senders → split the total evenly so a $200 gift from two
+        // people doesn't inflate each of their totals to $200.
+        const split = fromIds.length ? a / fromIds.length : 0;
+        for (const id of fromIds) {
+          if (memMap[id]) giverTotals.set(id, (giverTotals.get(id) || 0) + split);
+        }
+      }
+    }
+    const topN = (map, n = 5) => [...map.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n);
+    const topRecipients = topN(recipientTotals);
+    const topGivers     = topN(giverTotals);
+    const renderTopList = (entries, kind) => {
+      if (!entries.length) return `<p class="muted small" style="padding:8px;">No data yet.</p>`;
+      const max = entries[0][1] || 1;
+      return entries.map(([mid, total]) => {
+        const m = memMap[mid];
+        const pct = Math.max(2, Math.round((total / max) * 100));
+        const colorClass = kind === 'recipient' ? 'is-given' : 'is-received';
+        return `
+          <div class="report-row" data-report-mid="${mid}" role="button" tabindex="0" title="Open ${escape(displayName(m))}'s profile">
+            <div class="report-row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+            <div class="report-row-body">
+              <div class="report-row-label">${escape(displayName(m))}</div>
+              <div class="report-bar-wrap"><div class="report-bar ${colorClass}" style="width:${pct}%"></div></div>
+            </div>
+            <div class="report-row-value">${fmt$(total)}</div>
+          </div>`;
+      }).join('');
+    };
+
+    // --- 4. By occasion ---
+    const occMap = new Map(); // occasion → { received, given }
+    for (const g of all) {
+      const occ = (g.occasion || '').trim() || 'No occasion';
+      if (!occMap.has(occ)) occMap.set(occ, { received: 0, given: 0, count: 0 });
+      const bucket = occMap.get(occ);
+      bucket.count++;
+      if (g.direction === 'received')   bucket.received += amt(g);
+      else if (g.direction === 'given') bucket.given    += amt(g);
+    }
+    const topOcc = [...occMap.entries()]
+      .map(([k, v]) => ({ name: k, total: v.received + v.given, ...v }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 6);
+    const occMax = topOcc[0]?.total || 1;
+    const occRows = topOcc.length
+      ? topOcc.map(o => {
+          const pctR = Math.round((o.received / occMax) * 100);
+          const pctG = Math.round((o.given / occMax) * 100);
+          return `
+            <div class="report-row report-row-occasion">
+              <div class="report-row-body">
+                <div class="report-row-label">${escape(o.name)} <span class="muted small">· ${o.count} ${o.count === 1 ? 'gift' : 'gifts'}</span></div>
+                <div class="report-bar-wrap report-bar-stacked">
+                  ${pctR ? `<div class="report-bar is-received" style="width:${pctR}%" title="Received ${fmt$(o.received)}"></div>` : ''}
+                  ${pctG ? `<div class="report-bar is-given" style="width:${pctG}%" title="Given ${fmt$(o.given)}"></div>` : ''}
+                </div>
+              </div>
+              <div class="report-row-value">${fmt$(o.total)}</div>
+            </div>`;
+        }).join('')
+      : `<p class="muted small" style="padding:8px;">No occasion data.</p>`;
+
+    // --- assemble ---
+    host.innerHTML = `
+      <div class="report-stats">
+        <div class="report-stat">
+          <div class="report-stat-eyebrow"><span class="gift-dir-pill received">Received</span></div>
+          <div class="report-stat-num">${fmt$(received)}</div>
+          <div class="report-stat-sub">${rcount} ${rcount === 1 ? 'gift' : 'gifts'} logged</div>
+        </div>
+        <div class="report-stat">
+          <div class="report-stat-eyebrow"><span class="gift-dir-pill given">Given</span></div>
+          <div class="report-stat-num">${fmt$(given)}</div>
+          <div class="report-stat-sub">${gcount} ${gcount === 1 ? 'gift' : 'gifts'} logged</div>
+        </div>
+        <div class="report-stat">
+          <div class="report-stat-eyebrow">Net (Given − Received)</div>
+          <div class="report-stat-num" style="color:${net >= 0 ? '#16a34a' : '#dc2626'};">${(net >= 0 ? '+' : '−')}${fmt$(Math.abs(net))}</div>
+          <div class="report-stat-sub">${netLabel}</div>
+        </div>
+      </div>
+
+      <section class="report-section">
+        <header class="report-section-head">
+          <h3>Last 12 months</h3>
+          <div class="report-legend">
+            <span><span class="report-swatch" style="background:#c084fc;"></span>Received</span>
+            <span><span class="report-swatch" style="background:#22c55e;"></span>Given</span>
+          </div>
+        </header>
+        <div class="report-chart-scroll">
+          <svg viewBox="0 0 ${chartW} ${chartH + 60}" width="${chartW}" height="${chartH + 60}" class="report-month-chart">
+            <line x1="0" y1="${chartH + 20}" x2="${chartW}" y2="${chartH + 20}" stroke="var(--ink-200)" stroke-width="1"/>
+            ${monthBars}
+          </svg>
+        </div>
+      </section>
+
+      <div class="report-two-up">
+        <section class="report-section">
+          <header class="report-section-head">
+            <h3>Top recipients <span class="muted small">(who we gave to)</span></h3>
+          </header>
+          <div class="report-list">${renderTopList(topRecipients, 'recipient')}</div>
+        </section>
+        <section class="report-section">
+          <header class="report-section-head">
+            <h3>Top givers <span class="muted small">(who gave to us)</span></h3>
+          </header>
+          <div class="report-list">${renderTopList(topGivers, 'giver')}</div>
+        </section>
+      </div>
+
+      <section class="report-section">
+        <header class="report-section-head">
+          <h3>By occasion</h3>
+        </header>
+        <div class="report-list">${occRows}</div>
+      </section>
+    `;
+  },
+
   exportCSV() {
     const memMap = Object.fromEntries(Store.membersList().map(m => [m.id, m]));
     const rows = this.rowsForDirection().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -6715,11 +7061,17 @@ const GiftsView = {
     const f = $('#gift-form');
     f.reset();
     f.dataset.editId = editId || '';
-    const memberOptions = ['<option value="">— none —</option>',
-      ...sortMembers(Store.membersList())
-        .map(m => `<option value="${m.id}">${escape(displayName(m))}</option>`)
-    ].join('');
-    $('#gift-to-member').innerHTML = memberOptions;
+
+    // To-member: typeahead single-picker. Default popover view shows just the
+    // logged-in user's nuclear family (self + spouse + children) because
+    // received gifts almost always go to "us". Typing or clicking "Show all
+    // family" expands to the full member list.
+    const toEl = $('#gift-to-member');
+    SingleMemberPicker.mount(toEl, {
+      shortlist: nuclearFamilyIds(),
+      placeholder: '+ Pick recipient…',
+    });
+    SingleMemberPicker.write(toEl, '');
 
     // Linked event dropdown
     const events = (Store.state.events || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -6741,7 +7093,7 @@ const GiftsView = {
       f.date.value = g.date || '';
       f.fromText.value = g.fromText || '';
       f.toText.value = g.toText || '';
-      f.toMemberId.value = g.toMemberId || '';
+      SingleMemberPicker.write(toEl, g.toMemberId || '');
       f.occasion.value = g.occasion || '';
       f.notes.value = g.notes || '';
       $('#gift-event').value = g.eventId || '';
@@ -6788,7 +7140,7 @@ const GiftsView = {
       toText:   (fd.get('toText')   || '').toString().trim(),
       fromMemberIds: MemberPicker.read($('[data-picker="gift-from-members"]')),
       fromMemberId: '',  // legacy field cleared
-      toMemberId:   (fd.get('toMemberId')   || '').toString(),
+      toMemberId:   SingleMemberPicker.read($('#gift-to-member')),
       eventId:      (fd.get('eventId')      || '').toString(),
       occasion: (fd.get('occasion') || '').toString().trim(),
       notes:    (fd.get('notes')    || '').toString().trim(),
@@ -7722,6 +8074,20 @@ function displayName(m) {
   if (!m) return '';
   const dn = (m.displayName || '').trim();
   return dn || fullName(m);
+}
+
+// Returns the logged-in user's nuclear-family member ids: self + current
+// spouse + children. Used as the default shortlist on the Gifts To-member
+// picker (and anywhere else "my household" is the natural starting point).
+// Empty array when no real member is resolved (e.g. admin-bootstrap) —
+// callers should treat that as "show full list".
+function nuclearFamilyIds() {
+  const me = Auth?.current;
+  if (!me || me === 'admin-bootstrap') return [];
+  const ids = new Set([me.id]);
+  if (me.spouseId) ids.add(me.spouseId);
+  (me.childrenIds || []).forEach(id => ids.add(id));
+  return [...ids];
 }
 
 // US phone auto-format. Accepts any input, returns "(XXX) XXX-XXXX" once
@@ -8682,6 +9048,20 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.21',
+    date: '2026-05-12',
+    title: 'More profile emojis, Deceased-checkbox fix, bigger heart + memoriam tag, Gifts Reports dashboard',
+    changes: [
+      'Profile drawer: Life stage 🌱, Address 🏠, Group 👥, Ethnicity 🌍, Role 🔑, 529 plan 🎓 — added emoji glyphs to all remaining labels in both the view and edit modes. Notes label gets 📝 in the edit form.',
+      'Bug fix: the "Deceased" checkbox now renders the native checkmark when toggled. The .field input { appearance: none } rule was stripping the indicator off checkboxes living inside a .field wrapper; the .field-check selector now explicitly restores appearance: auto.',
+      'Family Tree: spouse-line heart marker scaled up (.8 → 1.1) with a proportionally larger halo so the connection reads more clearly at a glance, especially on dense layouts.',
+      'Profile cards: "In loving memory" badge enlarged (9px → 11px font, more padding) and now leads with a 🕊️ glyph. The drawer-side "In loving memory" pill matches.',
+      'Gifts → Log a gift: the To-member field is now a typeahead picker that defaults to the logged-in user\'s nuclear family (self + spouse + children) since received gifts almost always go to "us". A "Show all family members" button or typing any letter expands to the full list.',
+      'Gifts bug fix: the From-member picker now clears its search box after each pick, so adding multiple givers in a row no longer leaves the previous query filtering the list (was masking later picks).',
+      'Gifts → Reports: new tab with a visual dashboard. Headline cards for Received / Given / Net totals, a 12-month grouped bar chart, top recipients + top givers ranked by dollars, and a by-occasion breakdown with received/given segments per occasion. Multi-giver gifts split evenly across senders so the top-giver totals stay honest.',
+    ],
+  },
   {
     version: '4.20',
     date: '2026-05-12',

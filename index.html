@@ -550,8 +550,9 @@
           <button class="gift-tab is-active" data-direction="received" role="tab">Received</button>
           <button class="gift-tab" data-direction="given" role="tab">Given</button>
           <button class="gift-tab" data-direction="both" role="tab">Both</button>
+          <button class="gift-tab" data-direction="reports" role="tab">Reports</button>
         </div>
-        <div class="panel">
+        <div class="panel" id="gift-list-panel">
           <div class="table-wrap">
             <table class="table" id="gift-table">
               <thead>
@@ -572,6 +573,7 @@
             </table>
           </div>
         </div>
+        <div class="panel" id="gift-reports-panel" hidden></div>
       </div>
     </main>
 
@@ -722,7 +724,9 @@
             <span>From (family members — pick one or more)</span>
             <div class="member-picker" data-picker="gift-from-members"></div>
           </label>
-          <label class="field"><span>To (family member)</span><select name="toMemberId" id="gift-to-member"></select></label>
+          <label class="field"><span>To (family member)</span>
+            <div class="member-picker member-picker-single" data-picker="gift-to-member" id="gift-to-member"></div>
+          </label>
           <div class="grid-2">
             <label class="field">
               <span>Linked event</span>
@@ -762,21 +766,21 @@
           <dl class="kv">
             <div><dt><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</dt><dd id="kv-birthday">—</dd></div>
             <div id="kv-dod-row" hidden><dt><span class="kv-emoji" aria-hidden="true">🕊️</span>Date of death</dt><dd id="kv-dod">—</dd></div>
-            <div><dt>Life stage</dt><dd id="kv-lifestage">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🌱</span>Life stage</dt><dd id="kv-lifestage">—</dd></div>
             <div><dt><span class="kv-emoji" aria-hidden="true">📧</span>Email</dt><dd id="kv-email-cell"><span id="kv-email">—</span><button type="button" id="kv-email-copy" class="kv-copy-btn" title="Copy email" hidden>
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
               <span>Copy</span>
             </button></dd></div>
             <div><dt><span class="kv-emoji" aria-hidden="true">📱</span>Phone</dt><dd id="kv-phone">—</dd></div>
-            <div><dt>Address</dt><dd id="kv-address-cell"><span id="kv-address">—</span><button type="button" id="kv-address-copy" class="kv-copy-btn" title="Copy address" hidden>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🏠</span>Address</dt><dd id="kv-address-cell"><span id="kv-address">—</span><button type="button" id="kv-address-copy" class="kv-copy-btn" title="Copy address" hidden>
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
               <span>Copy</span>
             </button></dd></div>
             <div id="kv-anniv-row" hidden><dt><span class="kv-emoji" aria-hidden="true">❤️</span>Anniversary</dt><dd id="kv-anniv">—</dd></div>
-            <div><dt>Group</dt><dd id="kv-group">—</dd></div>
-            <div><dt>Ethnicity</dt><dd id="kv-ethnicity">—</dd></div>
-            <div><dt>Role</dt><dd id="kv-role">—</dd></div>
-            <div id="kv-529-row" hidden><dt>529 plan</dt><dd id="kv-529-cell"><a id="kv-529" target="_blank" rel="noopener">—</a></dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">👥</span>Group</dt><dd id="kv-group">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</dt><dd id="kv-ethnicity">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🔑</span>Role</dt><dd id="kv-role">—</dd></div>
+            <div id="kv-529-row" hidden><dt><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan</dt><dd id="kv-529-cell"><a id="kv-529" target="_blank" rel="noopener">—</a></dd></div>
           </dl>
 
           <div class="drawer-section" id="kv-notes-section" hidden>
@@ -811,23 +815,23 @@
           </div>
           <label class="field"><span>Display name <span class="muted small">(optional — defaults to First Middle Last)</span></span><input name="displayName" placeholder="e.g. Teddy" /></label>
           <div class="grid-2">
-            <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
-            <label class="field"><span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📱</span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel" /></label>
           </div>
           <div class="field">
             <label class="field-check">
               <input type="checkbox" id="edit-has-dod" />
-              <span>Deceased</span>
+              <span><span class="kv-emoji" aria-hidden="true">🕊️</span>Deceased</span>
               <small>Check to record a date of death — adds an "In loving memory" badge to the profile.</small>
             </label>
             <input name="dateOfDeath" id="edit-dod" type="date" hidden />
           </div>
-          <label class="field"><span>Email</span><input name="email" type="email" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="email" type="email" /></label>
           <label class="field">
-            <span>529 plan link <span class="muted small">(URL)</span></span>
+            <span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span>
             <input name="plan529" type="url" placeholder="https://…" />
           </label>
-          <label class="field"><span>Street address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🏠</span>Street address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
           <div class="grid-zip">
             <label class="field"><span>Zip / ZIP</span><input name="zip" id="edit-zip" inputmode="numeric" maxlength="10" placeholder="90210" autocomplete="postal-code" /></label>
             <label class="field"><span>City</span><input name="city" id="edit-city" placeholder="Beverly Hills" autocomplete="address-level2" /></label>
@@ -835,13 +839,13 @@
           </div>
           <p id="edit-zip-status" class="muted small" style="margin-top:-6px;" hidden></p>
           <label class="field" id="edit-anniversary-wrap" hidden>
-            <span>Anniversary</span>
+            <span><span class="kv-emoji" aria-hidden="true">❤️</span>Anniversary</span>
             <input name="anniversary" id="edit-anniversary" type="date" />
             <span class="muted small" id="edit-anniv-years"></span>
           </label>
           <div class="grid-2">
-            <label class="field"><span>Group</span><select name="group" id="edit-group"></select></label>
-            <label class="field" data-admin-only><span>Role</span>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">👥</span>Group</span><select name="group" id="edit-group"></select></label>
+            <label class="field" data-admin-only><span><span class="kv-emoji" aria-hidden="true">🔑</span>Role</span>
               <select name="role"><option value="user">User</option><option value="admin">Admin</option></select>
             </label>
           </div>
@@ -851,11 +855,11 @@
             <small>When checked, this person is added when an admin picks "+ Add by group…" on an event.</small>
           </label>
           <label class="field">
-            <span>Ethnicity</span>
+            <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
             <div class="ethnicity-picker" data-picker="edit-ethnicity"></div>
           </label>
           <label class="field">
-            <span>Notes <span class="muted small">(personal notes, allergies, dietary preferences, etc.)</span></span>
+            <span><span class="kv-emoji" aria-hidden="true">📝</span>Notes <span class="muted small">(personal notes, allergies, dietary preferences, etc.)</span></span>
             <textarea name="notes" rows="4" placeholder=""></textarea>
           </label>
           <div class="grid-2">
@@ -863,7 +867,7 @@
               <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
             </label>
             <label class="field">
-              <span>Life stage <span class="muted small">(auto from birthday)</span></span>
+              <span><span class="kv-emoji" aria-hidden="true">🌱</span>Life stage <span class="muted small">(auto from birthday)</span></span>
               <select name="ageGroup"><option value="adult">Adult</option><option value="child">Child</option><option value="baby">Baby</option></select>
             </label>
           </div>
