@@ -88,6 +88,7 @@
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
+          <button class="nav-tab" data-view="vault" data-vault-only role="tab">Admin</button>
           <button class="nav-tab" data-view="history" data-admin-only role="tab">History</button>
         </nav>
       </div>
@@ -464,6 +465,28 @@
             </div>
           </section>
         </div>
+      </div>
+    </main>
+
+    <!-- ===== ADMIN / VAULT VIEW (Ted, Doan, or system admin only) ===== -->
+    <main id="view-vault" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="vault"></span>Admin</h2>
+            <p>Private family records. Visible only to authorized accounts.</p>
+          </div>
+        </div>
+        <div class="vault-tabs" role="tablist">
+          <button class="vault-tab is-active" data-vault-section="family"   role="tab">Family</button>
+          <button class="vault-tab"           data-vault-section="finance"  role="tab">Finance</button>
+          <button class="vault-tab"           data-vault-section="benefits" role="tab">Benefits</button>
+          <button class="vault-tab"           data-vault-section="home"     role="tab">Home</button>
+        </div>
+        <section id="vault-family"   class="vault-panel"></section>
+        <section id="vault-finance"  class="vault-panel" hidden></section>
+        <section id="vault-benefits" class="vault-panel" hidden></section>
+        <section id="vault-home"     class="vault-panel" hidden></section>
       </div>
     </main>
 
