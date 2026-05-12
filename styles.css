@@ -618,7 +618,7 @@ code {
   opacity: .75;
 }
 .tree-edges .spouse-heart .heart-fill {
-  fill: var(--accent-700);
+  fill: #dc2626;
 }
 .tree-edges .spouse-heart.broken .heart-fill {
   fill: var(--ink-400);
@@ -1342,7 +1342,8 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
   transition: background-color .15s var(--ease-out), border-color .15s var(--ease-out);
 }
 .kv-copy-btn:hover { background: #fff; border-color: var(--brand-500); color: var(--brand-900); }
-.kv dt { font-size: 12px; color: var(--ink-500); margin: 0; text-transform: uppercase; letter-spacing: .06em; }
+.kv dt { font-size: 12px; color: var(--ink-500); margin: 0; text-transform: uppercase; letter-spacing: .06em; display: inline-flex; align-items: center; gap: 6px; }
+.kv-emoji { font-size: 13px; line-height: 1; text-transform: none; letter-spacing: 0; }
 .kv dd { margin: 0; font-size: 14px; color: var(--ink-900); word-break: break-word; }
 
 .drawer-section { margin-top: 22px; }
@@ -2270,7 +2271,7 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   shape-rendering: auto;
   opacity: .55;
 }
-.myfamily-edges .spouse-heart .heart-fill { fill: var(--accent-700); }
+.myfamily-edges .spouse-heart .heart-fill { fill: #dc2626; }
 .myfamily-edges .spouse-heart.broken .heart-fill { fill: var(--ink-400); }
 .myfamily-edges .spouse-heart .heart-crack {
   fill: none;

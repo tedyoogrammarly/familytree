@@ -285,7 +285,7 @@ const MemberPicker = {
             if (!m) return '';
             return `<span class="mp-chip" data-id="${id}">
               <div class="mp-chip-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
-              <span>${escape(m.firstName)} ${escape(m.lastName)}</span>
+              <span>${escape(displayName(m))}</span>
               <button type="button" class="mp-chip-x" data-remove="${id}" aria-label="Remove">
                 <svg viewBox="0 0 16 16" width="10" height="10"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               </button>
@@ -295,11 +295,11 @@ const MemberPicker = {
       const q = (search.value || '').toLowerCase();
       const sel = new Set(selectedIds);
       const matches = sortMembers(Store.membersList())
-        .filter(m => !q || (`${m.firstName} ${m.lastName} ${m.nickname || ''}`).toLowerCase().includes(q));
+        .filter(m => !q || (`${m.firstName} ${m.middleName || ''} ${m.lastName} ${m.displayName || ''}`).toLowerCase().includes(q));
       list.innerHTML = matches.map(m => `
         <button type="button" class="mp-option ${sel.has(m.id) ? 'is-selected' : ''}" data-toggle="${m.id}">
           <div class="mp-option-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
-          <span>${escape(m.firstName)} ${escape(m.lastName)}</span>
+          <span>${escape(displayName(m))}</span>
           ${sel.has(m.id) ? '<svg viewBox="0 0 16 16" width="12" height="12" style="margin-left:auto;"><path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
         </button>`).join('');
     };
@@ -626,6 +626,16 @@ const Store = {
       if (m.dateOfDeath === undefined) m.dateOfDeath = '';
       if (m.plan529      === undefined) m.plan529 = '';
       if (m.notes        === undefined) m.notes = '';
+      // v4.20: nickname → displayName rename. Carry any legacy nickname
+      // forward as the new displayName so existing tags don't vanish on
+      // first load. The display helper falls back to fullName(m) when
+      // displayName is empty.
+      if (m.displayName === undefined) m.displayName = (m.nickname || '').trim();
+      if (m.nickname !== undefined) delete m.nickname;
+      // v4.20: groups-add-to-events opt-out. Default true so existing
+      // members keep their current behavior — they still get added when
+      // an admin picks "+ Add by group…" on an event.
+      if (m.includeInGroupEvents === undefined) m.includeInGroupEvents = true;
     }
     // Heal asymmetric parent/child links: if A says "B is my parent", make
     // sure B says "A is my child". This fixes profiles where one parent
@@ -831,7 +841,8 @@ const Tree = {
       firstName: input.firstName.trim(),
       middleName: (input.middleName || '').trim(),
       lastName: input.lastName.trim(),
-      nickname: (input.nickname || '').trim(),
+      displayName: (input.displayName || '').trim(),
+      includeInGroupEvents: input.includeInGroupEvents !== false,
       birthday,
       email: input.email || '',
       phone: input.phone ? formatPhoneUS(input.phone) : '',
@@ -2105,8 +2116,7 @@ function nodeHTML(m) {
       <div class="node-photo is-${m.gender}" ${photoBg}>${inner}</div>
       <div class="node-body">
         ${relation ? `<div class="node-relation">${relation}</div>` : ''}
-        <div class="node-name">${escape(m.firstName)} ${escape(m.lastName)}</div>
-        ${m.nickname ? `<div class="node-nick">"${escape(m.nickname)}"</div>` : ''}
+        <div class="node-name">${escape(displayName(m))}</div>
         ${m.group ? `<div class="node-group">${escape(m.group)}</div>` : ''}
         ${ageStr ? `<div class="node-meta">
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -2216,8 +2226,11 @@ const Drawer = {
       photo.innerHTML = Silhouettes.for(m);
     }
     $('#drawer-relation').textContent = Tree.computeRelation(m.id) || 'Family';
-    $('#drawer-name').textContent = fullName(m);
-    $('#drawer-nick').textContent = m.nickname ? `"${m.nickname}"` : '';
+    $('#drawer-name').textContent = displayName(m);
+    // Show the full legal name as a subtitle only when the display name is a
+    // custom override — otherwise the headline and subtitle would duplicate.
+    const legal = fullName(m);
+    $('#drawer-nick').textContent = legal && legal !== displayName(m) ? legal : '';
     // "In loving memory" badge surfaces when a date of death is on file.
     const remembering = $('#drawer-remembering');
     if (remembering) remembering.hidden = !m.dateOfDeath;
@@ -2337,7 +2350,7 @@ const Drawer = {
     f.firstName.value = m.firstName;
     f.middleName.value = m.middleName || '';
     f.lastName.value = m.lastName;
-    f.nickname.value = m.nickname || '';
+    f.displayName.value = m.displayName || '';
     f.birthday.value = m.birthday || '';
     f.phone.value = formatPhoneUS(m.phone || '');
     f.email.value = m.email || '';
@@ -2346,6 +2359,20 @@ const Drawer = {
     f.city.value  = m.city  || '';
     f.state.value = m.state || '';
     if (f.dateOfDeath) f.dateOfDeath.value = m.dateOfDeath || '';
+    // Date-of-death is gated behind a checkbox so the date input only appears
+    // when "Deceased" is checked. Keeps the field from being accidentally
+    // populated by tab-fills or stray clicks on the date picker.
+    const dodCheck = $('#edit-has-dod');
+    const dodInput = $('#edit-dod');
+    if (dodCheck && dodInput) {
+      const hasDod = !!m.dateOfDeath;
+      dodCheck.checked = hasDod;
+      dodInput.hidden = !hasDod;
+      dodCheck.onchange = () => {
+        dodInput.hidden = !dodCheck.checked;
+        if (!dodCheck.checked) dodInput.value = '';
+      };
+    }
     if (f.plan529)     f.plan529.value     = m.plan529 || '';
     if (f.notes)       f.notes.value       = m.notes   || '';
     $('#edit-zip-status').hidden = true;
@@ -2353,6 +2380,10 @@ const Drawer = {
     f.ageGroup.value = m.ageGroup;
     if (f.role) f.role.value = m.role;
     refreshGroupSelect($('#edit-group'), m.group);
+    // Per-member opt-out for "+ Add by group…" on events. Default true so
+    // members keep their current behavior unless an admin unchecks it.
+    const grpEvtBox = $('#edit-group-events');
+    if (grpEvtBox) grpEvtBox.checked = m.includeInGroupEvents !== false;
     const ePicker = $('[data-picker="edit-ethnicity"]');
     EthnicityPicker.mount(ePicker);
     EthnicityPicker.write(ePicker, m.ethnicities || []);
@@ -2401,7 +2432,7 @@ const Drawer = {
     m.firstName  = firstName;
     m.middleName = (fd.get('middleName') || '').toString().trim();
     m.lastName   = lastName;
-    m.nickname   = (fd.get('nickname') || '').toString().trim();
+    m.displayName = (fd.get('displayName') || '').toString().trim();
     m.birthday   = (fd.get('birthday') || '').toString();
     // Normalize phone to a consistent "(XXX) XXX-XXXX" format on save.
     m.phone      = formatPhoneUS((fd.get('phone') || '').toString());
@@ -2410,10 +2441,15 @@ const Drawer = {
     m.city       = (fd.get('city')  || '').toString().trim();
     m.state      = (fd.get('state') || '').toString().trim().toUpperCase().slice(0, 3);
     m.zip        = (fd.get('zip')   || '').toString().trim().slice(0, 10);
-    m.dateOfDeath = (fd.get('dateOfDeath') || '').toString();
+    // Only honor the date input when the "Deceased" checkbox is checked.
+    // Otherwise force-clear so an accidental date entry can't sneak through.
+    m.dateOfDeath = $('#edit-has-dod')?.checked
+      ? (fd.get('dateOfDeath') || '').toString()
+      : '';
     m.plan529    = (fd.get('plan529') || '').toString().trim();
     m.notes      = (fd.get('notes')   || '').toString();
     m.group      = (fd.get('group') || '').toString();
+    m.includeInGroupEvents = !!$('#edit-group-events')?.checked;
     // Anniversary: only meaningful when there's a current spouse; mirror to the
     // spouse so both records stay in sync.
     const sp_save = m.spouseId ? Store.byId(m.spouseId) : null;
@@ -2499,7 +2535,7 @@ const Drawer = {
   deleteMember() {
     if (!Auth.isAdmin()) return;
     const m = Store.byId(this.currentId); if (!m) return;
-    if (!confirm(`Remove ${m.firstName} ${m.lastName} from the family tree? Their account will be deleted.`)) return;
+    if (!confirm(`Remove ${displayName(m)} from the family tree? Their account will be deleted.`)) return;
     Tree.remove(m.id);
     toast('Member removed.');
     this.close();
@@ -2548,12 +2584,12 @@ function renderDrawerGifts(member) {
     let other = '';
     if (perspective === 'received') {
       const fromNames = (g.fromMemberIds || []).map(id => {
-        const m = Store.byId(id); return m ? `${m.firstName} ${m.lastName}` : null;
+        const m = Store.byId(id); return m ? displayName(m) : null;
       }).filter(Boolean);
       other = fromNames.join(', ') || g.fromText || '—';
     } else {
       const to = g.toMemberId ? Store.byId(g.toMemberId) : null;
-      other = to ? `${to.firstName} ${to.lastName}` : (g.toText || '—');
+      other = to ? displayName(to) : (g.toText || '—');
     }
     const date = g.date ? formatDate(g.date) : '';
     const amount = fmtMoney(g.amount);
@@ -2620,7 +2656,7 @@ function relRow(r) {
       <div class="rel-avatar is-${m.gender}" ${bg}></div>
       <div class="rel-info">
         <span class="rel-label">${r.label}</span>
-        <span class="rel-name">${escape(m.firstName)} ${escape(m.lastName)}</span>
+        <span class="rel-name">${escape(displayName(m))}</span>
       </div>
       <button class="rel-unlink" data-unlink="${m.id}" data-rel-label="${r.label.toLowerCase()}" title="Unlink this relationship" aria-label="Unlink">
         <svg viewBox="0 0 16 16" width="11" height="11" fill="none"><path d="M6.5 2.5h-2A2.5 2.5 0 0 0 2 5v0a2.5 2.5 0 0 0 2.5 2.5h2M9.5 2.5h2A2.5 2.5 0 0 1 14 5v0a2.5 2.5 0 0 1-2.5 2.5h-2M6.5 5h3M3 13l10-10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -2728,7 +2764,7 @@ const MyFamilyView = {
     if (!sel) return;
     const all = sortMembers(Store.membersList());
     sel.innerHTML = all.map(m =>
-      `<option value="${m.id}" ${m.id === currentId ? 'selected' : ''}>${escape(m.firstName)} ${escape(m.lastName)}</option>`
+      `<option value="${m.id}" ${m.id === currentId ? 'selected' : ''}>${escape(displayName(m))}</option>`
     ).join('');
   },
 
@@ -3484,8 +3520,8 @@ const AdminView = {
             <div class="row-name">
               <div class="row-avatar is-${m.gender}" ${bg}></div>
               <div>
-                <div style="font-weight:600">${escape(m.firstName)} ${escape(m.lastName)}</div>
-                ${m.nickname ? `<div class="muted small">"${escape(m.nickname)}"</div>` : ''}
+                <div style="font-weight:600">${escape(displayName(m))}</div>
+                ${fullName(m) !== displayName(m) ? `<div class="muted small">${escape(fullName(m))}</div>` : ''}
               </div>
             </div>
           </td>
@@ -3547,8 +3583,7 @@ const AdminView = {
           <div class="node-photo is-${m.gender}" ${photoBg}>${inner}</div>
           <div class="node-body">
             <div class="node-relation">${escape(relation)}</div>
-            <div class="node-name">${escape(m.firstName)} ${escape(m.lastName)}</div>
-            ${m.nickname ? `<div class="node-nick">"${escape(m.nickname)}"</div>` : ''}
+            <div class="node-name">${escape(displayName(m))}</div>
             ${m.group ? `<div class="node-group">${escape(m.group)}</div>` : ''}
             ${m.birthday ? `<div class="node-meta"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${formatDate(m.birthday)}</div>` : ''}
             ${flagsHTML}
@@ -3597,7 +3632,7 @@ const AdminView = {
             <div class="group-member-row" data-mid="${m.id}">
               <div class="row-name">
                 <div class="row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
-                <span>${escape(m.firstName)} ${escape(m.lastName)}</span>
+                <span>${escape(displayName(m))}</span>
               </div>
               <button class="btn btn-ghost btn-sm" data-remove="${m.id}">Remove</button>
             </div>`).join('') : '<p class="muted small">No members in this group yet.</p>'}
@@ -3605,7 +3640,7 @@ const AdminView = {
         <div class="group-add-row">
           <select class="input" id="group-add-member">
             <option value="">+ Add member to this group…</option>
-            ${notInGroup.map(m => `<option value="${m.id}">${escape(m.firstName)} ${escape(m.lastName)}${m.group ? ' (' + escape(m.group) + ')' : ''}</option>`).join('')}
+            ${notInGroup.map(m => `<option value="${m.id}">${escape(displayName(m))}${m.group ? ' (' + escape(m.group) + ')' : ''}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -3631,7 +3666,7 @@ const AdminView = {
     await sendAdminResetEmail(m);
   },
   deleteMember(m) {
-    if (!confirm(`Delete ${m.firstName} ${m.lastName}?`)) return;
+    if (!confirm(`Delete ${displayName(m)}?`)) return;
     Tree.remove(m.id);
     this.render();
     Canvas.renderAll();
@@ -3640,9 +3675,9 @@ const AdminView = {
     const list = this.visibleMembers();
     if (!list.length) { toast('Nothing to export.', 'warn'); return; }
     const data = [
-      ['First name', 'Last name', 'Nickname', 'Username', 'Role', 'Group', 'Email', 'Phone', 'Address', 'Birthday', 'Ethnicities'],
+      ['First name', 'Last name', 'Display name', 'Username', 'Role', 'Group', 'Email', 'Phone', 'Address', 'Birthday', 'Ethnicities'],
       ...list.map(m => [
-        m.firstName, m.lastName, m.nickname || '', m.username, m.role,
+        m.firstName, m.lastName, m.displayName || '', m.username, m.role,
         m.group || '', m.email || '', m.phone || '', m.address || '', m.birthday || '',
         (m.ethnicities || []).map(c => ETH_BY_CODE[c]?.name || c).join('; '),
       ]),
@@ -5285,8 +5320,7 @@ const EventsView = {
         <div class="row-name">
           <div class="row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
           <div>
-            <div style="font-weight:600">${escape(m.firstName)} ${escape(m.lastName)}${isYou ? ' <span class="row-you-tag">you</span>' : ''}</div>
-            ${m.nickname ? `<div class="muted small">"${escape(m.nickname)}"</div>` : ''}
+            <div style="font-weight:600">${escape(displayName(m))}${isYou ? ' <span class="row-you-tag">you</span>' : ''}</div>
           </div>
         </div>` : `
         <div class="row-name">
@@ -5461,7 +5495,7 @@ const EventsView = {
       <select class="input" id="event-add-member">
         <option value="">+ Add family member…</option>
         ${sortMembers(Store.membersList().filter(m => !attendeesRaw.some(a => a.memberId === m.id)))
-          .map(m => `<option value="${m.id}">${escape(m.firstName)} ${escape(m.lastName)}</option>`).join('')}
+          .map(m => `<option value="${m.id}">${escape(displayName(m))}</option>`).join('')}
       </select>
       ${groups.length ? `
         <select class="input" id="event-add-group">
@@ -5608,8 +5642,10 @@ const EventsView = {
       on($('#event-add-group'), 'change', (e) => {
         const grp = e.target.value; if (!grp) return;
         const present = new Set(attendeesRaw.map(a => a.memberId).filter(Boolean));
+        // Skip members who opted out of group-based event invites — they can
+        // still be added one-by-one via "+ Add family member…".
         Store.membersList()
-          .filter(m => m.group === grp && !present.has(m.id))
+          .filter(m => m.group === grp && !present.has(m.id) && m.includeInGroupEvents !== false)
           .forEach(m => attendeesRaw.push(pushAttendee(m)));
         ev.attendees = attendeesRaw;
         Store.save();
@@ -6257,8 +6293,8 @@ const CalendarView = {
         const bYear = parseInt((m.birthday || '').slice(0, 4), 10);
         const turning = Number.isFinite(bYear) ? (c.dt.getFullYear() - bYear) : null;
         const ageHint = turning != null && turning >= 0 ? ` — turns ${turning}` : '';
-        chips.push(`<button type="button" class="cal-chip cal-chip-birthday" data-member-id="${m.id}" title="${escape(m.firstName)} ${escape(m.lastName)}${ageHint}">
-          <span class="cal-chip-icon">🎂</span><span class="cal-chip-text">${escape(m.firstName)} ${escape(m.lastName)}</span>
+        chips.push(`<button type="button" class="cal-chip cal-chip-birthday" data-member-id="${m.id}" title="${escape(displayName(m))}${ageHint}">
+          <span class="cal-chip-icon">🎂</span><span class="cal-chip-text">${escape(displayName(m))}</span>
         </button>`);
       });
       const dayAnnivs = anniversariesByMD.get(md) || [];
@@ -6267,7 +6303,7 @@ const CalendarView = {
         const nth   = Number.isFinite(aYear) ? (c.dt.getFullYear() - aYear) : null;
         const ordHint = nth != null && nth > 0 ? ` — ${nth}${nthSuffix(nth)} anniversary` : '';
         const label = `${focus.firstName} & ${partner.firstName}`;
-        chips.push(`<button type="button" class="cal-chip cal-chip-anniv" data-member-id="${focus.id}" title="${escape(focus.firstName)} ${escape(focus.lastName)} & ${escape(partner.firstName)} ${escape(partner.lastName)}${ordHint}">
+        chips.push(`<button type="button" class="cal-chip cal-chip-anniv" data-member-id="${focus.id}" title="${escape(displayName(focus))} & ${escape(displayName(partner))}${ordHint}">
           <span class="cal-chip-icon">💍</span><span class="cal-chip-text">${escape(label)}</span>
         </button>`);
       });
@@ -6590,12 +6626,12 @@ const GiftsView = {
         ? g.fromMemberIds
         : (g.fromMemberId ? [g.fromMemberId] : []);
       const fromNames = fromIds.map(id => memMap[id]).filter(Boolean)
-        .map(m => `${m.firstName} ${m.lastName}`);
+        .map(m => displayName(m));
       const fromName = fromNames.length
         ? fromNames.join(', ')
         : (g.fromText || '—');
       const toName = g.toMemberId && memMap[g.toMemberId]
-        ? `${memMap[g.toMemberId].firstName} ${memMap[g.toMemberId].lastName}`
+        ? displayName(memMap[g.toMemberId])
         : (g.toText || '—');
       const dirIcon = g.direction === 'given'
         ? '<span class="gift-dir-pill given">Given</span>'
@@ -6664,11 +6700,11 @@ const GiftsView = {
       const fromIds = Array.isArray(g.fromMemberIds) && g.fromMemberIds.length
         ? g.fromMemberIds
         : (g.fromMemberId ? [g.fromMemberId] : []);
-      const names = fromIds.map(id => memMap[id]).filter(Boolean).map(m => `${m.firstName} ${m.lastName}`);
+      const names = fromIds.map(id => memMap[id]).filter(Boolean).map(m => displayName(m));
       return names.length ? names.join(', ') : (g.fromText || '');
     };
     const toOf = g => g.toMemberId && memMap[g.toMemberId]
-      ? `${memMap[g.toMemberId].firstName} ${memMap[g.toMemberId].lastName}` : (g.toText || '');
+      ? displayName(memMap[g.toMemberId]) : (g.toText || '');
     const data = [
       ['Direction', 'Date', 'Item', 'Amount (USD)', 'From', 'To', 'Occasion', 'Notes'],
       ...rows.map(g => [g.direction, g.date || '', g.item || '', g.amount || '', fromOf(g), toOf(g), g.occasion || '', g.notes || '']),
@@ -6681,7 +6717,7 @@ const GiftsView = {
     f.dataset.editId = editId || '';
     const memberOptions = ['<option value="">— none —</option>',
       ...sortMembers(Store.membersList())
-        .map(m => `<option value="${m.id}">${escape(m.firstName)} ${escape(m.lastName)}</option>`)
+        .map(m => `<option value="${m.id}">${escape(displayName(m))}</option>`)
     ].join('');
     $('#gift-to-member').innerHTML = memberOptions;
 
@@ -6875,14 +6911,14 @@ const MemberModal = {
     const sel = $('#modal-rel-target');
     if (lockedId) {
       const tm = Store.byId(lockedId);
-      sel.innerHTML = `<option value="${tm.id}">${escape(tm.firstName)} ${escape(tm.lastName)}</option>`;
+      sel.innerHTML = `<option value="${tm.id}">${escape(displayName(tm))}</option>`;
       sel.value = tm.id;
       sel.disabled = true;
       targetWrap.querySelector('span').textContent = 'Anchor person';
     } else {
       sel.disabled = false;
       targetWrap.querySelector('span').textContent = 'Connect to';
-      const opts = sortMembers(Store.membersList()).map(m => `<option value="${m.id}">${escape(m.firstName)} ${escape(m.lastName)}</option>`).join('');
+      const opts = sortMembers(Store.membersList()).map(m => `<option value="${m.id}">${escape(displayName(m))}</option>`).join('');
       sel.innerHTML = opts;
     }
 
@@ -6905,10 +6941,10 @@ const MemberModal = {
     const opts = ['<option value="">— none —</option>'];
     if (target.spouseId) {
       const s = Store.byId(target.spouseId);
-      if (s) opts.push(`<option value="${s.id}" selected>${s.firstName} ${s.lastName} (spouse)</option>`);
+      if (s) opts.push(`<option value="${s.id}" selected>${displayName(s)} (spouse)</option>`);
     }
     sortMembers(Store.membersList().filter(m => m.id !== target.id && m.id !== target.spouseId)).forEach(m => {
-      opts.push(`<option value="${m.id}">${m.firstName} ${m.lastName}</option>`);
+      opts.push(`<option value="${m.id}">${displayName(m)}</option>`);
     });
     sec.innerHTML = opts.join('');
   },
@@ -6942,7 +6978,7 @@ const MemberModal = {
       firstName,
       middleName: (fd.get('middleName') || '').toString().trim(),
       lastName,
-      nickname: fd.get('nickname'),
+      displayName: fd.get('displayName'),
       birthday: fd.get('birthday'),
       gender: fd.get('gender'),
       ageGroup: fd.get('ageGroup'),
@@ -7003,10 +7039,10 @@ const LinkFamilyModal = {
     if (!memberId) return;
     this.memberId = memberId;
     const m = Store.byId(memberId); if (!m) return;
-    $('#link-subject').textContent = `Connect ${m.firstName} ${m.lastName} to someone already in the tree.`;
+    $('#link-subject').textContent = `Connect ${displayName(m)} to someone already in the tree.`;
     const sel = $('#link-target');
     const opts = sortMembers(Store.membersList().filter(x => x.id !== memberId))
-      .map(x => `<option value="${x.id}">${escape(x.firstName)} ${escape(x.lastName)}</option>`)
+      .map(x => `<option value="${x.id}">${escape(displayName(x))}</option>`)
       .join('');
     sel.innerHTML = opts || '<option value="">— no one else to link to —</option>';
     $('#link-rel-type').value = 'spouse';
@@ -7464,7 +7500,7 @@ function bindTreeToolbar() {
     const matches = new Set();
     if (q) {
       Store.membersList().forEach(m => {
-        if ((`${m.firstName} ${m.lastName} ${m.nickname || ''}`).toLowerCase().includes(q)) {
+        if ((`${m.firstName} ${m.middleName || ''} ${m.lastName} ${m.displayName || ''}`).toLowerCase().includes(q)) {
           matches.add(m.id);
         }
       });
@@ -7676,6 +7712,16 @@ function fullName(m) {
   const mid = (m.middleName || '').trim();
   const parts = [m.firstName, mid, m.lastName].filter(Boolean);
   return parts.join(' ');
+}
+
+// What we actually render whenever a member's name appears. The optional
+// `displayName` field is the override; when empty it falls back to the full
+// legal name. Centralizing this means we don't have to remember the fallback
+// at every call site.
+function displayName(m) {
+  if (!m) return '';
+  const dn = (m.displayName || '').trim();
+  return dn || fullName(m);
 }
 
 // US phone auto-format. Accepts any input, returns "(XXX) XXX-XXXX" once
@@ -8400,7 +8446,7 @@ const DashboardView = {
       const turning = Number.isFinite(birthYear) ? (occ.getFullYear() - birthYear) : null;
       items.push({
         date: occ, sort: occ.getTime(), kind: 'birthday',
-        title: `${m.firstName} ${m.lastName}'s birthday`,
+        title: `${displayName(m)}'s birthday`,
         sub: turning != null && turning >= 0 ? `Turns ${turning}` : '',
         icon: '🎂',
         onClick: () => Drawer.open(m.id),
@@ -8523,7 +8569,7 @@ const DashboardView = {
       host.innerHTML = '<p class="muted small" style="margin:0;">No gifts to track. Click "Log a gift" and pick "Given" to start tracking purchase &amp; send status.</p>';
       return;
     }
-    const memberName = (id) => { const m = id ? Store.byId(id) : null; return m ? `${m.firstName} ${m.lastName}` : ''; };
+    const memberName = (id) => { const m = id ? Store.byId(id) : null; return m ? displayName(m) : ''; };
     host.innerHTML = top.map(g => {
       const to = memberName(g.toMemberId) || g.toText || '—';
       const from = (g.fromMemberIds || []).map(memberName).filter(Boolean).join(', ') || g.fromText || '';
@@ -8636,6 +8682,18 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.20',
+    date: '2026-05-12',
+    title: 'Red spouse heart, profile-label emojis, deceased checkbox, Nickname→Display name, group-invite opt-out',
+    changes: [
+      'Family Tree: the spouse-line heart marker is now red (#dc2626) on both the main tree and My Family mini-tree, making current marriages pop. Broken-heart markers for ex-spouses stay muted gray to keep the past-tense read.',
+      'Profile drawer: added emoji glyphs to the Birthday (🎂), Phone (📱), Email (📧), Anniversary (❤️), and Date of death (🕊️) labels for quick visual scan.',
+      'Profile edit: "Date of death" is now gated behind a "Deceased" checkbox. The date input only appears when checked, so a stray click on the date picker can\'t accidentally mark someone as having passed away.',
+      'Members: "Nickname" → "Display name". This optional field overrides what the app renders anywhere a member appears (tree cards, drawer headline, admin list, attendee rows, calendar chips, gift list, etc.). If left blank, it falls back to First + Middle + Last. Existing nicknames carry forward in the v4.20 migration. CSV export header updated.',
+      'Groups: each member has a new "Include in group invites" checkbox in the profile edit form (default on). When unchecked, that person is skipped by Events → "+ Add by group…" — they can still be added one-by-one. Useful for someone who is part of a group socially but shouldn\'t get auto-invited to every event for it.',
+    ],
+  },
   {
     version: '4.19',
     date: '2026-05-12',
