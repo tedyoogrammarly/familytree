@@ -1116,6 +1116,37 @@ body.is-admin .node.is-selected::after {
   border-radius: 999px;
   letter-spacing: .02em;
 }
+/* v4.28: 529-plan quick-link chip on the tree node card. Visible to Admin
+   and Family roles when m.plan529 is set. Acts as an actual <a> — clicking
+   it opens the plan portal in a new tab and stops the click from
+   bubbling up to the card-opens-drawer handler. */
+.node-529 {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5a3a12;
+  background: rgba(212, 165, 96, .18);
+  border: 1px solid rgba(212, 165, 96, .45);
+  border-radius: 999px;
+  text-decoration: none;
+  letter-spacing: .02em;
+  transition: background-color .12s var(--ease-out), border-color .12s var(--ease-out), transform .12s var(--ease-out);
+}
+.node-529:hover {
+  background: rgba(212, 165, 96, .28);
+  border-color: rgba(212, 165, 96, .65);
+  transform: translateY(-1px);
+}
+.node-529:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+}
+.node-529-icon { font-size: 12px; line-height: 1; }
+.node-529-text { line-height: 1; }
 
 /* Non-admins cannot open the profile drawer from a tree card. */
 body:not(.is-admin) .tree-nodes .node { cursor: default; }

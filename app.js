@@ -2297,6 +2297,9 @@ const Canvas = {
       node.addEventListener('click', (e) => {
         if (e.target.closest('.node-add')) return;
         if (e.target.closest('.node-toggle')) return;
+        // Quick-links inside the card (e.g. the 529 chip) should open in a
+        // new tab without also triggering the drawer.
+        if (e.target.closest('[data-stop-node-click]')) return;
         // Admins and the Family role can open any card. Plain Users can't
         // browse the tree drawer-by-drawer (they use My Family for that).
         if (!Auth.canOpenTreeDrawer()) return;
@@ -2409,6 +2412,19 @@ function nodeHTML(m) {
   const relation = Tree.computeRelation(m.id);
   // Age is sensitive — only admins and the Family role see it on tree cards.
   const ageStr = Auth.canViewAge() ? ageLabel(m.birthday, m.dateOfDeath) : '';
+  // 529 plan chip on the tree card. Surfaced to Admin and Family so they
+  // can jump straight to the plan portal without opening the drawer. URL is
+  // escaped + opens in a new tab; the chip's click stops bubbling so it
+  // doesn't double as a "open drawer" click. Same canViewAge() gate — the
+  // two roles that get the rest of the sensitive node detail.
+  const plan529Href = m.plan529 && /^https?:\/\//i.test(m.plan529)
+    ? m.plan529
+    : (m.plan529 ? `https://${m.plan529}` : '');
+  const plan529HTML = (Auth.canViewAge() && plan529Href) ? `
+    <a class="node-529" href="${escape(plan529Href)}" target="_blank" rel="noopener" title="Open 529 plan in a new tab" data-stop-node-click>
+      <span class="node-529-icon" aria-hidden="true">🎓</span>
+      <span class="node-529-text">529 plan</span>
+    </a>` : '';
   const inMemoriam = !!m.dateOfDeath;
   const gen = ((_gensCache || computeGenerations())[m.id] ?? 0);
 
@@ -2461,6 +2477,7 @@ function nodeHTML(m) {
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.35-7-10.5C5 7.46 7.46 5 10.5 5c1.74 0 3.41.81 4.5 2.09C16.09 5.81 17.76 5 19.5 5 22.54 5 25 7.46 25 10.5 25 16.65 18 21 18 21H12z" fill="currentColor" transform="translate(-2 0)"/></svg>
           ${escape(togetherStr)}
         </div>` : ''}
+        ${plan529HTML}
         ${flagsHTML}
       </div>
       ${toggleHTML}
@@ -3671,6 +3688,9 @@ const MyFamilyView = {
       el.addEventListener('click', (e) => {
         if (e.target.closest('.node-add')) return;
         if (e.target.closest('.node-toggle')) return;
+        // Quick-links on the card (529 chip etc.) open externally instead
+        // of bouncing through the drawer.
+        if (e.target.closest('[data-stop-node-click]')) return;
         const id = el.dataset.id;
         // Admin / Family role can open any card here. Plain Users are
         // still restricted to their own + spouse cards (the original rule).
@@ -9322,6 +9342,14 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.28',
+    date: '2026-05-13',
+    title: '529-plan quick-link chip on tree cards (Admin + Family)',
+    changes: [
+      'Family Tree + My Family cards: when a member has a 529 plan URL saved, a small 🎓 "529 plan" chip now renders directly on their card for the Admin and Family roles. Clicking the chip opens the plan portal in a new tab — no need to drill into the drawer first. Plain User role doesn\'t see the chip.',
+    ],
+  },
   {
     version: '4.27',
     date: '2026-05-13',
