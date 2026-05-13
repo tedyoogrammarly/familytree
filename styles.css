@@ -3781,3 +3781,106 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   border: 1px solid var(--ink-200);
 }
 .vault-photo-actions { display: flex; gap: 6px; }
+
+/* ---------- v4.25 ---------- */
+
+/* Bank-account "details" block in the Finance read view. Replaces the old
+   cramped single-line "muted small" sub-row. Each row is a labelled fact
+   on its own line so a glance lands cleanly on Account #, Routing #, and
+   Account holder(s) — and the value font is bumped ~1.5x so this isn't
+   squinting territory. The dl wrapper inherits the .vault-row's left
+   padding, so we don't need any extra layout. */
+.vault-bank-details {
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 4px;
+  border-top: 1px dashed var(--ink-200);
+}
+.vault-bank-details > div { display: flex; flex-direction: column; gap: 2px; }
+.vault-bank-details dt {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-500);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.vault-bank-details dd {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.35;
+  color: var(--ink-900);
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+  font-weight: 500;
+}
+.vault-bank-title {
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+.vault-bank-type { margin-bottom: 2px; }
+.vault-bank-notes {
+  margin-top: 10px;
+  font-size: 14px;
+  font-style: italic;
+  white-space: pre-line;
+}
+
+/* ---------- Neighbors ---------- */
+
+.vault-row-neighbor .vault-row-view {
+  /* Two-column view header: photo + main content on the left, actions on the
+     right. The neighbor-specific inner wrapper handles the photo/main split. */
+}
+.vault-neighbor-view {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.vault-neighbor-photo {
+  width: 96px;
+  height: 96px;
+  border-radius: 12px;
+  background-color: var(--paper-soft);
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--ink-200);
+  box-shadow: var(--shadow-soft);
+  cursor: zoom-in;
+  display: grid;
+  place-items: center;
+  font-size: 38px;
+  color: var(--ink-300);
+  padding: 0;
+  appearance: none;
+  transition: transform .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+.vault-neighbor-photo:hover { transform: scale(1.02); border-color: var(--brand-500); }
+.vault-neighbor-photo.is-empty { cursor: default; }
+.vault-neighbor-photo.is-empty:hover { transform: none; border-color: var(--ink-200); }
+
+/* The neighbor photo slot in edit mode is a square (not credit-card ratio).
+   Force the aspect-ratio override after the base .vault-photo-preview rule. */
+.vault-photo-preview-neighbor {
+  aspect-ratio: 1 / 1;
+  max-width: 240px;
+}
+
+@media (max-width: 560px) {
+  .vault-neighbor-view {
+    grid-template-columns: 72px 1fr;
+    gap: 10px;
+  }
+  .vault-neighbor-photo {
+    width: 72px;
+    height: 72px;
+    font-size: 28px;
+  }
+  .vault-bank-details dd { font-size: 17px; }
+}
