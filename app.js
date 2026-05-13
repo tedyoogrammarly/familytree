@@ -757,6 +757,11 @@ const Store = {
       // displayName is empty.
       if (m.displayName === undefined) m.displayName = (m.nickname || '').trim();
       if (m.nickname !== undefined) delete m.nickname;
+      // v4.29: optional International name — e.g. a Korean or Vietnamese
+      // rendering of the same person. Rendered under the main displayName
+      // on the tree card and inside the drawer. Empty by default for back-
+      // compat.
+      if (m.internationalName === undefined) m.internationalName = '';
       // v4.20: groups-add-to-events opt-out. Default true so existing
       // members keep their current behavior — they still get added when
       // an admin picks "+ Add by group…" on an event.
@@ -1172,6 +1177,7 @@ const Tree = {
       middleName: (input.middleName || '').trim(),
       lastName: input.lastName.trim(),
       displayName: (input.displayName || '').trim(),
+      internationalName: (input.internationalName || '').trim(),
       includeInGroupEvents: input.includeInGroupEvents !== false,
       birthday,
       email: input.email || '',
@@ -2468,6 +2474,7 @@ function nodeHTML(m) {
       <div class="node-body">
         ${relation ? `<div class="node-relation">${relation}</div>` : ''}
         <div class="node-name">${escape(displayName(m))}</div>
+        ${m.internationalName ? `<div class="node-international-name" title="International name">${escape(m.internationalName)}</div>` : ''}
         ${m.group ? `<div class="node-group">${escape(m.group)}</div>` : ''}
         ${ageStr ? `<div class="node-meta">
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -2579,6 +2586,18 @@ const Drawer = {
     }
     $('#drawer-relation').textContent = Tree.computeRelation(m.id) || 'Family';
     $('#drawer-name').textContent = displayName(m);
+    // v4.29: International name surfaces directly under the H2 so it pairs
+    // with the Latin name visually.
+    const intlEl = $('#drawer-international-name');
+    if (intlEl) {
+      if (m.internationalName) {
+        intlEl.textContent = m.internationalName;
+        intlEl.hidden = false;
+      } else {
+        intlEl.textContent = '';
+        intlEl.hidden = true;
+      }
+    }
     // Show the full legal name as a subtitle only when the display name is a
     // custom override — otherwise the headline and subtitle would duplicate.
     const legal = fullName(m);
@@ -2717,6 +2736,7 @@ const Drawer = {
     f.middleName.value = m.middleName || '';
     f.lastName.value = m.lastName;
     f.displayName.value = m.displayName || '';
+    if (f.internationalName) f.internationalName.value = m.internationalName || '';
     f.birthday.value = m.birthday || '';
     f.phone.value = formatPhoneUS(m.phone || '');
     f.email.value = m.email || '';
@@ -2799,6 +2819,7 @@ const Drawer = {
     m.middleName = (fd.get('middleName') || '').toString().trim();
     m.lastName   = lastName;
     m.displayName = (fd.get('displayName') || '').toString().trim();
+    m.internationalName = (fd.get('internationalName') || '').toString().trim();
     m.birthday   = (fd.get('birthday') || '').toString();
     // Normalize phone to a consistent "(XXX) XXX-XXXX" format on save.
     m.phone      = formatPhoneUS((fd.get('phone') || '').toString());
@@ -3961,6 +3982,7 @@ const AdminView = {
           <div class="node-body">
             <div class="node-relation">${escape(relation)}</div>
             <div class="node-name">${escape(displayName(m))}</div>
+            ${m.internationalName ? `<div class="node-international-name" title="International name">${escape(m.internationalName)}</div>` : ''}
             ${m.group ? `<div class="node-group">${escape(m.group)}</div>` : ''}
             ${m.birthday ? `<div class="node-meta"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${formatDate(m.birthday)}</div>` : ''}
             ${flagsHTML}
@@ -7620,6 +7642,7 @@ const MemberModal = {
       middleName: (fd.get('middleName') || '').toString().trim(),
       lastName,
       displayName: fd.get('displayName'),
+      internationalName: fd.get('internationalName'),
       birthday: fd.get('birthday'),
       gender: fd.get('gender'),
       ageGroup: fd.get('ageGroup'),
@@ -9342,6 +9365,15 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.29',
+    date: '2026-05-13',
+    title: 'International name field — render names in another script under the Latin name',
+    changes: [
+      'New optional "International name" field on every member profile (admin edit + add-member modal), placed directly under Display name. Useful for Korean / Vietnamese / Chinese / Japanese / Cyrillic / Arabic etc. — anything you\'d want shown alongside the Latin name.',
+      'Rendered under the name on Family Tree cards, My Family cards, the Members admin cards, and at the top of the profile drawer. Empty by default; existing members carry over unchanged.',
+    ],
+  },
   {
     version: '4.28',
     date: '2026-05-13',
