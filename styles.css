@@ -3327,6 +3327,33 @@ body.is-admin label[data-admin-only] { display: flex !important; }
 body.is-admin .grid-2[data-admin-only] { display: grid !important; }
 body.is-admin section[data-admin-only],
 body.is-admin div[data-admin-only] { display: block !important; }
+/* v4.26: `is-admin` also satisfies `data-admin-only span`-style fallthroughs.
+   Some elements (e.g. legend chips, .cal-legend-item span wrappers) flow as
+   inline; allow them to render too. */
+body.is-admin span[data-admin-only] { display: inline-flex !important; }
+
+/* v4.26 — "Family" role. A read-only-ish tier between User and Admin.
+   `data-family-allowed` opts an element into being visible to Family in
+   addition to Admin. `data-family-hidden` hides an element from Family
+   specifically (User still sees it). */
+body.is-family .nav-tab[data-family-allowed],
+body.is-family .btn[data-family-allowed],
+body.is-family button[data-family-allowed] { display: inline-flex !important; }
+body.is-family label[data-family-allowed] { display: flex !important; }
+body.is-family section[data-family-allowed],
+body.is-family div[data-family-allowed] { display: block !important; }
+body.is-family [data-family-hidden] { display: none !important; }
+
+/* Read-only calendar chips for Family: event chips render but the cursor
+   indicates they aren't actionable. The `:disabled` selector handles the
+   underlying state set in CalendarView.render(). */
+.cal-chip.is-readonly,
+.cal-chip:disabled {
+  cursor: default;
+  opacity: .92;
+}
+.cal-chip.is-readonly:hover,
+.cal-chip:disabled:hover { transform: none; }
 
 /* Admin (vault) page is even more restricted than is-admin — only the
    household head + spouse + system admin should see it. Toggled via the

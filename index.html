@@ -84,7 +84,7 @@
           <button class="nav-tab" data-view="dashboard" data-admin-only role="tab">Dashboard</button>
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
-          <button class="nav-tab" data-view="calendar" data-admin-only role="tab">Calendar</button>
+          <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -534,12 +534,12 @@
             </button>
             <select class="input" id="cal-year" aria-label="Year"></select>
             <button class="btn btn-secondary btn-sm" id="cal-today">Today</button>
-            <button class="btn btn-secondary btn-sm" id="cal-add-reminder" title="Add a recurring reminder (Calendar-only)">+ Reminder</button>
+            <button class="btn btn-secondary btn-sm" id="cal-add-reminder" data-admin-only title="Add a recurring reminder (Calendar-only)">+ Reminder</button>
             <button class="btn btn-secondary btn-sm" id="cal-refresh" title="Refresh calendar">
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               Refresh
             </button>
-            <button class="btn btn-secondary btn-sm" id="cal-google-btn" title="Sync Google Calendar">
+            <button class="btn btn-secondary btn-sm" id="cal-google-btn" data-admin-only title="Sync Google Calendar">
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.19 3.32v2.77h3.55c2.08-1.92 3.28-4.74 3.28-8.1Z"/>
                 <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.65l-3.55-2.77c-.98.66-2.24 1.05-3.73 1.05-2.86 0-5.29-1.93-6.15-4.53H2.18v2.84A11 11 0 0 0 12 23Z"/>
@@ -556,7 +556,7 @@
           <span class="cal-legend-item"><span class="cal-dot is-birthday"></span>Birthday</span>
           <span class="cal-legend-item"><span class="cal-dot is-anniv"></span>Anniversary</span>
           <span class="cal-legend-item"><span class="cal-dot is-holiday"></span>US holiday</span>
-          <span class="cal-legend-item"><span class="cal-dot is-reminder"></span>Reminder</span>
+          <span class="cal-legend-item" data-admin-only><span class="cal-dot is-reminder"></span>Reminder</span>
         </div>
         <div class="panel cal-panel">
           <div class="cal-weekdays" id="cal-weekdays"></div>
@@ -825,7 +825,7 @@
             <div id="drawer-relations" class="relation-list"></div>
           </div>
 
-          <div class="drawer-section">
+          <div class="drawer-section" data-family-hidden>
             <h4>Gifts</h4>
             <div id="drawer-gifts" class="gifts-mini"></div>
           </div>
@@ -878,7 +878,11 @@
           <div class="grid-2">
             <label class="field"><span><span class="kv-emoji" aria-hidden="true">👥</span>Group</span><select name="group" id="edit-group"></select></label>
             <label class="field" data-admin-only><span><span class="kv-emoji" aria-hidden="true">🔑</span>Role</span>
-              <select name="role"><option value="user">User</option><option value="admin">Admin</option></select>
+              <select name="role">
+                <option value="user">User</option>
+                <option value="family">Family</option>
+                <option value="admin">Admin</option>
+              </select>
             </label>
           </div>
           <label class="field-check" id="edit-group-events-wrap">
