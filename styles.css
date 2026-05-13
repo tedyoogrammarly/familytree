@@ -1090,6 +1090,19 @@ body.is-admin .node.is-selected::after {
   font-style: italic;
   line-height: 1.2;
 }
+/* v4.29: International name (e.g. Korean / Vietnamese) shown directly
+   under the display name on tree cards. Slightly smaller + muted so it
+   sits as a quiet secondary line, but with normal (non-italic) weight
+   to honor the script — many CJK fonts render italics awkwardly. */
+.node-international-name {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  color: var(--ink-500);
+  line-height: 1.2;
+  margin-bottom: 2px;
+  letter-spacing: -0.005em;
+  word-break: break-word;
+}
 .node-meta {
   margin-top: 8px;
   font-size: 12px;
@@ -1250,6 +1263,17 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
   margin: 0;
 }
 .drawer-nick { color: rgba(247,243,236,.72); font-style: italic; margin: 4px 0 0; font-size: 14px; }
+/* v4.29: International name shown directly under the drawer H2. Matches
+   the hero-area light text but in the display font and no italics, so
+   CJK characters render cleanly. */
+.drawer-international-name {
+  color: rgba(247,243,236,.92);
+  font-family: var(--font-display);
+  font-size: 16px;
+  margin: 2px 0 0;
+  letter-spacing: -0.005em;
+}
+.drawer-international-name[hidden] { display: none; }
 .node-memoriam {
   position: absolute;
   top: -14px; left: 50%;
