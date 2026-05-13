@@ -988,6 +988,32 @@ const Auth = {
     return this.current && this.current !== 'admin-bootstrap' && this.current.id === memberId;
   },
 
+  // ----- v4.26 "Family" role -----
+  // A read-only-ish role between User and Admin. Family sees age on Tree
+  // cards and gets read-only access to Calendar (no +Reminder, no Google,
+  // no creating events). Helpers below let view code stay declarative:
+  // "can this role do X?" instead of branching on string literals.
+  isFamily() {
+    return !!this.current && this.current !== 'admin-bootstrap' && this.current.role === 'family';
+  },
+  // True if the viewer should see ages on tree cards (sensitive info that
+  // we don't expose to plain Users).
+  canViewAge() { return this.isAdmin() || this.isFamily(); },
+  // The Drawer's bottom-action buttons (Edit, Link, Mark divorced, Reset
+  // password, Remove) are all hidden from Family. Even on their own card —
+  // the rule is "view only, no editing" for this role.
+  canEditMember(_m) { return this.isAdmin() || (this.isSelf(_m?.id) && !this.isFamily()); },
+  // Drawer's Gifts mini-list is admin-only. Family hides it the same way
+  // regular Users always have.
+  canSeeDrawerGifts() { return this.isAdmin(); },
+  // Calendar page is visible to admin AND family; family gets the read-only
+  // variant (no +Reminder, no Google, no event creation, reminder chips
+  // hidden, non-invited events filtered out).
+  canViewCalendar() { return this.isAdmin() || this.isFamily(); },
+  canEditCalendarEvents() { return this.isAdmin(); },
+  canManageReminders() { return this.isAdmin(); },
+  canUseGoogleCalendar() { return this.isAdmin(); },
+
   // Gate for the "Admin" private-vault page. Stricter than isAdmin(): only
   // Ted Yoo, Doan Yoo, and the bootstrap-admin sentinel get in. Match by
   // legal name (first + last) so a custom displayName override doesn't
@@ -2361,8 +2387,8 @@ function nodeHTML(m) {
   const inner = m.photo ? '' : Silhouettes.for(m);
   const isSelf = Auth.isSelf(m.id) ? ' is-self' : '';
   const relation = Tree.computeRelation(m.id);
-  // Age is sensitive — only admins see it on tree cards.
-  const ageStr = Auth.isAdmin() ? ageLabel(m.birthday, m.dateOfDeath) : '';
+  // Age is sensitive — only admins and the Family role see it on tree cards.
+  const ageStr = Auth.canViewAge() ? ageLabel(m.birthday, m.dateOfDeath) : '';
   const inMemoriam = !!m.dateOfDeath;
   const gen = ((_gensCache || computeGenerations())[m.id] ?? 0);
 
@@ -2611,10 +2637,13 @@ const Drawer = {
     renderDrawerGifts(m);
 
     // permissions
-    const canEdit = Auth.isAdmin() || Auth.isSelf(m.id);
+    const canEdit = Auth.canEditMember(m);
     $('#drawer-edit-btn').toggleAttribute('hidden', !canEdit);
 
-    // divorce-status toggle visibility + label (uses joint state)
+    // divorce-status toggle visibility + label (uses joint state). The
+    // button itself is also gated by `data-admin-only` in the HTML so
+    // Family/User never see it regardless of spouse status; we still
+    // compute the label for the admin case here.
     const divorceBtn = $('#drawer-divorce-btn');
     if (m.spouseId) {
       divorceBtn.hidden = false;
@@ -2985,7 +3014,10 @@ const Views = {
   current: 'tree',
   _renderTimer: null,
   show(name) {
-    if ((name === 'admin' || name === 'gifts' || name === 'calendar' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
+    // Family role gets Calendar (read-only); everything else in the
+    // admin-only set still bounces them to Tree.
+    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
+    if (name === 'calendar' && !Auth.canViewCalendar()) name = 'tree';
     if (name === 'vault' && !Auth.canAccessVault()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
     this.current = name;
@@ -6503,9 +6535,13 @@ const CalendarView = {
     for (let y = yrNow - 50; y <= yrNow + 50; y++) yrs.push(y);
     yrSel.innerHTML = yrs.map(y => `<option value="${y}" ${y === this.year ? 'selected' : ''}>${y}</option>`).join('');
 
-    // Build lookups
+    // Build lookups. Family role gets a read-only view: they see only the
+    // events they're personally invited to (filter parity with Events tab),
+    // plus birthdays / anniversaries / US holidays. Admin sees everything.
+    const isFamilyReadOnly = !Auth.isAdmin() && Auth.isFamily();
+    const visibleEvents = isFamilyReadOnly ? userEventsList() : (Store.state.events || []);
     const eventsByDate = new Map();
-    (Store.state.events || []).forEach(ev => {
+    visibleEvents.forEach(ev => {
       if (!ev.date) return;
       if (!eventsByDate.has(ev.date)) eventsByDate.set(ev.date, []);
       eventsByDate.get(ev.date).push(ev);
@@ -6599,21 +6635,28 @@ const CalendarView = {
           <span class="cal-chip-icon">💍</span><span class="cal-chip-text">${escape(label)}</span>
         </button>`);
       });
-      // Calendar-only reminders (recurring)
-      const dayReminders = (Store.state.reminders || []).filter(r => reminderOccursOn(r, iso));
-      dayReminders.forEach(r => {
-        chips.push(`<button type="button" class="cal-chip cal-chip-reminder" data-reminder-id="${r.id}" title="${escape(r.title)} — click to edit">
-          <span class="cal-chip-icon">${escape(r.icon || '🔔')}</span><span class="cal-chip-text">${escape(r.title)}</span>
-        </button>`);
-      });
+      // Calendar-only reminders (recurring). Hidden entirely from the
+      // Family role per the v4.26 spec — they're an admin-only construct.
+      if (!isFamilyReadOnly) {
+        const dayReminders = (Store.state.reminders || []).filter(r => reminderOccursOn(r, iso));
+        dayReminders.forEach(r => {
+          chips.push(`<button type="button" class="cal-chip cal-chip-reminder" data-reminder-id="${r.id}" title="${escape(r.title)} — click to edit">
+            <span class="cal-chip-icon">${escape(r.icon || '🔔')}</span><span class="cal-chip-text">${escape(r.title)}</span>
+          </button>`);
+        });
+      }
+
+      // The per-day "+ create event" affordance is admin-only. Family /
+      // User see the calendar read-only.
+      const addBtnHtml = Auth.isAdmin() ? `<button type="button" class="cal-add" data-add-event="${iso}" title="Create event on this day" aria-label="Create event on this day">
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>` : '';
 
       return `
         <div class="cal-cell${c.inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${iso}">
           <div class="cal-cell-head">
             <span class="cal-day-num">${c.dt.getDate()}</span>
-            <button type="button" class="cal-add" data-add-event="${iso}" title="Create event on this day" aria-label="Create event on this day">
-              <svg viewBox="0 0 16 16" width="11" height="11" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </button>
+            ${addBtnHtml}
           </div>
           <div class="cal-chips">${chips.join('')}</div>
         </div>`;
@@ -6622,12 +6665,22 @@ const CalendarView = {
     const grid = $('#cal-grid');
     grid.innerHTML = html;
 
-    // Wire interactions
-    grid.querySelectorAll('.cal-chip-event').forEach(b => on(b, 'click', (e) => {
-      e.stopPropagation();
-      EventsView.selectedId = b.dataset.eventId;
-      Views.show('events');
-    }));
+    // Wire interactions. Family role is read-only on the Calendar — event
+    // chips don't drill in (Events tab is admin-only anyway). Birthday and
+    // anniversary chips still open the Drawer for them since Family can
+    // browse profiles (the Drawer hides Gifts + editing actions on its own).
+    if (Auth.isAdmin()) {
+      grid.querySelectorAll('.cal-chip-event').forEach(b => on(b, 'click', (e) => {
+        e.stopPropagation();
+        EventsView.selectedId = b.dataset.eventId;
+        Views.show('events');
+      }));
+    } else {
+      grid.querySelectorAll('.cal-chip-event').forEach(b => {
+        b.classList.add('is-readonly');
+        b.disabled = true;
+      });
+    }
     grid.querySelectorAll('.cal-chip-birthday').forEach(b => on(b, 'click', (e) => {
       e.stopPropagation();
       Drawer.open(b.dataset.memberId);
@@ -6657,6 +6710,9 @@ const CalendarView = {
   },
 
   async renderGoogleEvents() {
+    // Google Calendar integration is admin-only. Family / User never see
+    // pulled Google events on the grid.
+    if (!Auth.canUseGoogleCalendar()) return;
     const cfg = GoogleCalendar.config();
     if (!cfg.clientId || !cfg.showEvents) return;
     const renderKey = `${this.year}-${this.month}`;
@@ -7646,7 +7702,7 @@ const UserChip = {
       $('#user-chip-avatar').style.backgroundImage = '';
     } else if (u) {
       $('#user-chip-name').textContent = `${u.firstName} ${u.lastName}`;
-      $('#user-chip-role').textContent = u.role;
+      $('#user-chip-role').textContent = capitalize(u.role || 'user');
       $('#user-chip-avatar').style.background = '';
       if (u.photo) {
         $('#user-chip-avatar').style.backgroundImage = `url('${u.photo}')`;
@@ -7656,6 +7712,7 @@ const UserChip = {
       }
     }
     document.body.classList.toggle('is-admin', Auth.isAdmin());
+    document.body.classList.toggle('is-family', Auth.isFamily());
     document.body.classList.toggle('is-vault-authorized', Auth.canAccessVault());
   },
 };
@@ -7927,6 +7984,7 @@ function applyRemoteState(state) {
   }
   if (typeof PageEmojis !== 'undefined' && PageEmojis.applyAll) PageEmojis.applyAll();
   document.body.classList.toggle('is-admin', Auth.isAdmin());
+  document.body.classList.toggle('is-family', Auth.isFamily());
   if (Canvas?.renderAll) Canvas.renderAll();
   if (Views?.current === 'admin')    AdminView.render();
   if (Views?.current === 'vault')    VaultView.render();
@@ -9231,6 +9289,17 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.26',
+    date: '2026-05-13',
+    title: 'New "Family" role — read-only access to ages, profiles, and a filtered Calendar',
+    changes: [
+      'New role between User and Admin. Set a member\'s Role to "Family" in their profile edit form (admins only). Existing User and Admin roles unchanged.',
+      'Family Tree: Family role sees age chips on every member\'s card (same as Admins). Plain Users still don\'t.',
+      'Profile drawer for Family role: card details are visible, but the Gifts section is hidden, and the bottom-row actions (Edit profile, Link to family, Mark as divorced, Reset password, Remove from tree) are all hidden — even on the user\'s own card. Pure read-only.',
+      'Calendar page is now accessible to Family role as read-only. Events show only if the family member is on the attendee list (same filter as the Events tab); birthdays, anniversaries, and US holidays always show; reminders, the "+ Reminder" button, the per-day "+" add-event button, and the Google Calendar sync button are all hidden. Event chips appear but aren\'t clickable; birthday / anniversary chips still open the read-only profile drawer.',
+    ],
+  },
   {
     version: '4.25',
     date: '2026-05-12',
