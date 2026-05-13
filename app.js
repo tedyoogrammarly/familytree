@@ -1006,6 +1006,24 @@ const Auth = {
   // Drawer's Gifts mini-list is admin-only. Family hides it the same way
   // regular Users always have.
   canSeeDrawerGifts() { return this.isAdmin(); },
+  // Per-card variant for the Family role: they see Gifts when looking at
+  // their own card or their spouse's card; never on cards of cousins /
+  // siblings / parents / kids. Admin always sees Gifts; plain User keeps
+  // the legacy behavior (always shown — there's no Gifts page for them).
+  canSeeDrawerGiftsFor(m) {
+    if (!m) return false;
+    if (this.isAdmin()) return true;
+    if (this.isFamily()) {
+      const me = this.current;
+      if (!me || me === 'admin-bootstrap') return false;
+      return m.id === me.id || m.id === me.spouseId;
+    }
+    return true;
+  },
+  // Family role + admin can pop the profile drawer for any tree card.
+  // Plain User cannot — their drawer access is restricted to the My Family
+  // page where the per-card "allowed" set already gates by self/spouse.
+  canOpenTreeDrawer() { return this.isAdmin() || this.isFamily(); },
   // Calendar page is visible to admin AND family; family gets the read-only
   // variant (no +Reminder, no Google, no event creation, reminder chips
   // hidden, non-invited events filtered out).
@@ -2279,7 +2297,9 @@ const Canvas = {
       node.addEventListener('click', (e) => {
         if (e.target.closest('.node-add')) return;
         if (e.target.closest('.node-toggle')) return;
-        if (!Auth.isAdmin()) return;
+        // Admins and the Family role can open any card. Plain Users can't
+        // browse the tree drawer-by-drawer (they use My Family for that).
+        if (!Auth.canOpenTreeDrawer()) return;
         // Skip the drawer if the click followed a drag (>4px movement).
         const dx = Math.abs(e.clientX - pressX), dy = Math.abs(e.clientY - pressY);
         if (Store.state.editLayout && (moved || dx > 4 || dy > 4)) return;
@@ -2634,7 +2654,18 @@ const Drawer = {
       });
     });
 
-    renderDrawerGifts(m);
+    // Gifts section visibility. Family role only sees Gifts on self / spouse
+    // cards — other members of the household hide it. Admin always sees it;
+    // plain User keeps the legacy "always shown" behavior.
+    const giftsSection = $('#drawer-gifts-section');
+    if (giftsSection) {
+      const showGifts = Auth.canSeeDrawerGiftsFor(m);
+      giftsSection.hidden = !showGifts;
+      if (showGifts) renderDrawerGifts(m);
+      else $('#drawer-gifts').innerHTML = '';
+    } else {
+      renderDrawerGifts(m);
+    }
 
     // permissions
     const canEdit = Auth.canEditMember(m);
@@ -3641,7 +3672,9 @@ const MyFamilyView = {
         if (e.target.closest('.node-add')) return;
         if (e.target.closest('.node-toggle')) return;
         const id = el.dataset.id;
-        if (!Auth.isAdmin() && !allowedIds.has(id)) return;
+        // Admin / Family role can open any card here. Plain Users are
+        // still restricted to their own + spouse cards (the original rule).
+        if (!Auth.canOpenTreeDrawer() && !allowedIds.has(id)) return;
         Drawer.open(id);
       });
     });
@@ -9289,6 +9322,16 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.27',
+    date: '2026-05-13',
+    title: 'Family role fixes — tree & My Family clickable, per-card Gifts visibility',
+    changes: [
+      'Family role can now click any profile card on the Family Tree to open the (read-only) drawer. Previously the click handler was admin-only, leaving the tree non-interactive for Family.',
+      'Family role can now click any profile card on the My Family page. Previously they were stuck with the User-tier rule (only their own card + spouse\'s card opened).',
+      'Drawer Gifts section is now per-card for Family role: it shows when the family member is viewing their own card or their spouse\'s card, and is hidden on every other relative\'s card. Admin still sees Gifts on every card; plain User behavior is unchanged.',
+    ],
+  },
   {
     version: '4.26',
     date: '2026-05-13',
