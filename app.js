@@ -712,6 +712,7 @@ const Store = {
         utilities: [],    // [{ id, emoji, name, website, phone, accountNumber, notes }]
         hoas: [],         // [{ id, propertyLabel, name, contact, title, address, phone, fax, website, email, notes }]
         codeSets: [],     // [{ id, propertyLabel, pedestrianGate, carGate, pool, clubhouse, buildings[], notes }]
+        neighbors: [],    // [{ id, name, address, phone, kidsNote, photo, notes }]
       },
       vaultAccessIds: [], // optional extra member ids granted vault access
     };
@@ -828,10 +829,12 @@ const Store = {
       });
 
       // v4.23: insurances — new fields (plan, NAIC, dates).
+      // v4.25: per-card emoji prefix (overrides the kind-based default icon).
       v.insurances.forEach(i => {
         ['planNumber', 'naicNumber', 'effectiveDate', 'expirationDate'].forEach(k => {
           if (i[k] === undefined) i[k] = '';
         });
+        if (i.emoji === undefined) i.emoji = '';
       });
 
       // v4.23: utilities — new emoji prefix.
@@ -885,6 +888,17 @@ const Store = {
         if (!cs.id) cs.id = uid('cs');
         if (cs.propertyLabel === undefined) cs.propertyLabel = '';
         if (!Array.isArray(cs.buildings)) cs.buildings = [];
+      });
+
+      // v4.25: neighbors list. Lightweight people-rolodex for the household
+      // (name, address, phone, kidsNote, photo, notes). Backfilled here so
+      // older archives don't crash on Store.state.vault.neighbors access.
+      if (!Array.isArray(v.neighbors)) v.neighbors = [];
+      v.neighbors.forEach(n => {
+        if (!n.id) n.id = uid('nbr');
+        ['name', 'address', 'phone', 'kidsNote', 'photo', 'notes'].forEach(k => {
+          if (n[k] === undefined) n[k] = '';
+        });
       });
     }
     if (!Array.isArray(this.state.vaultAccessIds)) this.state.vaultAccessIds = [];
@@ -9218,6 +9232,18 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.25',
+    date: '2026-05-12',
+    title: 'Admin polish — insurance emoji picker, larger bank details, Instagram link, Neighbors section, drag-reorder persistence',
+    changes: [
+      'Admin → Benefits: each insurance card now has its own Emoji picker (Health 🩺, Hospital 🏥, Rx 💊, Dental 🦷, Vision 👓, Auto 🚗, Home 🏠, Umbrella 🌂, Pet 🐶, Travel ✈️, Life 🦺, Mental health 🧠, Disability 🏃, Other 📄). Leaving it on "Auto" keeps the existing kind-based default so previously created cards are unchanged.',
+      'Admin → Finance: bank-account details reformatted. Each fact (Account number, Routing number, Account holders) is on its own line with an emoji prefix, the value font is ~50% larger (19px) so it\'s readable at a glance, and Account holders are now explicitly labelled rather than tacked onto the end of the dense sub-line.',
+      'Admin → Family: Instagram handles are now clickable links to https://www.instagram.com/<handle> instead of a plain @text label.',
+      'Admin → Home: new "Neighbors" section. Each entry holds name, address, phone, a free-form "kids" note, an optional photo (uploaded inline, auto-downscaled), and notes. Same drag-to-reorder + click-to-enlarge photo behavior as the rest of the Admin page.',
+      'Bug fix: drag-to-reorder on Finance / Benefits / Home lists now actually saves the new order. The previous version committed on the `drop` event, but Chrome refuses to fire `drop` if the cursor is over the dragged row at release time (which is the common case, since the row tracks the cursor). The new order is now committed on `dragend`, which always fires.',
+    ],
+  },
+  {
     version: '4.24',
     date: '2026-05-12',
     title: 'Admin polish — utility emoji picker, in-page card photo lightbox, drag-to-reorder lists',
@@ -9681,7 +9707,14 @@ const VaultView = {
     rows.push(['📘', 'Passport', p.passport || '—']);
     rows.push(['✈️', 'Known Traveler #', p.ktn || '—']);
     rows.push(['🎁', 'Rapid Rewards', p.rapidRewards || '—']);
-    rows.push(['📸', 'Instagram', p.instagram ? `@${p.instagram.replace(/^@/, '')}` : '—']);
+    // Instagram renders as a clickable link to https://www.instagram.com/<handle>.
+    // The tuple value here is raw HTML (the renderer below special-cases this
+    // row by skipping the escape() call), so any handle must be escaped here.
+    const igHandle = (p.instagram || '').replace(/^@/, '').trim();
+    const igHtml = igHandle
+      ? `<a href="https://www.instagram.com/${encodeURIComponent(igHandle)}" target="_blank" rel="noopener">@${escape(igHandle)}</a>`
+      : '—';
+    rows.push(['📸', 'Instagram', igHtml, /*isHtml*/ true]);
     const b = p.birth || {};
     const formatTime = (t) => {
       if (!t) return '';
@@ -9708,10 +9741,10 @@ const VaultView = {
       ? `<a href="${escape(p.googleDrive)}" target="_blank" rel="noopener">${escape(p.googleDrive)}</a>`
       : '—';
     return `<dl class="vault-kv">
-      ${rows.map(([emoji, label, value]) => `
+      ${rows.map(([emoji, label, value, isHtml]) => `
         <div>
           <dt><span class="kv-emoji" aria-hidden="true">${emoji}</span>${escape(label)}</dt>
-          <dd>${escape(value)}</dd>
+          <dd>${isHtml ? value : escape(value)}</dd>
         </div>`).join('')}
       <div>
         <dt><span class="kv-emoji" aria-hidden="true">💾</span>Google Drive</dt>
@@ -9917,14 +9950,14 @@ const VaultView = {
         ${this.renderDragHandle()}
         <div class="vault-row-view" data-role="view">
           <div class="vault-row-main">
-            <div class="vault-row-title">${escape(title)}</div>
-            <div class="vault-row-sub muted small">
-              ${b.accountType ? `<span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span>` : ''}
-              ${b.accountNumber ? `Acct ${escape(b.accountNumber)}` : ''}
-              ${b.routingNumber ? ` · Routing ${escape(b.routingNumber)}` : ''}
-              ${holderNames.length ? ` · ${escape(holderNames.join(', '))}` : ''}
-            </div>
-            ${b.notes ? `<div class="muted small" style="margin-top:4px;">${escape(b.notes)}</div>` : ''}
+            <div class="vault-row-title vault-bank-title">${escape(title)}</div>
+            ${b.accountType ? `<div class="vault-bank-type"><span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span></div>` : ''}
+            <dl class="vault-bank-details">
+              ${b.accountNumber ? `<div><dt><span class="kv-emoji">#️⃣</span>Account number</dt><dd>${escape(b.accountNumber)}</dd></div>` : ''}
+              ${b.routingNumber ? `<div><dt><span class="kv-emoji">🏦</span>Routing number</dt><dd>${escape(b.routingNumber)}</dd></div>` : ''}
+              ${holderNames.length ? `<div><dt><span class="kv-emoji">👥</span>Account holder${holderNames.length > 1 ? 's' : ''}</dt><dd>${escape(holderNames.join(', '))}</dd></div>` : ''}
+            </dl>
+            ${b.notes ? `<div class="vault-bank-notes muted">📝 ${escape(b.notes)}</div>` : ''}
             ${historyView}
           </div>
           <div class="vault-row-actions">
@@ -10122,6 +10155,11 @@ const VaultView = {
     };
     const kindIcon = { health: '🩺', dental: '🦷', vision: '👓', car: '🚗', other: '📄' };
     const kindLabel = { health: 'Health', dental: 'Dental', vision: 'Vision', car: 'Car insurance', other: 'Other' };
+    // v4.25: the user can override the kind-based icon with a per-card emoji
+    // (e.g. 🏥 for a hospital indemnity plan, 💊 for prescription, etc.).
+    // Empty `i.emoji` falls back to the kind icon so older cards still render
+    // their default sigil.
+    const cardEmoji = (i) => i.emoji || kindIcon[i.kind] || '📄';
     host.innerHTML = `
       <header class="vault-section-head">
         <h3>🩺 Insurance &amp; benefits</h3>
@@ -10133,7 +10171,7 @@ const VaultView = {
             ${this.renderDragHandle()}
             <div class="vault-row-view" data-role="view">
               <div class="vault-row-main">
-                <div class="vault-row-title">${kindIcon[i.kind] || '📄'} ${escape(i.insurer || 'Unnamed plan')} <span class="muted small">· ${escape(kindLabel[i.kind] || 'Other')}</span></div>
+                <div class="vault-row-title">${cardEmoji(i)} ${escape(i.insurer || 'Unnamed plan')} <span class="muted small">· ${escape(kindLabel[i.kind] || 'Other')}</span></div>
                 <div class="vault-info-grid muted small">
                   ${i.policyNumber   ? `<div>📇 <strong>Member ID / Policy:</strong> ${escape(i.policyNumber)}</div>` : ''}
                   ${i.planNumber     ? `<div>📋 <strong>Plan #:</strong> ${escape(i.planNumber)}</div>` : ''}
@@ -10157,6 +10195,7 @@ const VaultView = {
             </div>
             <form class="vault-row-edit" data-role="edit" hidden>
               <div class="vault-edit-grid">
+                <label class="vault-edit-field"><span class="vault-edit-label">Emoji</span>${this.renderInsuranceEmojiSelect(i.emoji)}</label>
                 <label class="vault-edit-field"><span class="vault-edit-label">Type</span>
                   <select name="kind">
                     <option value="health" ${i.kind === 'health' ? 'selected' : ''}>Health</option>
@@ -10253,7 +10292,7 @@ const VaultView = {
   addInsurance() {
     if (!Auth.canAccessVault()) return;
     Store.state.vault.insurances.push({
-      id: uid('ins'), kind: 'health', insurer: '', memberId: '',
+      id: uid('ins'), kind: 'health', emoji: '', insurer: '', memberId: '',
       policyNumber: '', planNumber: '', groupNumber: '', naicNumber: '',
       effectiveDate: '', expirationDate: '',
       phone: '', frontPhoto: '', backPhoto: '', notes: '',
@@ -10271,6 +10310,7 @@ const VaultView = {
     const row = document.querySelector(`.vault-row[data-iid="${iid}"]`);
     const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
     i.kind           = v('kind') || 'other';
+    i.emoji          = v('emoji');
     i.insurer        = v('insurer');
     i.policyNumber   = v('policyNumber');
     i.planNumber     = v('planNumber');
@@ -10298,16 +10338,17 @@ const VaultView = {
   // ---------------- Home section ----------------
   renderHome() {
     const host = $('#vault-home');
-    const utils    = Store.state.vault.utilities;
-    const hoas     = Store.state.vault.hoas;
-    const codeSets = Store.state.vault.codeSets;
+    const utils     = Store.state.vault.utilities;
+    const hoas      = Store.state.vault.hoas;
+    const codeSets  = Store.state.vault.codeSets;
+    const neighbors = Store.state.vault.neighbors;
     host.innerHTML = `
       <header class="vault-section-head">
         <h3>⚡ Utilities</h3>
         <button class="btn btn-primary btn-sm" data-action="add-util">+ Add utility</button>
       </header>
       ${utils.length
-        ? `<div class="vault-list">${utils.map(u => this.renderUtilityRow(u)).join('')}</div>`
+        ? `<div class="vault-list" data-list="utilities">${utils.map(u => this.renderUtilityRow(u)).join('')}</div>`
         : '<p class="muted" style="padding:16px; text-align:center;">No utilities yet.</p>'}
 
       <header class="vault-section-head" style="margin-top:28px;">
@@ -10315,7 +10356,7 @@ const VaultView = {
         <button class="btn btn-primary btn-sm" data-action="add-hoa">+ Add HOA</button>
       </header>
       ${hoas.length
-        ? `<div class="vault-list">${hoas.map(h => this.renderHOARow(h)).join('')}</div>`
+        ? `<div class="vault-list" data-list="hoas">${hoas.map(h => this.renderHOARow(h)).join('')}</div>`
         : '<p class="muted" style="padding:16px; text-align:center;">No HOAs yet. Click + Add HOA to record management contact info.</p>'}
 
       <header class="vault-section-head" style="margin-top:28px;">
@@ -10323,28 +10364,46 @@ const VaultView = {
         <button class="btn btn-primary btn-sm" data-action="add-codes">+ Add property codes</button>
       </header>
       ${codeSets.length
-        ? `<div class="vault-list">${codeSets.map(c => this.renderCodeSetRow(c)).join('')}</div>`
+        ? `<div class="vault-list" data-list="codeSets">${codeSets.map(c => this.renderCodeSetRow(c)).join('')}</div>`
         : '<p class="muted" style="padding:16px; text-align:center;">No code sets yet. Click + Add property codes to record gate / pool / clubhouse codes.</p>'}
+
+      <header class="vault-section-head" style="margin-top:28px;">
+        <h3>🏘️ Neighbors</h3>
+        <button class="btn btn-primary btn-sm" data-action="add-neighbor">+ Add neighbor</button>
+      </header>
+      ${neighbors.length
+        ? `<div class="vault-list" data-list="neighbors">${neighbors.map(n => this.renderNeighborRow(n)).join('')}</div>`
+        : '<p class="muted" style="padding:16px; text-align:center;">No neighbors yet. Click + Add neighbor to track names, addresses, and contacts.</p>'}
     `;
-    on(host.querySelector('[data-action=add-util]'),  'click', () => this.addUtility());
-    on(host.querySelector('[data-action=add-hoa]'),   'click', () => this.addHOA());
-    on(host.querySelector('[data-action=add-codes]'), 'click', () => this.addCodeSet());
+    on(host.querySelector('[data-action=add-util]'),     'click', () => this.addUtility());
+    on(host.querySelector('[data-action=add-hoa]'),      'click', () => this.addHOA());
+    on(host.querySelector('[data-action=add-codes]'),    'click', () => this.addCodeSet());
+    on(host.querySelector('[data-action=add-neighbor]'), 'click', () => this.addNeighbor());
     host.querySelectorAll('.vault-row[data-uid]').forEach(row => this.wireUtilityRow(row));
     host.querySelectorAll('.vault-row[data-hid]').forEach(row => this.wireHOARow(row));
     host.querySelectorAll('.vault-row[data-cid]').forEach(row => this.wireCodeSetRow(row));
-    // Three independent lists inside Home — wire each to its own data-attr.
-    const lists = host.querySelectorAll('.vault-list');
-    if (lists[0]) this.enableDragReorder(lists[0], 'data-uid', (newIds) => {
-      Store.state.vault.utilities = this.reorderById(Store.state.vault.utilities, newIds);
-      Store.save();
-    });
-    if (lists[1]) this.enableDragReorder(lists[1], 'data-hid', (newIds) => {
-      Store.state.vault.hoas = this.reorderById(Store.state.vault.hoas, newIds);
-      Store.save();
-    });
-    if (lists[2]) this.enableDragReorder(lists[2], 'data-cid', (newIds) => {
-      Store.state.vault.codeSets = this.reorderById(Store.state.vault.codeSets, newIds);
-      Store.save();
+    host.querySelectorAll('.vault-row[data-nid]').forEach(row => this.wireNeighborRow(row));
+    // Each list is keyed by data-list (utilities|hoas|codeSets|neighbors)
+    // rather than position so adding a new section in between doesn't shift
+    // any of the existing wiring.
+    const wireList = (key, dataAttr, stateKey) => {
+      const el = host.querySelector(`.vault-list[data-list="${key}"]`);
+      if (!el) return;
+      this.enableDragReorder(el, dataAttr, (newIds) => {
+        Store.state.vault[stateKey] = this.reorderById(Store.state.vault[stateKey], newIds);
+        Store.save();
+      });
+    };
+    wireList('utilities', 'data-uid', 'utilities');
+    wireList('hoas',      'data-hid', 'hoas');
+    wireList('codeSets',  'data-cid', 'codeSets');
+    wireList('neighbors', 'data-nid', 'neighbors');
+    // Neighbor photo thumbs open the in-page lightbox (same as benefits).
+    host.querySelectorAll('[data-lightbox-src]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.openLightbox(el.dataset.lightboxSrc);
+      });
     });
   },
 
@@ -10385,6 +10444,42 @@ const VaultView = {
     </select>`;
   },
 
+  // v4.25: curated emoji choices for insurance cards. Defaults to "— Auto —"
+  // which means "fall back to the kind icon" (🩺/🦷/👓/🚗/📄) so existing
+  // cards don't need to be re-edited to keep their look.
+  INSURANCE_EMOJI_PRESETS: [
+    ['🩺',  'Health / general medical'],
+    ['🏥',  'Hospital'],
+    ['💊',  'Prescription / Rx'],
+    ['🦷',  'Dental'],
+    ['👓',  'Vision'],
+    ['👁️', 'Eye care'],
+    ['🚗',  'Auto'],
+    ['🏠',  'Home / renters'],
+    ['🌂',  'Umbrella'],
+    ['🐶',  'Pet'],
+    ['✈️', 'Travel'],
+    ['🦺',  'Life / accident'],
+    ['🧠',  'Mental health'],
+    ['🏃',  'Disability / accident'],
+    ['📄',  'Other'],
+  ],
+
+  renderInsuranceEmojiSelect(current) {
+    const presets = this.INSURANCE_EMOJI_PRESETS;
+    const presetEmojis = presets.map(p => p[0]);
+    const customOpt = current && !presetEmojis.includes(current)
+      ? `<option value="${escape(current)}" selected>${escape(current)} (custom)</option>`
+      : '';
+    return `<select name="emoji" class="vault-emoji-select">
+      <option value="" ${!current ? 'selected' : ''}>— Auto (from Type) —</option>
+      ${customOpt}
+      ${presets.map(([e, label]) =>
+        `<option value="${e}" ${current === e ? 'selected' : ''}>${e}  ${escape(label)}</option>`
+      ).join('')}
+    </select>`;
+  },
+
   // -------- Drag-to-reorder + image lightbox plumbing --------
 
   // The small six-dot grip injected at the top-left of every reorderable
@@ -10411,11 +10506,18 @@ const VaultView = {
   enableDragReorder(listEl, dataAttr, onReorder) {
     if (!listEl) return;
     let dragged = null;
+    // Snapshot the order at dragstart so dragend can detect whether anything
+    // actually changed (avoids redundant Store.save() round-trips and avoids
+    // overwriting state with a no-op when the user releases outside the list).
+    let startOrder = [];
+    const readOrder = () => [...listEl.querySelectorAll(`.vault-row[${dataAttr}]`)]
+      .map(r => r.getAttribute(dataAttr));
     listEl.querySelectorAll('.vault-drag-handle').forEach(handle => {
       handle.addEventListener('dragstart', (e) => {
         const row = handle.closest('.vault-row');
         if (!row) return;
         dragged = row;
+        startOrder = readOrder();
         row.classList.add('is-dragging');
         e.dataTransfer.effectAllowed = 'move';
         // Some browsers require data to be set or the drag refuses to start.
@@ -10424,9 +10526,21 @@ const VaultView = {
         const rect = row.getBoundingClientRect();
         try { e.dataTransfer.setDragImage(row, e.clientX - rect.left, e.clientY - rect.top); } catch {}
       });
+      // Commit on dragend rather than on `drop`. dragover only calls
+      // preventDefault() when the cursor is over a *different* row, so when
+      // the user releases the mouse over the dragged row itself (extremely
+      // common — the row is moved around the cursor) the browser never fires
+      // `drop`. dragend always fires, so we read the final DOM order here.
       handle.addEventListener('dragend', () => {
         if (dragged) dragged.classList.remove('is-dragging');
+        if (dragged) {
+          const newIds = readOrder();
+          const changed = newIds.length !== startOrder.length
+            || newIds.some((id, i) => id !== startOrder[i]);
+          if (changed) onReorder(newIds);
+        }
         dragged = null;
+        startOrder = [];
       });
     });
     listEl.addEventListener('dragover', (e) => {
@@ -10447,13 +10561,11 @@ const VaultView = {
         }
       }
     });
-    listEl.addEventListener('drop', (e) => {
-      if (!dragged) return;
-      e.preventDefault();
-      const newIds = [...listEl.querySelectorAll(`.vault-row[${dataAttr}]`)]
-        .map(r => r.getAttribute(dataAttr));
-      onReorder(newIds);
-    });
+    // Keep the `drop` handler as a no-op preventDefault so the browser
+    // doesn't try to "open" the drop as a navigation in browsers that
+    // happen to fire it (Firefox sometimes does). The actual commit lives
+    // in dragend above.
+    listEl.addEventListener('drop', (e) => { if (dragged) e.preventDefault(); });
   },
 
   // Re-sort an array (in place) to match the order of `idList`. Items
@@ -10787,6 +10899,125 @@ const VaultView = {
     const c = Store.state.vault.codeSets.find(x => x.id === cid); if (!c) return;
     if (!confirm(`Delete codes for ${c.propertyLabel || 'this property'}?`)) return;
     Store.state.vault.codeSets = Store.state.vault.codeSets.filter(x => x.id !== cid);
+    Store.save();
+    this.renderHome();
+  },
+
+  // -------- Neighbors (list) --------
+  // Lightweight people-rolodex for the household: name, address, phone, a
+  // free-form "kids" note, an optional photo, and free-form notes. Photo is
+  // a downscaled JPEG data-URL (same pipeline as insurance card photos).
+  renderNeighborRow(n) {
+    return `
+      <div class="vault-row vault-row-neighbor" data-nid="${n.id}">
+        ${this.renderDragHandle()}
+        <div class="vault-row-view" data-role="view">
+          <div class="vault-neighbor-view">
+            ${n.photo
+              ? `<button type="button" class="vault-neighbor-photo" data-lightbox-src="${n.photo}" style="background-image:url('${n.photo}')" title="Click to enlarge"></button>`
+              : `<div class="vault-neighbor-photo is-empty" aria-hidden="true">👤</div>`}
+            <div class="vault-row-main">
+              <div class="vault-row-title">${escape(n.name || 'Unnamed neighbor')}</div>
+              <dl class="vault-bank-details">
+                ${n.address  ? `<div><dt><span class="kv-emoji">🏠</span>Address</dt><dd style="white-space:pre-line;">${escape(n.address)}</dd></div>` : ''}
+                ${n.phone    ? `<div><dt><span class="kv-emoji">📞</span>Phone</dt><dd>${escape(n.phone)}</dd></div>` : ''}
+                ${n.kidsNote ? `<div><dt><span class="kv-emoji">🧒</span>Kids</dt><dd>${escape(n.kidsNote)}</dd></div>` : ''}
+              </dl>
+              ${n.notes ? `<div class="vault-bank-notes muted">📝 ${escape(n.notes)}</div>` : ''}
+            </div>
+          </div>
+          <div class="vault-row-actions">
+            <button class="btn btn-ghost btn-sm" data-action="edit-neighbor">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" data-action="delete-neighbor">Delete</button>
+          </div>
+        </div>
+        <form class="vault-row-edit" data-role="edit" hidden>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">Name</span><input name="nbr-name" placeholder="e.g. The Garcia family" value="${escape(n.name || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="nbr-phone" type="tel" value="${escape(n.phone || '')}" /></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Address</span><textarea name="nbr-address" rows="2" placeholder="Street, city, state, zip">${escape(n.address || '')}</textarea></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Kids <span class="muted small">(names, ages, anything worth remembering)</span></span><input name="nbr-kidsNote" placeholder="e.g. Sofia (8), Mateo (5)" value="${escape(n.kidsNote || '')}" /></label>
+            <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="nbr-notes" rows="2">${escape(n.notes || '')}</textarea></label>
+          </div>
+          <div class="vault-photo-row">
+            <div class="vault-photo-slot vault-photo-slot-neighbor" data-slot="photo">
+              <div class="vault-photo-label">Photo</div>
+              <div class="vault-photo-preview vault-photo-preview-neighbor" ${n.photo ? `style="background-image:url('${n.photo}')"` : ''}></div>
+              <div class="vault-photo-actions">
+                <label class="btn btn-secondary btn-sm">Upload<input type="file" accept="image/*" data-photo-target="photo" hidden /></label>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="clear-photo" data-photo-target="photo">Clear</button>
+              </div>
+            </div>
+          </div>
+          <div class="vault-edit-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-action="save-neighbor">Save</button>
+            <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel-neighbor">Cancel</button>
+          </div>
+        </form>
+      </div>`;
+  },
+
+  wireNeighborRow(row) {
+    const nid = row.dataset.nid;
+    const view = row.querySelector('[data-role=view]');
+    const edit = row.querySelector('[data-role=edit]');
+    on(row.querySelector('[data-action=edit-neighbor]'),   'click', () => { view.hidden = true; edit.hidden = false; });
+    on(row.querySelector('[data-action=cancel-neighbor]'), 'click', () => { view.hidden = false; edit.hidden = true; });
+    on(row.querySelector('[data-action=save-neighbor]'),   'click', () => this.saveNeighbor(nid));
+    on(row.querySelector('[data-action=delete-neighbor]'), 'click', () => this.deleteNeighbor(nid));
+    // Photo upload — read file, downscale, store as data URL.
+    row.querySelectorAll('input[type=file][data-photo-target]').forEach(input => {
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0]; if (!file) return;
+        try {
+          const dataUrl = await downscaleImageFile(file, 1400, 0.85);
+          const n = Store.state.vault.neighbors.find(x => x.id === nid);
+          if (n) { n.photo = dataUrl; Store.save(); toast('Photo attached.'); this.renderHome(); }
+        } catch (e) {
+          toast('Could not load image: ' + e.message, 'warn');
+        }
+      });
+    });
+    row.querySelectorAll('[data-action=clear-photo]').forEach(btn => {
+      on(btn, 'click', () => {
+        const n = Store.state.vault.neighbors.find(x => x.id === nid);
+        if (n) { n.photo = ''; Store.save(); this.renderHome(); }
+      });
+    });
+  },
+
+  addNeighbor() {
+    if (!Auth.canAccessVault()) return;
+    Store.state.vault.neighbors.push({
+      id: uid('nbr'), name: '', address: '', phone: '', kidsNote: '', photo: '', notes: '',
+    });
+    Store.save();
+    this.renderHome();
+    const last = Store.state.vault.neighbors[Store.state.vault.neighbors.length - 1];
+    const row = document.querySelector(`.vault-row[data-nid="${last.id}"]`);
+    if (row) row.querySelector('[data-action=edit-neighbor]')?.click();
+  },
+
+  saveNeighbor(nid) {
+    if (!Auth.canAccessVault()) return;
+    const n = Store.state.vault.neighbors.find(x => x.id === nid); if (!n) return;
+    const row = document.querySelector(`.vault-row[data-nid="${nid}"]`);
+    const v = (sel) => (row.querySelector(`[name="${sel}"]`)?.value || '').trim();
+    n.name     = v('nbr-name');
+    n.address  = v('nbr-address');
+    n.phone    = v('nbr-phone');
+    n.kidsNote = v('nbr-kidsNote');
+    n.notes    = v('nbr-notes');
+    Store.save();
+    toast('Neighbor saved.');
+    this.renderHome();
+  },
+
+  deleteNeighbor(nid) {
+    if (!Auth.canAccessVault()) return;
+    const n = Store.state.vault.neighbors.find(x => x.id === nid); if (!n) return;
+    if (!confirm(`Delete ${n.name || 'this neighbor'}?`)) return;
+    Store.state.vault.neighbors = Store.state.vault.neighbors.filter(x => x.id !== nid);
     Store.save();
     this.renderHome();
   },
