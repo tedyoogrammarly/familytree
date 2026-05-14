@@ -395,6 +395,34 @@
             <span class="history-current-version" id="history-current-version">—</span>
           </div>
         </div>
+
+        <!-- v4.33: Storage diagnostic + photo compression. Admin-only;
+             surfaces a per-area byte breakdown of state and lets the user
+             recompress all photos in one pass. -->
+        <section class="panel storage-panel" data-admin-only>
+          <header class="panel-head">
+            <h3>💾 Database storage</h3>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button class="btn btn-ghost btn-sm" id="btn-storage-refresh">Refresh</button>
+              <button class="btn btn-secondary btn-sm" id="btn-storage-compress">Compress all photos</button>
+            </div>
+          </header>
+          <div class="panel-body">
+            <p class="muted small" style="margin-top:0;">
+              Approximate sizes as the browser sees them, computed from the in-memory state.
+              Actual on-disk usage in Supabase will be larger (TOAST bloat, indexes, realtime overhead) —
+              run <code>supabase/queries/storage-breakdown.sql</code> in the SQL Editor for the authoritative numbers.
+            </p>
+            <div id="storage-summary" class="storage-summary"></div>
+            <h4 class="storage-section-title">By area</h4>
+            <div id="storage-area-table" class="storage-table"></div>
+            <h4 class="storage-section-title">Vault sub-sections</h4>
+            <div id="storage-vault-table" class="storage-table"></div>
+            <h4 class="storage-section-title">Photo footprint</h4>
+            <div id="storage-photo-table" class="storage-table"></div>
+          </div>
+        </section>
+
         <div id="history-list" class="history-list"></div>
       </div>
     </main>

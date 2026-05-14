@@ -4000,3 +4000,67 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   }
   .vault-bank-details dd { font-size: 17px; }
 }
+
+/* ============================================================
+   v4.33 — Storage diagnostic panel (History page, admin only)
+   ============================================================ */
+.storage-panel { margin-bottom: 24px; }
+.storage-panel .panel-body { padding: 14px 18px 18px; }
+.storage-headline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  margin: 4px 0 14px;
+}
+.storage-headline > div {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px;
+  background: var(--paper-soft);
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius-sm);
+}
+.storage-headline strong {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+.storage-section-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-500);
+  margin: 18px 0 6px;
+}
+.storage-table table.storage-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.storage-table th,
+.storage-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ink-100);
+  vertical-align: middle;
+}
+.storage-table th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-500);
+  background: var(--paper-soft);
+}
+.storage-table td:nth-child(2),
+.storage-table td:nth-child(4) {
+  font-variant-numeric: tabular-nums;
+}
+.storage-table code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  background: var(--paper-soft);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
