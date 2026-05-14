@@ -1696,36 +1696,160 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 }
 
 /* ============================================================
-   v4.31 — Friend Tree
+   v4.35 — Friends + All tabs (Members page sub-tabs)
    ============================================================
-   Friends render in a responsive card grid (no pan/zoom canvas in v1
-   since friends don't yet have a relationship graph). Cards reuse the
-   `.node` visuals so they sit beside the Family Tree's cards stylistically,
-   but with absolute-positioning overridden for flow placement. */
-.friend-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 18px;
-  padding: 18px 0;
+   Friends used to live on their own top-level page as a card grid (v4.31).
+   v4.35 folded them into the Members page as a sub-tab and switched the
+   layout to list rows with expandable households (one row per friend's
+   primary contact, plus indented sub-rows for spouse/kids when expanded). */
+
+/* Sub-tabs row: mirrors .vault-tabs so the visual language stays consistent
+   across the Admin and Members pages. */
+.member-tabs {
+  display: inline-flex; gap: 4px;
+  background: var(--paper-veil);
+  border: 1px solid var(--ink-200);
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 16px;
 }
-.friend-card.node {
-  /* Override .node's absolute-positioning so it grids cleanly. */
-  position: relative;
-  transform: none;
-  left: 0; top: 0;
-  width: auto;
+.member-tab {
+  padding: 7px 16px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-700);
+  font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+  transition: background-color .15s var(--ease-out), color .15s var(--ease-out);
 }
-.friend-card.node:hover {
-  /* The base .node:hover lifts with translateY — keep the same feel. */
-  transform: translateY(-2px);
+.member-tab:hover { color: var(--ink-900); }
+.member-tab.is-active {
+  background: #fff;
+  color: var(--brand-900);
+  box-shadow: var(--shadow-soft);
 }
-.friend-card-actions {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--ink-100, rgba(19,24,38,.08));
-  display: flex; gap: 6px; flex-wrap: wrap;
+.member-panel { display: block; }
+.page-head-actions { display: inline-flex; gap: 10px; align-items: center; }
+
+/* Expand caret in the leftmost cell of household rows. */
+.friend-expand-cell { width: 22px; padding-right: 0 !important; }
+.friend-expand {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent;
+  color: var(--ink-500);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform .15s var(--ease-out), color .15s var(--ease-out), background-color .15s var(--ease-out);
 }
-.friend-card-actions .btn { padding: 4px 10px; font-size: 11.5px; }
+.friend-expand:hover { color: var(--ink-900); background: var(--paper-veil); }
+.friend-expand.is-open { transform: rotate(90deg); color: var(--brand-700, var(--brand-900)); }
+
+/* Primary household row: subtle hover for "click anywhere to edit". */
+.friend-row { cursor: pointer; }
+.friend-row:hover { background: var(--paper-veil); }
+
+/* Sub-rows (spouse / child): indented + subtle background so the household
+   grouping reads at a glance. The visual indent is done with padding +
+   ::before tick on the name cell, not a real <td> indent. */
+.friend-subrow { background: rgba(99, 102, 241, 0.025); cursor: pointer; }
+.friend-subrow:hover { background: rgba(99, 102, 241, 0.06); }
+.friend-subrow .row-name { padding-left: 26px; position: relative; }
+.friend-subrow .row-name::before {
+  content: "";
+  position: absolute;
+  left: 6px; top: 50%;
+  width: 12px; height: 1px;
+  background: var(--ink-200);
+}
+.friend-subrow-child .row-avatar { transform: scale(0.85); transform-origin: left center; }
+
+/* Tiny pill next to spouse/child names so the role is unmistakable. */
+.friend-role-pill {
+  display: inline-block;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: var(--paper-veil);
+  color: var(--ink-700);
+  border: 1px solid var(--ink-200);
+}
+.friend-role-pill.is-spouse { background: rgba(99, 102, 241, 0.10); color: #4c4fb8; border-color: rgba(99, 102, 241, 0.25); }
+.friend-role-pill.is-child  { background: rgba(244, 162, 97, 0.14);  color: #a05a16; border-color: rgba(244, 162, 97, 0.30); }
+
+/* "Type" pill in the All tab. */
+.type-pill {
+  display: inline-block;
+  font-size: 11px; font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--paper-veil);
+  color: var(--ink-700);
+  border: 1px solid var(--ink-200);
+}
+.type-pill.is-family { background: rgba(46, 134, 222, 0.10); color: #1d5a99; border-color: rgba(46, 134, 222, 0.25); }
+.type-pill.is-friend { background: rgba(74, 184, 116, 0.10); color: #2b6e44; border-color: rgba(74, 184, 116, 0.25); }
+.type-pill.is-spouse { background: rgba(99, 102, 241, 0.10); color: #4c4fb8; border-color: rgba(99, 102, 241, 0.25); }
+.type-pill.is-child  { background: rgba(244, 162, 97, 0.14); color: #a05a16; border-color: rgba(244, 162, 97, 0.30); }
+
+/* 529-plan chip — small inline link for the column cell. */
+.plan529-chip {
+  display: inline-block;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(46, 134, 222, 0.08);
+  color: #1d5a99;
+  border: 1px solid rgba(46, 134, 222, 0.20);
+  text-decoration: none;
+}
+.plan529-chip:hover { background: rgba(46, 134, 222, 0.16); }
+
+/* ===== Friend modal: household roster section ===== */
+.household-roster {
+  border: 1px solid var(--ink-200);
+  border-radius: 10px;
+  padding: 14px 16px 18px;
+  margin: 14px 0 4px;
+  background: var(--paper-veil);
+}
+.household-roster legend {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 8px;
+  color: var(--ink-800);
+}
+.roster-section { margin-top: 8px; }
+.roster-section + .roster-section {
+  margin-top: 14px;
+  border-top: 1px dashed var(--ink-200);
+  padding-top: 14px;
+}
+.roster-section-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.roster-section-title {
+  font-weight: 600;
+  color: var(--ink-800);
+  font-size: 13.5px;
+}
+.kids-list { display: flex; flex-direction: column; gap: 12px; }
+.kid-row {
+  border: 1px solid var(--ink-200);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.kid-row-actions {
+  display: flex; justify-content: flex-end;
+  margin-top: 6px;
+}
 .panel {
   background: #fff;
   border: 1px solid var(--ink-200);
