@@ -975,6 +975,30 @@ const Store = {
         .forEach(k => { if (f[k] === undefined) f[k] = ''; });
       if (!f.ageGroup) f.ageGroup = 'adult';
       if (!f.createdAt) f.createdAt = Date.now();
+      // v4.35: household roster. Each friend record represents a household.
+      // `spouse` is a single optional sub-record (adult). `kids` is an array
+      // of sub-records (children). Sub-records carry their own birthday +
+      // ethnicities + 529 link so the household view can surface them in
+      // expanded rows without joining to another table.
+      if (!Array.isArray(f.ethnicities)) f.ethnicities = [];
+      if (f.spouse !== null && (typeof f.spouse !== 'object' || Array.isArray(f.spouse))) f.spouse = null;
+      if (f.spouse) {
+        if (!f.spouse.id) f.spouse.id = uid('sps');
+        ['firstName','middleName','lastName','displayName','birthday','phone','email','plan529']
+          .forEach(k => { if (f.spouse[k] === undefined) f.spouse[k] = ''; });
+        if (!f.spouse.gender) f.spouse.gender = 'female';
+        if (!Array.isArray(f.spouse.ethnicities)) f.spouse.ethnicities = [];
+      } else if (f.spouse === undefined) {
+        f.spouse = null;
+      }
+      if (!Array.isArray(f.kids)) f.kids = [];
+      f.kids.forEach(k => {
+        if (!k.id) k.id = uid('kid');
+        ['firstName','middleName','lastName','displayName','birthday','plan529']
+          .forEach(key => { if (k[key] === undefined) k[key] = ''; });
+        if (!k.gender) k.gender = 'female';
+        if (!Array.isArray(k.ethnicities)) k.ethnicities = [];
+      });
     }
     // Heal asymmetric parent/child links: if A says "B is my parent", make
     // sure B says "A is my child". This fixes profiles where one parent
@@ -3176,9 +3200,13 @@ const Views = {
   current: 'tree',
   _renderTimer: null,
   show(name) {
+    // v4.35: legacy 'friend-tree' view target now routes into the Members
+    // page, Friends sub-tab. Keeps any persisted nav state working.
+    let pendingMemberTab = null;
+    if (name === 'friend-tree') { name = 'admin'; pendingMemberTab = 'friends'; }
     // Family role gets Calendar (read-only); everything else in the
     // admin-only set still bounces them to Tree.
-    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history' || name === 'friend-tree') && !Auth.isAdmin()) name = 'tree';
+    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
     if (name === 'calendar' && !Auth.canViewCalendar()) name = 'tree';
     if (name === 'vault' && !Auth.canAccessVault()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
@@ -3189,7 +3217,6 @@ const Views = {
     $('#view-dashboard').hidden    = name !== 'dashboard';
     $('#view-tree').hidden         = name !== 'tree';
     $('#view-myfamily').hidden     = name !== 'myfamily';
-    $('#view-friend-tree').hidden  = name !== 'friend-tree';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3207,7 +3234,10 @@ const Views = {
       this._renderTimer = null;
       if (this.current !== name) return;
       if (name === 'dashboard') DashboardView.render();
-      if (name === 'admin')     AdminView.render();
+      if (name === 'admin') {
+        if (pendingMemberTab) AdminView.activeTab = pendingMemberTab;
+        AdminView.render();
+      }
       if (name === 'vault')     VaultView.render();
       if (name === 'history')   HistoryView.render();
       if (name === 'events')    EventsView.render();
@@ -3215,7 +3245,6 @@ const Views = {
       if (name === 'gifts')     GiftsView.render();
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'tree')      Canvas.renderAll();
-      if (name === 'friend-tree') FriendTreeView.render();
     }, 0);
   },
 };
@@ -3824,6 +3853,7 @@ const AdminView = {
   nameSort: 'last',               // 'last' | 'first' — toggled by clicking the Name header
   accountIds: null,               // Set<member_id> known to have a Supabase login (populated async)
   lastSeenById: null,             // Map<member_id, Date> from auth.users.last_sign_in_at (populated async)
+  activeTab: 'family',            // v4.35: 'family' | 'friends' | 'all' — sub-tab inside Members page
   init() {
     on($('#btn-admin-add'), 'click', () => MemberModal.open());
     on($('#btn-admin-export'), 'click', () => this.exportCSV());
@@ -3845,6 +3875,59 @@ const AdminView = {
       this.nameSort = this.nameSort === 'last' ? 'first' : 'last';
       this.render();
     });
+    // v4.35: Members sub-tabs (Family / Friends / All).
+    $$('.member-tab').forEach(btn => {
+      on(btn, 'click', () => this.setActiveTab(btn.dataset.memberTab));
+    });
+    FriendsTabView.init();
+    AllTabView.init();
+  },
+  // Switch sub-tabs without rerunning the costly Members-table render unless
+  // we're returning to it. Each sub-panel renders lazily on its first show.
+  setActiveTab(tab) {
+    if (!tab || tab === this.activeTab) return;
+    if (tab !== 'family' && tab !== 'friends' && tab !== 'all') return;
+    this.activeTab = tab;
+    this.render();
+  },
+  // Context-aware export: each sub-tab has its own export shape.
+  exportCSV() {
+    if (this.activeTab === 'friends') return this.exportFriendsCSV();
+    if (this.activeTab === 'all')     return AllTabView.exportCSV();
+    return this.exportMembersCSV();
+  },
+  exportFriendsCSV() {
+    const list = FriendsTabView.filtered();
+    if (!list.length) { toast('Nothing to export.', 'warn'); return; }
+    // Flatten primary + spouse + kids into one row per person so the export
+    // matches what's on screen when households are expanded.
+    const flat = [];
+    list.forEach(f => {
+      flat.push({ p: f, type: 'Friend',  parent: null });
+      if (f.spouse) flat.push({ p: f.spouse, type: 'Spouse', parent: f });
+      (f.kids || []).forEach(k => flat.push({ p: k, type: 'Child', parent: f }));
+    });
+    const data = [
+      ['Name', 'Email', 'Phone', 'Address', 'City', 'State', 'Zip', 'Birthday', 'Group', '529 link', 'Type'],
+      ...flat.map(({ p, type, parent }) => {
+        const street = parent ? (parent.address || '') : (p.address || '');
+        const city   = parent ? (parent.city    || '') : (p.city    || '');
+        const state  = parent ? (parent.state   || '') : (p.state   || '');
+        const zip    = parent ? (parent.zip     || '') : (p.zip     || '');
+        const group  = parent ? (parent.group   || '') : (p.group   || '');
+        return [
+          fullName(p),
+          p.email || '',
+          p.phone || '',
+          street, city, state, zip,
+          p.birthday || '',
+          group,
+          p.plan529 || '',
+          type,
+        ];
+      }),
+    ];
+    downloadCSV(`friends-${new Date().toISOString().slice(0, 10)}.csv`, data);
   },
 
   // Pull every (member_id, user_id) mapping once per render and stash the set
@@ -3924,6 +4007,38 @@ const AdminView = {
     return sortMembers(list);
   },
   render() {
+    // v4.35: drive the three sub-panels (Family / Friends / All) and route
+    // the heavy render to the active one. Two inactive panels are kept in
+    // the DOM but hidden — their innerHTML is left untouched, so the cost
+    // of switching tabs is just two `hidden` flips, not a full re-render.
+    $$('.member-tab').forEach(btn => {
+      btn.classList.toggle('is-active', btn.dataset.memberTab === this.activeTab);
+    });
+    $('#member-panel-family').hidden  = this.activeTab !== 'family';
+    $('#member-panel-friends').hidden = this.activeTab !== 'friends';
+    $('#member-panel-all').hidden     = this.activeTab !== 'all';
+
+    // Per-tab page-head extras
+    const subline = $('#admin-page-sub');
+    if (subline) {
+      subline.textContent =
+        this.activeTab === 'friends' ? 'Friends, neighbors, and people in our world outside the family.'
+        : this.activeTab === 'all'    ? 'Everyone — family and friends — in one flat list, ready to export.'
+        : 'Manage members, groups, and accounts.';
+    }
+    const addFriendBtn = $('#btn-friend-add');
+    if (addFriendBtn) addFriendBtn.hidden = this.activeTab !== 'friends' || !Auth.isAdmin();
+
+    if (this.activeTab === 'friends') {
+      FriendsTabView.render();
+      return;
+    }
+    if (this.activeTab === 'all') {
+      AllTabView.render();
+      return;
+    }
+
+    // ----- Family sub-tab (existing behavior) -----
     const list = this.visibleMembers();
     $('#admin-filter-note').textContent = this.filterGroup
       ? `Showing ${list.length} member${list.length === 1 ? '' : 's'} in “${this.filterGroup}”`
@@ -4165,7 +4280,7 @@ const AdminView = {
     this.render();
     Canvas.renderAll();
   },
-  exportCSV() {
+  exportMembersCSV() {
     const list = this.visibleMembers();
     if (!list.length) { toast('Nothing to export.', 'warn'); return; }
     const data = [
@@ -8169,7 +8284,6 @@ function applyRemoteState(state) {
   if (Views?.current === 'calendar') CalendarView.render();
   if (Views?.current === 'gifts')    GiftsView.render();
   if (Views?.current === 'myfamily') MyFamilyView.render();
-  if (Views?.current === 'friend-tree' && typeof FriendTreeView !== 'undefined') FriendTreeView.render();
   refreshEventsNav();
   toast('Updated from another device.');
 }
@@ -8822,7 +8936,6 @@ async function init() {
   GiftsView.init();
   VaultView.init();
   RemindersModal.init();
-  FriendTreeView.init();
   FriendModal.init();
   StorageView.init();
   DashboardView.init();
@@ -9474,6 +9587,20 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.35',
+    date: '2026-05-14',
+    title: 'Friends folded into Members page + household roster',
+    changes: [
+      'Removed the top-level "Friend Tree" nav tab and its card-grid view. Friends now live on the Members page as a sub-tab so they sit beside the family list and share the same list-row UI.',
+      'New tab layout on the Members page: Family / Friends / All. Family is the existing members table unchanged. Friends is the new household list. All is a flat union of every person (family + each friend household member) designed for scanning + Excel export.',
+      'Friends are now households. Each friend record can carry an optional spouse and a list of kids. In the Friends tab, a friend with family shows a caret in the leftmost cell — click to expand and see indented sub-rows for spouse + each child. Solo friends look like flat rows. Each household member carries their own 529 plan link, ethnicity (in the profile, not as a column), and birthday.',
+      'Friend address mirrors how members do it now: split into Street + City + State + Zip with the same zip-lookup auto-fill for city/state. Existing single-line addresses are preserved in the Street field (no re-entry required). The Friends list shows just the City column to keep rows scannable; the All-tab and CSV export show the full postal address.',
+      'New friend profile fields: 529 plan link (URL, surfaced as a chip in the 529 column), ethnicity (multi-select via the same picker used for members). These were already on the data schema but had no UI; they\'re now editable.',
+      'Context-aware "Export to Excel" button on the Members page: exports family / friends / all rows depending on which tab is active. The All-tab export includes Name, Email, Phone, Address, Birthday, Group, and Type — ready for any mailing-list workflow.',
+      'CPU/memory neutral: no new Supabase tables, queries, or realtime channels. Sub-records (spouse + kids) live inside the existing `friends` JSONB blob, so saves still go through the same debounced upsert and the same hashStringFast skip path. The only payload growth is a few hundred bytes per household — well below the noise floor on the archive row.',
+    ],
+  },
   {
     version: '4.34',
     date: '2026-05-14',
@@ -11746,59 +11873,164 @@ const PageEmojis = {
   },
 };
 
-// -------------------- FRIEND TREE --------------------
-// A parallel "tree" of friends — same visual language as Family Tree cards
-// but a separate dataset (Store.state.friends). v4.31 ships the page in a
-// card-grid form (no relationship-driven auto-layout yet); the data model
-// is set up so we can grow toward full pan-zoom + relationships later
-// without breaking what's already saved.
-const FriendTreeView = {
+// -------------------- FRIENDS TAB (Members > Friends) --------------------
+// v4.35: Friends now live as a sub-tab on the Members page. Each friend
+// record represents a household — primary contact + optional spouse + kids.
+// Rendered as expandable list rows so the household roster is scannable
+// without opening a modal. CPU-friendly: all rendering is innerHTML batches
+// against in-memory Store.state, no extra Supabase queries or subscriptions
+// beyond what was already in place for the old card-grid Friend Tree.
+const FriendsTabView = {
+  searchQuery: '',
+  expanded: new Set(), // friend ids whose roster sub-rows are currently expanded
   init() {
     on($('#btn-friend-add'),       'click', () => FriendModal.openAdd());
     on($('#btn-friend-add-first'), 'click', () => FriendModal.openAdd());
+    const search = $('#friends-search');
+    if (search) {
+      on(search, 'input', () => {
+        this.searchQuery = (search.value || '').trim().toLowerCase();
+        this.render();
+      });
+    }
   },
   list() {
     return Object.values(Store.state.friends || {});
   },
+  filtered() {
+    const q = this.searchQuery;
+    let list = this.list();
+    if (q) {
+      list = list.filter(f => {
+        // Match against primary + spouse + kids — searching for a kid's name
+        // should still surface their household.
+        if (friendMatchesQuery(f, q)) return true;
+        if (f.spouse && friendMatchesQuery(f.spouse, q)) return true;
+        return (f.kids || []).some(k => friendMatchesQuery(k, q));
+      });
+    }
+    return sortFriends(list);
+  },
   render() {
-    const grid  = $('#friend-tree-grid');
-    const empty = $('#friend-tree-empty');
-    if (!grid || !empty) return;
-    const friends = sortFriends(this.list());
-    if (!friends.length) {
-      grid.innerHTML = '';
-      grid.hidden = true;
+    const tbody = $('#friends-rows');
+    const empty = $('#friends-empty');
+    if (!tbody || !empty) return;
+    const list = this.filtered();
+    const note = $('#friends-filter-note');
+    if (note) {
+      note.textContent = this.searchQuery
+        ? `Showing ${list.length} friend${list.length === 1 ? '' : 's'} matching "${this.searchQuery}"`
+        : `Showing all friends (${list.length})`;
+    }
+    if (!list.length && !this.searchQuery) {
+      tbody.innerHTML = '';
       empty.hidden = false;
       return;
     }
     empty.hidden = true;
-    grid.hidden  = false;
-    grid.innerHTML = friends.map(f => friendCardHTML(f)).join('');
-    // Click on the card body opens the editor. The two inline action
-    // buttons each have their own data-action so we can route without
-    // racing the card click.
-    grid.querySelectorAll('.friend-card').forEach(card => {
-      const fid = card.dataset.fid;
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('[data-friend-action]')) return;
-        FriendModal.openEdit(fid);
+    const rowsHTML = list.map(f => this.householdRowsHTML(f)).join('');
+    tbody.innerHTML = rowsHTML || `<tr><td colspan="9" class="muted" style="padding:24px; text-align:center;">No friends matching "${escape(this.searchQuery)}".</td></tr>`;
+
+    tbody.querySelectorAll('[data-friend-toggle]').forEach(btn => {
+      on(btn, 'click', (e) => {
+        e.stopPropagation();
+        const fid = btn.dataset.friendToggle;
+        if (this.expanded.has(fid)) this.expanded.delete(fid);
+        else this.expanded.add(fid);
+        this.render();
       });
-      card.querySelectorAll('[data-friend-action="edit"]').forEach(b =>
-        on(b, 'click', () => FriendModal.openEdit(fid)));
-      card.querySelectorAll('[data-friend-action="delete"]').forEach(b =>
-        on(b, 'click', () => FriendTreeView.delete(fid)));
     });
+    tbody.querySelectorAll('[data-friend-row]').forEach(tr => {
+      on(tr, 'click', (e) => {
+        if (e.target.closest('button')) return;
+        const fid = tr.dataset.friendRow;
+        if (fid) FriendModal.openEdit(fid);
+      });
+    });
+    tbody.querySelectorAll('[data-friend-action="edit"]').forEach(btn => {
+      on(btn, 'click', (e) => { e.stopPropagation(); FriendModal.openEdit(btn.dataset.fid); });
+    });
+    tbody.querySelectorAll('[data-friend-action="delete"]').forEach(btn => {
+      on(btn, 'click', (e) => { e.stopPropagation(); FriendsTabView.delete(btn.dataset.fid); });
+    });
+  },
+  householdRowsHTML(f) {
+    const hasRoster = !!f.spouse || (f.kids && f.kids.length > 0);
+    const isOpen = this.expanded.has(f.id);
+    const toggle = hasRoster
+      ? `<button type="button" class="friend-expand ${isOpen ? 'is-open' : ''}" data-friend-toggle="${f.id}" aria-label="${isOpen ? 'Collapse' : 'Expand'} household">
+           <svg viewBox="0 0 16 16" width="11" height="11"><path d="M5 4l5 4-5 4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+         </button>`
+      : '';
+    const primaryRow = `
+      <tr data-friend-row="${f.id}" class="friend-row ${hasRoster ? 'has-roster' : ''}">
+        <td class="friend-expand-cell">${toggle}</td>
+        <td>${nameCellHTML(f, 'primary')}</td>
+        <td>${emailCellHTML(f.email)}</td>
+        <td>${escape(f.city || '—')}</td>
+        <td>${escape(f.phone || '—')}</td>
+        <td>${f.birthday ? formatDate(f.birthday) : '—'}</td>
+        <td>${escape(f.group || '—')}</td>
+        <td>${plan529CellHTML(f.plan529)}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="btn btn-ghost btn-sm" type="button" data-friend-action="edit" data-fid="${f.id}">Edit</button>
+          <button class="btn btn-danger-ghost btn-sm" type="button" data-friend-action="delete" data-fid="${f.id}">Delete</button>
+        </td>
+      </tr>`;
+    if (!hasRoster || !isOpen) return primaryRow;
+
+    const subRows = [];
+    if (f.spouse) {
+      subRows.push(this.subRowHTML(f, f.spouse, 'spouse'));
+    }
+    (f.kids || []).forEach(k => {
+      subRows.push(this.subRowHTML(f, k, 'child'));
+    });
+    return primaryRow + subRows.join('');
+  },
+  subRowHTML(parent, person, role) {
+    // Sub-rows inherit address (city) and group from the primary friend.
+    // Spouse may carry own phone/email; children fall back to em-dash.
+    const city  = parent.city || '';
+    const group = parent.group || '';
+    const phone = role === 'spouse' ? (person.phone || '') : '';
+    const email = role === 'spouse' ? (person.email || '') : '';
+    return `
+      <tr class="friend-subrow friend-subrow-${role}" data-friend-row="${parent.id}">
+        <td></td>
+        <td>${nameCellHTML(person, role)}</td>
+        <td>${email ? emailCellHTML(email) : '<span class="muted">—</span>'}</td>
+        <td class="muted">${escape(city || '—')}</td>
+        <td>${phone ? escape(phone) : '<span class="muted">—</span>'}</td>
+        <td>${person.birthday ? formatDate(person.birthday) : '—'}</td>
+        <td class="muted">${escape(group || '—')}</td>
+        <td>${plan529CellHTML(person.plan529)}</td>
+        <td></td>
+      </tr>`;
   },
   delete(fid) {
     if (!Auth.isAdmin()) return;
     const f = Store.state.friends[fid]; if (!f) return;
-    if (!confirm(`Remove ${displayName(f)} from the Friend Tree?`)) return;
+    if (!confirm(`Remove ${displayName(f)} (and any spouse/kids on this household) from your Friends list?`)) return;
     delete Store.state.friends[fid];
     Store.save();
     toast('Friend removed.');
     this.render();
+    if (AdminView.activeTab === 'all') AllTabView.render();
   },
 };
+
+// Pure helper: does `person` match the lowercased search query against any
+// of their searchable fields? Used by both the Friends tab and the All tab.
+function friendMatchesQuery(person, q) {
+  if (!person || !q) return true;
+  const haystack = [
+    displayName(person), fullName(person),
+    person.email, person.phone,
+    person.firstName, person.lastName,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(q);
+}
 
 // Friends are sorted by last name then first, matching the Family Tree's
 // Members panel ordering. Empty last names fall to the end of the list.
@@ -11813,42 +12045,188 @@ function sortFriends(list) {
   });
 }
 
-// Render one friend card. Visually matches the Family Tree's `.node` cards
-// (photo on top, name + meta below) but uses the `.friend-card` flow-layout
-// wrapper so it grids cleanly. Each card carries inline Edit / Delete
-// action buttons; clicking elsewhere on the card opens the editor.
-function friendCardHTML(f) {
-  const photoBg = f.photo ? `style="background-image:url('${f.photo}'); background-size: cover;"` : '';
-  const inner   = f.photo ? '' : Silhouettes.for(f);
-  const ageStr  = ageLabel(f.birthday, f.dateOfDeath);
-  const grp     = f.group || '';
+// Small avatar + name cell shared across Friends and All tabs. `role` is one
+// of 'primary' | 'spouse' | 'child' | 'family' — controls a tiny inline
+// badge so admins can tell sub-rows apart at a glance.
+function nameCellHTML(person, role) {
+  const bg = person.photo ? `style="background-image:url('${person.photo}')"` : '';
+  const sub = (() => {
+    if (role === 'spouse') return '<span class="friend-role-pill is-spouse">Spouse</span>';
+    if (role === 'child')  return '<span class="friend-role-pill is-child">Child</span>';
+    return '';
+  })();
+  const intl = person.internationalName
+    ? `<div class="muted small">${escape(person.internationalName)}</div>`
+    : '';
   return `
-    <div class="friend-card node" data-fid="${f.id}">
-      <div class="node-photo is-${f.gender || 'female'}" ${photoBg}>${inner}</div>
-      <div class="node-body">
-        <div class="node-name">${escape(displayName(f))}</div>
-        ${f.internationalName ? `<div class="node-international-name" title="International name">${escape(f.internationalName)}</div>` : ''}
-        ${grp ? `<div class="node-group">${escape(grp)}</div>` : ''}
-        ${ageStr ? `<div class="node-meta">
-          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          ${ageStr}
-        </div>` : ''}
-        <div class="friend-card-actions">
-          <button class="btn btn-ghost btn-sm" type="button" data-friend-action="edit">Edit</button>
-          <button class="btn btn-danger-ghost btn-sm" type="button" data-friend-action="delete">Delete</button>
-        </div>
+    <div class="row-name">
+      <div class="row-avatar is-${person.gender || 'female'}" ${bg}></div>
+      <div>
+        <div style="font-weight:600">${escape(displayName(person))} ${sub}</div>
+        ${intl}
       </div>
     </div>`;
 }
 
+function emailCellHTML(email) {
+  if (!email) return '<span class="muted">—</span>';
+  return `<span class="admin-email-cell"><code>${escape(email)}</code><button class="admin-email-copy" type="button" data-action="copy-email" data-email="${escape(email)}" title="Copy email"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
+}
+
+function plan529CellHTML(url) {
+  if (!url) return '<span class="muted">—</span>';
+  return `<a href="${escape(url)}" target="_blank" rel="noopener" class="plan529-chip" title="${escape(url)}" onclick="event.stopPropagation()">🎓 Open</a>`;
+}
+
+// -------------------- ALL TAB (Members > All) --------------------
+// Flat union of every person: family members + friend household primaries +
+// friend spouses + friend kids. One row per *person*, designed for scanning
+// and Excel export. Type pill disambiguates rows.
+const AllTabView = {
+  searchQuery: '',
+  init() {
+    const search = $('#all-search');
+    if (search) {
+      on(search, 'input', () => {
+        this.searchQuery = (search.value || '').trim().toLowerCase();
+        this.render();
+      });
+    }
+  },
+  // Build a flat list of { person, type, parent, postalAddress, group }
+  // tuples. Members are rendered as-is; each friend household contributes
+  // 1 (primary) + (0 or 1)(spouse) + N (kids) entries. parent is non-null
+  // for spouse/child rows so we can inherit address/group from the primary.
+  rows() {
+    const out = [];
+    // Members
+    for (const m of Store.membersList()) {
+      out.push({
+        person: m,
+        type: 'family',
+        parent: null,
+        postalAddress: formatPostalAddress(m).replace(/\n/g, ', '),
+        group: m.group || '',
+        phone: m.phone || '',
+        email: m.email || '',
+        sortKey: nameSortKey(m),
+      });
+    }
+    // Friends (household-aware)
+    for (const f of Object.values(Store.state.friends || {})) {
+      const postal = formatPostalAddress(f).replace(/\n/g, ', ');
+      out.push({
+        person: f, type: 'friend', parent: null,
+        postalAddress: postal, group: f.group || '',
+        phone: f.phone || '', email: f.email || '',
+        sortKey: nameSortKey(f),
+      });
+      if (f.spouse) {
+        out.push({
+          person: f.spouse, type: 'spouse', parent: f,
+          postalAddress: postal, group: f.group || '',
+          phone: f.spouse.phone || '', email: f.spouse.email || '',
+          sortKey: nameSortKey(f) + ' a',
+        });
+      }
+      (f.kids || []).forEach((k, i) => {
+        out.push({
+          person: k, type: 'child', parent: f,
+          postalAddress: postal, group: f.group || '',
+          phone: '', email: '',
+          sortKey: nameSortKey(f) + ' b' + String(i).padStart(3, '0'),
+        });
+      });
+    }
+    return out.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  },
+  filtered() {
+    const q = this.searchQuery;
+    let rows = this.rows();
+    if (q) {
+      rows = rows.filter(r => {
+        if (friendMatchesQuery(r.person, q)) return true;
+        // Phone/email might come from a parent (for spouse) — but we already
+        // promote spouse phone/email onto the row, so this is sufficient.
+        return (r.phone || '').toLowerCase().includes(q)
+            || (r.email || '').toLowerCase().includes(q);
+      });
+    }
+    return rows;
+  },
+  render() {
+    const tbody = $('#all-rows');
+    if (!tbody) return;
+    const rows = this.filtered();
+    const note = $('#all-filter-note');
+    if (note) {
+      note.textContent = this.searchQuery
+        ? `Showing ${rows.length} match${rows.length === 1 ? '' : 'es'} for "${this.searchQuery}"`
+        : `Showing everyone in the archive (${rows.length})`;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const pillClass = `type-pill is-${r.type}`;
+      const pillLabel = r.type === 'family' ? 'Family' : r.type === 'friend' ? 'Friend' : r.type === 'spouse' ? 'Spouse' : 'Child';
+      const role = r.type === 'spouse' ? 'spouse' : r.type === 'child' ? 'child' : 'primary';
+      return `
+        <tr>
+          <td>${nameCellHTML(r.person, role)}</td>
+          <td>${emailCellHTML(r.email)}</td>
+          <td>${r.phone ? escape(r.phone) : '<span class="muted">—</span>'}</td>
+          <td>${r.postalAddress ? escape(r.postalAddress) : '<span class="muted">—</span>'}</td>
+          <td>${r.person.birthday ? formatDate(r.person.birthday) : '—'}</td>
+          <td>${escape(r.group || '—')}</td>
+          <td><span class="${pillClass}">${pillLabel}</span></td>
+        </tr>`;
+    }).join('') || `<tr><td colspan="7" class="muted" style="padding:24px; text-align:center;">No people match "${escape(this.searchQuery)}".</td></tr>`;
+  },
+  // Export the visible (filtered) rows. Columns chosen to match the on-screen
+  // layout so what you see is what you export.
+  exportCSV() {
+    const rows = this.filtered();
+    if (!rows.length) { toast('Nothing to export.', 'warn'); return; }
+    const data = [
+      ['Name', 'Email', 'Phone', 'Address', 'Birthday', 'Group', 'Type'],
+      ...rows.map(r => {
+        const pillLabel = r.type === 'family' ? 'Family' : r.type === 'friend' ? 'Friend' : r.type === 'spouse' ? 'Spouse' : 'Child';
+        return [
+          fullName(r.person),
+          r.email || '',
+          r.phone || '',
+          r.postalAddress || '',
+          r.person.birthday || '',
+          r.group || '',
+          pillLabel,
+        ];
+      }),
+    ];
+    downloadCSV(`archive-all-${new Date().toISOString().slice(0, 10)}.csv`, data);
+  },
+};
+
+// Used by AllTabView to keep "spouse follows primary, then kids" ordering
+// across the global sort. Same shape as sortFriends() but exposed as a
+// string so spouse/kid rows can extend it.
+function nameSortKey(p) {
+  const last  = (p.lastName  || '~').toLowerCase();
+  const first = (p.firstName || '').toLowerCase();
+  return `${last} ${first}`;
+}
+
 // -------------------- FRIEND MODAL --------------------
-// Add / edit a single friend. Lightweight relative to the family
-// MemberModal — no relationship picker, no Supabase login mirror. Pure
-// CRUD against Store.state.friends. Photo upload reuses the existing
-// downscaleImageFile pipeline for inline JPEG storage.
+// Add / edit a single friend household. The friend record is the *primary
+// contact*; spouse + kids are stored as sub-objects on the same record so
+// the household model stays single-write and CPU-cheap (no relationship
+// graph traversal, no separate tables). Photo upload reuses the existing
+// downscaleImageFile pipeline for inline JPEG storage on the primary only.
 const FriendModal = {
   editingId: null,
   tempPhoto: '',
+  // Working copies of the roster so the user can add/remove sub-records
+  // before saving without mutating Store.state. Persisted to the friend on
+  // save (or discarded on close).
+  spouseDraft: null,   // null = "no spouse on record"
+  kidsDraft:   [],     // array of kid objects
   init() {
     const el = $('#friend-modal'); if (!el) return;
     on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
@@ -11856,16 +12234,59 @@ const FriendModal = {
     on($('#friend-delete'), 'click', () => this.deleteCurrent());
     on($('#friend-photo-input'), 'change', (e) => this.onPhotoUpload(e));
     on($('#friend-photo-clear'), 'click', () => this.clearPhoto());
+    on($('#friend-spouse-add'),    'click', () => { this.spouseDraft = this.emptySpouse(); this.syncRoster(); });
+    on($('#friend-spouse-remove'), 'click', () => {
+      if (!confirm('Remove the spouse from this household? Their record will be deleted on save.')) return;
+      this.spouseDraft = null; this.syncRoster();
+    });
+    on($('#friend-kid-add'), 'click', () => {
+      this.captureKidsFromDOM();
+      this.kidsDraft.push(this.emptyKid());
+      this.syncRoster();
+    });
+    // Mount the primary ethnicity picker once on init. The spouse picker is
+    // mounted on demand when spouseDraft becomes non-null (in syncRoster).
+    const ePicker = $('[data-picker="friend-ethnicity"]');
+    if (ePicker) EthnicityPicker.mount(ePicker);
+    // Zip → city/state autofill, mirrors the member drawer wiring.
+    on($('#friend-zip'), 'blur', async () => {
+      const zip = $('#friend-zip').value.trim();
+      const status = $('#friend-zip-status');
+      if (!zip) { status.hidden = true; return; }
+      if (!/^\d{5}$/.test(zip)) { status.hidden = true; return; }
+      status.hidden = false; status.textContent = 'Looking up zip…';
+      const r = await lookupZipUS(zip);
+      if (r) {
+        $('#friend-city').value  = r.city;
+        $('#friend-state').value = r.state;
+        status.textContent = `Auto-filled from ${zip} — edit if needed.`;
+      } else {
+        status.textContent = `Couldn't find ${zip}. Enter city and state manually.`;
+      }
+    });
+  },
+  emptySpouse() {
+    return { id: uid('sps'), firstName: '', middleName: '', lastName: '', displayName: '',
+             birthday: '', phone: '', email: '', gender: 'female', ethnicities: [], plan529: '' };
+  },
+  emptyKid() {
+    return { id: uid('kid'), firstName: '', middleName: '', lastName: '', displayName: '',
+             birthday: '', gender: 'female', ethnicities: [], plan529: '' };
   },
   openAdd() {
     if (!Auth.isAdmin()) return;
     this.editingId = null;
     this.tempPhoto = '';
+    this.spouseDraft = null;
+    this.kidsDraft = [];
     $('#friend-modal-title').textContent = 'Add a friend';
     $('#friend-delete').hidden = true;
     $('#friend-submit').textContent = 'Save friend';
     $('#friend-form').reset();
+    EthnicityPicker.write($('[data-picker="friend-ethnicity"]'), []);
+    $('#friend-zip-status').hidden = true;
     this.renderPhoto({ photo: '', gender: 'female' });
+    this.syncRoster();
     this.open();
     setTimeout(() => $('#friend-form').firstName.focus(), 50);
   },
@@ -11874,6 +12295,9 @@ const FriendModal = {
     const f = Store.state.friends[fid]; if (!f) return;
     this.editingId = fid;
     this.tempPhoto = '';
+    // Deep-clone the spouse/kids so cancellation truly cancels.
+    this.spouseDraft = f.spouse ? JSON.parse(JSON.stringify(f.spouse)) : null;
+    this.kidsDraft   = (f.kids || []).map(k => JSON.parse(JSON.stringify(k)));
     $('#friend-modal-title').textContent = `Edit ${displayName(f)}`;
     $('#friend-delete').hidden = false;
     $('#friend-submit').textContent = 'Save changes';
@@ -11887,11 +12311,127 @@ const FriendModal = {
     fm.phone.value             = formatPhoneUS(f.phone || '');
     fm.email.value             = f.email || '';
     fm.group.value             = f.group || '';
+    fm.plan529.value           = f.plan529 || '';
     fm.address.value           = f.address || '';
+    fm.zip.value               = f.zip || '';
+    fm.city.value              = f.city || '';
+    fm.state.value             = f.state || '';
     fm.notes.value             = f.notes || '';
     fm.gender.value            = f.gender || 'female';
+    EthnicityPicker.write($('[data-picker="friend-ethnicity"]'), f.ethnicities || []);
+    $('#friend-zip-status').hidden = true;
     this.renderPhoto(f);
+    this.syncRoster();
     this.open();
+  },
+  // Render the spouse + kids sections from the current draft state. Called
+  // after add/remove buttons fire so the DOM matches in-memory drafts.
+  syncRoster() {
+    // Spouse
+    const sFields = $('#friend-spouse-fields');
+    const sAdd    = $('#friend-spouse-add');
+    const sRem    = $('#friend-spouse-remove');
+    if (this.spouseDraft) {
+      sFields.hidden = false;
+      sAdd.hidden = true;
+      sRem.hidden = false;
+      const fm = $('#friend-form');
+      fm.spouseFirstName.value  = this.spouseDraft.firstName || '';
+      fm.spouseMiddleName.value = this.spouseDraft.middleName || '';
+      fm.spouseLastName.value   = this.spouseDraft.lastName || '';
+      fm.spouseBirthday.value   = this.spouseDraft.birthday || '';
+      fm.spouseGender.value     = this.spouseDraft.gender || 'female';
+      fm.spousePhone.value      = formatPhoneUS(this.spouseDraft.phone || '');
+      fm.spouseEmail.value      = this.spouseDraft.email || '';
+      fm.spousePlan529.value    = this.spouseDraft.plan529 || '';
+      const sePicker = $('[data-picker="friend-spouse-ethnicity"]');
+      if (sePicker) {
+        EthnicityPicker.mount(sePicker);
+        EthnicityPicker.write(sePicker, this.spouseDraft.ethnicities || []);
+      }
+    } else {
+      sFields.hidden = true;
+      sAdd.hidden = false;
+      sRem.hidden = true;
+    }
+
+    // Kids
+    const kidsList = $('#friend-kids-list');
+    if (!kidsList) return;
+    kidsList.innerHTML = this.kidsDraft.map((k, i) => `
+      <div class="kid-row" data-kid-index="${i}">
+        <div class="grid-3">
+          <label class="field"><span>First name</span><input data-kid-field="firstName" value="${escape(k.firstName || '')}" /></label>
+          <label class="field"><span>Last name</span><input data-kid-field="lastName" value="${escape(k.lastName || '')}" /></label>
+          <label class="field"><span>Display name</span><input data-kid-field="displayName" value="${escape(k.displayName || '')}" placeholder="(optional)" /></label>
+        </div>
+        <div class="grid-2">
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input data-kid-field="birthday" type="date" value="${escape(k.birthday || '')}" /></label>
+          <label class="field"><span>Gender</span>
+            <select data-kid-field="gender">
+              <option value="female" ${k.gender === 'female' ? 'selected' : ''}>Female</option>
+              <option value="male"   ${k.gender === 'male'   ? 'selected' : ''}>Male</option>
+            </select>
+          </label>
+        </div>
+        <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input data-kid-field="plan529" type="url" value="${escape(k.plan529 || '')}" placeholder="https://…" /></label>
+        <label class="field">
+          <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+          <div class="ethnicity-picker" data-kid-ethnicity="${i}"></div>
+        </label>
+        <div class="kid-row-actions">
+          <button type="button" class="btn btn-danger-ghost btn-sm" data-kid-remove="${i}">Remove child</button>
+        </div>
+      </div>
+    `).join('');
+    // Mount each kid's ethnicity picker and seed its value.
+    this.kidsDraft.forEach((k, i) => {
+      const picker = kidsList.querySelector(`[data-kid-ethnicity="${i}"]`);
+      if (picker) {
+        EthnicityPicker.mount(picker);
+        EthnicityPicker.write(picker, k.ethnicities || []);
+      }
+    });
+    // Remove-child wiring.
+    kidsList.querySelectorAll('[data-kid-remove]').forEach(btn => {
+      on(btn, 'click', () => {
+        this.captureKidsFromDOM();
+        const idx = Number(btn.dataset.kidRemove);
+        if (!confirm(`Remove ${this.kidsDraft[idx]?.firstName || 'this child'}? The record will be deleted on save.`)) return;
+        this.kidsDraft.splice(idx, 1);
+        this.syncRoster();
+      });
+    });
+  },
+  // Copy whatever's in the kid-row inputs back into kidsDraft so the next
+  // syncRoster() rebuild doesn't blow away in-flight edits.
+  captureKidsFromDOM() {
+    const list = $('#friend-kids-list');
+    if (!list) return;
+    list.querySelectorAll('.kid-row').forEach(row => {
+      const i = Number(row.dataset.kidIndex);
+      if (!this.kidsDraft[i]) return;
+      row.querySelectorAll('[data-kid-field]').forEach(input => {
+        this.kidsDraft[i][input.dataset.kidField] = input.value;
+      });
+      const picker = row.querySelector('.ethnicity-picker');
+      if (picker) this.kidsDraft[i].ethnicities = EthnicityPicker.read(picker);
+    });
+  },
+  // Copy spouse inputs back into spouseDraft for the same reason.
+  captureSpouseFromDOM() {
+    if (!this.spouseDraft) return;
+    const fm = $('#friend-form');
+    this.spouseDraft.firstName  = fm.spouseFirstName.value.trim();
+    this.spouseDraft.middleName = fm.spouseMiddleName.value.trim();
+    this.spouseDraft.lastName   = fm.spouseLastName.value.trim();
+    this.spouseDraft.birthday   = fm.spouseBirthday.value;
+    this.spouseDraft.gender     = fm.spouseGender.value || 'female';
+    this.spouseDraft.phone      = formatPhoneUS(fm.spousePhone.value || '');
+    this.spouseDraft.email      = fm.spouseEmail.value.trim();
+    this.spouseDraft.plan529    = fm.spousePlan529.value.trim();
+    const picker = $('[data-picker="friend-spouse-ethnicity"]');
+    if (picker) this.spouseDraft.ethnicities = EthnicityPicker.read(picker);
   },
   open() {
     const el = $('#friend-modal'); if (!el) return;
@@ -11905,6 +12445,8 @@ const FriendModal = {
     el.classList.remove('is-open');
     this.editingId = null;
     this.tempPhoto = '';
+    this.spouseDraft = null;
+    this.kidsDraft = [];
   },
   renderPhoto(f) {
     const preview = $('#friend-photo-preview');
@@ -11926,14 +12468,8 @@ const FriendModal = {
   },
   clearPhoto() {
     this.tempPhoto = '';
-    // Force-render with no photo by passing an empty f.
     $('#friend-photo-preview').style.backgroundImage = '';
     $('#friend-photo-preview').innerHTML = Silhouettes.for({ gender: $('#friend-form').gender.value });
-    // If editing an existing friend with a saved photo, mark it for removal
-    // on next save by stashing a sentinel. We use empty string as the
-    // sentinel ("save with no photo") — actually, since the save path
-    // reads this.tempPhoto and falls back to current f.photo, we need
-    // an explicit "clear" flag.
     this._clearPhoto = true;
   },
   save() {
@@ -11946,8 +12482,13 @@ const FriendModal = {
       $('#friend-error').hidden = false;
       return;
     }
+    // Capture any in-flight roster edits before reading them.
+    this.captureSpouseFromDOM();
+    this.captureKidsFromDOM();
+
     const id = this.editingId || uid('frd');
     const existing = this.editingId ? (Store.state.friends[id] || {}) : {};
+    const ethPicker = $('[data-picker="friend-ethnicity"]');
     const friend = {
       ...existing,
       id,
@@ -11960,13 +12501,25 @@ const FriendModal = {
       phone:             formatPhoneUS((fd.get('phone') || '').toString()),
       email:             (fd.get('email')             || '').toString().trim(),
       group:             (fd.get('group')             || '').toString().trim(),
+      plan529:           (fd.get('plan529')           || '').toString().trim(),
       address:           (fd.get('address')           || '').toString().trim(),
+      city:              (fd.get('city')              || '').toString().trim(),
+      state:             (fd.get('state')             || '').toString().toUpperCase().slice(0, 3),
+      zip:               (fd.get('zip')               || '').toString().trim().slice(0, 10),
       notes:             (fd.get('notes')             || '').toString(),
       gender:            (fd.get('gender')            || 'female').toString(),
       ageGroup:          existing.ageGroup || ageGroupForBirthday((fd.get('birthday') || '').toString()) || 'adult',
       photo:             this._clearPhoto ? '' : (this.tempPhoto || existing.photo || ''),
       dateOfDeath:       existing.dateOfDeath || '',
-      plan529:           existing.plan529 || '',
+      ethnicities:       ethPicker ? EthnicityPicker.read(ethPicker) : (existing.ethnicities || []),
+      // Household roster — derived from drafts. Empty kids (no firstName) are
+      // dropped so accidentally added rows don't clutter the list.
+      spouse:            this.spouseDraft && (this.spouseDraft.firstName || '').trim()
+                           ? { ...this.spouseDraft, firstName: this.spouseDraft.firstName.trim() }
+                           : null,
+      kids:              (this.kidsDraft || [])
+                           .filter(k => (k.firstName || '').trim())
+                           .map(k => ({ ...k, firstName: k.firstName.trim() })),
       createdAt:         existing.createdAt || Date.now(),
     };
     Store.state.friends[id] = friend;
@@ -11974,13 +12527,14 @@ const FriendModal = {
     toast(this.editingId ? 'Friend saved.' : 'Friend added.');
     this._clearPhoto = false;
     this.close();
-    FriendTreeView.render();
+    FriendsTabView.render();
+    if (AdminView.activeTab === 'all') AllTabView.render();
   },
   deleteCurrent() {
     if (!this.editingId) return;
     const fid = this.editingId;
     this.close();
-    FriendTreeView.delete(fid);
+    FriendsTabView.delete(fid);
   },
 };
 

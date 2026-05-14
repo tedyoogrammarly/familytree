@@ -85,7 +85,6 @@
           <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
-          <button class="nav-tab" data-view="friend-tree" data-admin-only role="tab">Friend Tree</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -427,73 +426,160 @@
       </div>
     </main>
 
-    <!-- ===== ADMIN VIEW ===== -->
+    <!-- ===== ADMIN VIEW (Members) =====
+         v4.35: now three-tabbed — Family, Friends, All. Family tab keeps the
+         existing groups sidebar + members table/cards unchanged. Friends tab
+         shows households as expandable list rows. All tab is a flat,
+         export-friendly union of every person in either dataset. -->
     <main id="view-admin" class="view" hidden>
       <div class="container">
         <div class="page-head">
           <div>
             <h2><span class="page-emoji" data-page-emoji="admin"></span>Members</h2>
-            <p>Manage members, groups, and accounts.</p>
+            <p id="admin-page-sub">Manage members, groups, and accounts.</p>
           </div>
-          <button class="btn btn-secondary" id="btn-admin-export">Export to Excel</button>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-friend-add" data-admin-only hidden>+ Add Friend</button>
+            <button class="btn btn-secondary" id="btn-admin-export">Export to Excel</button>
+          </div>
         </div>
 
-        <div class="admin-grid">
-          <section class="panel">
-            <header class="panel-head">
-              <h3>Groups</h3>
-              <form id="group-form" class="inline-form">
-                <input class="input" id="group-input" placeholder="New group name" />
-                <button class="btn btn-primary btn-sm" type="submit">Add</button>
-              </form>
-            </header>
-            <ul id="group-list" class="chip-list"></ul>
-            <p class="muted small" style="padding: 0 18px 14px; margin: 0;">Click a group to filter the members table or manage its membership.</p>
-          </section>
+        <div class="member-tabs" role="tablist">
+          <button class="member-tab is-active" data-member-tab="family"  role="tab">Family</button>
+          <button class="member-tab"           data-member-tab="friends" role="tab">Friends</button>
+          <button class="member-tab"           data-member-tab="all"     role="tab">All</button>
+        </div>
 
-          <section class="panel" id="group-membership" hidden></section>
+        <!-- ===== FAMILY SUB-TAB (default) ===== -->
+        <section id="member-panel-family" class="member-panel">
+          <div class="admin-grid">
+            <section class="panel">
+              <header class="panel-head">
+                <h3>Groups</h3>
+                <form id="group-form" class="inline-form">
+                  <input class="input" id="group-input" placeholder="New group name" />
+                  <button class="btn btn-primary btn-sm" type="submit">Add</button>
+                </form>
+              </header>
+              <ul id="group-list" class="chip-list"></ul>
+              <p class="muted small" style="padding: 0 18px 14px; margin: 0;">Click a group to filter the members table or manage its membership.</p>
+            </section>
 
+            <section class="panel" id="group-membership" hidden></section>
+
+            <section class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Members &amp; accounts</h3>
+                  <p class="muted small" id="admin-filter-note" style="margin:2px 0 0;">Showing all members</p>
+                </div>
+                <div class="panel-head-tools">
+                  <div class="seg" role="tablist" aria-label="View mode">
+                    <button class="seg-btn is-active" id="btn-admin-view-table" data-mode="table" type="button" title="Table view">
+                      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                      Table
+                    </button>
+                    <button class="seg-btn" id="btn-admin-view-cards" data-mode="cards" type="button" title="Card view">
+                      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
+                      Cards
+                    </button>
+                  </div>
+                  <button class="btn btn-primary btn-sm" id="btn-admin-add">+ Add member</button>
+                </div>
+              </header>
+              <div id="admin-content">
+                <div class="table-wrap" id="admin-table-wrap">
+                  <table class="table" id="admin-table">
+                    <thead>
+                      <tr>
+                        <th><button type="button" id="admin-name-sort" class="th-sort" title="Toggle sort: last name ↔ first name"><span id="admin-name-sort-label">Name (by last)</span> <span class="th-sort-arrow">⇅</span></button></th>
+                        <th>Email</th>
+                        <th>Group</th>
+                        <th>Birthday</th>
+                        <th title="Whether this member has a Supabase login linked">Login</th>
+                        <th title="Date this member last accessed the site">Last activity</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="admin-rows"></tbody>
+                  </table>
+                </div>
+                <div class="admin-cards" id="admin-cards" hidden></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ===== FRIENDS SUB-TAB ===== -->
+        <section id="member-panel-friends" class="member-panel" hidden>
           <section class="panel">
             <header class="panel-head">
               <div>
-                <h3>Members &amp; accounts</h3>
-                <p class="muted small" id="admin-filter-note" style="margin:2px 0 0;">Showing all members</p>
+                <h3>Friends</h3>
+                <p class="muted small" id="friends-filter-note" style="margin:2px 0 0;">Showing all friends</p>
               </div>
               <div class="panel-head-tools">
-                <div class="seg" role="tablist" aria-label="View mode">
-                  <button class="seg-btn is-active" id="btn-admin-view-table" data-mode="table" type="button" title="Table view">
-                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-                    Table
-                  </button>
-                  <button class="seg-btn" id="btn-admin-view-cards" data-mode="cards" type="button" title="Card view">
-                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
-                    Cards
-                  </button>
-                </div>
-                <button class="btn btn-primary btn-sm" id="btn-admin-add">+ Add member</button>
+                <input id="friends-search" class="input" type="search" placeholder="Search name / email / phone…" style="min-width: 220px;" />
               </div>
             </header>
-            <div id="admin-content">
-              <div class="table-wrap" id="admin-table-wrap">
-                <table class="table" id="admin-table">
-                  <thead>
-                    <tr>
-                      <th><button type="button" id="admin-name-sort" class="th-sort" title="Toggle sort: last name ↔ first name"><span id="admin-name-sort-label">Name (by last)</span> <span class="th-sort-arrow">⇅</span></button></th>
-                      <th>Email</th>
-                      <th>Group</th>
-                      <th>Birthday</th>
-                      <th title="Whether this member has a Supabase login linked">Login</th>
-                      <th title="Date this member last accessed the site">Last activity</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody id="admin-rows"></tbody>
-                </table>
+            <div class="table-wrap">
+              <table class="table" id="friends-table">
+                <thead>
+                  <tr>
+                    <th style="width:22px;"></th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>City</th>
+                    <th>Phone</th>
+                    <th>Birthday</th>
+                    <th>Group</th>
+                    <th title="529 college savings plan link">529</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="friends-rows"></tbody>
+              </table>
+            </div>
+            <div id="friends-empty" class="tree-empty" hidden>
+              <div class="tree-empty-card">
+                <h3>No friends yet</h3>
+                <p>Start by adding your first friend. They'll appear here as a row you can expand.</p>
+                <button class="btn btn-primary" id="btn-friend-add-first" data-admin-only>+ Add your first friend</button>
               </div>
-              <div class="admin-cards" id="admin-cards" hidden></div>
             </div>
           </section>
-        </div>
+        </section>
+
+        <!-- ===== ALL SUB-TAB (flat union, export-friendly) ===== -->
+        <section id="member-panel-all" class="member-panel" hidden>
+          <section class="panel">
+            <header class="panel-head">
+              <div>
+                <h3>All people</h3>
+                <p class="muted small" id="all-filter-note" style="margin:2px 0 0;">Showing everyone in the archive</p>
+              </div>
+              <div class="panel-head-tools">
+                <input id="all-search" class="input" type="search" placeholder="Search name / email / phone…" style="min-width: 220px;" />
+              </div>
+            </header>
+            <div class="table-wrap">
+              <table class="table" id="all-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Address</th>
+                    <th>Birthday</th>
+                    <th>Group</th>
+                    <th>Type</th>
+                  </tr>
+                </thead>
+                <tbody id="all-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
       </div>
     </main>
 
@@ -528,29 +614,11 @@
       <img class="vault-lightbox-img" alt="" />
     </div>
 
-    <!-- ===== FRIEND TREE VIEW (admin only — for now mirrors a card-grid
-         shape of Family Tree; will grow toward full tree/canvas parity
-         as the dataset grows). ===== -->
-    <main id="view-friend-tree" class="view" hidden>
-      <div class="container">
-        <div class="page-head">
-          <div>
-            <h2><span class="page-emoji" data-page-emoji="friend-tree"></span>Friend Tree</h2>
-            <p class="muted">Friends, neighbors, and people in our world outside the family.</p>
-          </div>
-          <button class="btn btn-primary" id="btn-friend-add" data-admin-only>+ Add Friend</button>
-        </div>
-        <div id="friend-tree-empty" class="tree-empty" hidden>
-          <div class="tree-empty-card">
-            <h3>No friends yet</h3>
-            <p>Start by adding your first friend. They'll appear here as a card you can click into.</p>
-            <button class="btn btn-primary" id="btn-friend-add-first" data-admin-only>+ Add your first friend</button>
-          </div>
-        </div>
-        <div id="friend-tree-grid" class="friend-grid"></div>
-      </div>
-    </main>
-
+    <!-- ===== FRIEND MODAL (add / edit a friend / household) =====
+         v4.35: Friend record now represents a household. Modal includes:
+         - primary contact fields (name, contact, address split, group, 529, ethnicity, gender, photo)
+         - optional spouse subsection (name, birthday, phone, email, gender, ethnicity, 529)
+         - optional kids list (name, birthday, gender, ethnicity, 529 per row) -->
     <!-- ===== FRIEND MODAL (add / edit a friend) ===== -->
     <div id="friend-modal" class="modal" aria-hidden="true">
       <div class="modal-backdrop" data-close></div>
@@ -577,7 +645,18 @@
             <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="email" type="email" /></label>
             <label class="field"><span><span class="kv-emoji" aria-hidden="true">👥</span>Group</span><input name="group" placeholder="e.g. College friends, Work, Neighbors" /></label>
           </div>
-          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🏠</span>Address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input name="plan529" type="url" placeholder="https://…" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🏠</span>Street address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
+          <div class="grid-zip">
+            <label class="field"><span>Zip / ZIP</span><input name="zip" id="friend-zip" inputmode="numeric" maxlength="10" placeholder="90210" autocomplete="postal-code" /></label>
+            <label class="field"><span>City</span><input name="city" id="friend-city" placeholder="Beverly Hills" autocomplete="address-level2" /></label>
+            <label class="field"><span>State</span><input name="state" id="friend-state" maxlength="3" placeholder="CA" autocomplete="address-level1" /></label>
+          </div>
+          <p id="friend-zip-status" class="muted small" style="margin-top:-6px;" hidden></p>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+            <div class="ethnicity-picker" data-picker="friend-ethnicity"></div>
+          </label>
           <label class="field"><span><span class="kv-emoji" aria-hidden="true">📝</span>Notes</span><textarea name="notes" rows="3" placeholder="How you met, kids' names, anything worth remembering"></textarea></label>
           <div class="field">
             <span>Photo</span>
@@ -597,6 +676,51 @@
               <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
             </label>
           </div>
+
+          <!-- ===== HOUSEHOLD ROSTER ===== -->
+          <fieldset class="household-roster">
+            <legend>Household</legend>
+            <p class="muted small" style="margin: 0 0 10px;">Add a spouse / partner and any kids. They'll appear as expandable sub-rows under this friend in the list.</p>
+
+            <!-- Spouse subsection -->
+            <div class="roster-section">
+              <div class="roster-section-head">
+                <span class="roster-section-title">Spouse / partner</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="friend-spouse-add" hidden>+ Add spouse</button>
+                <button type="button" class="btn btn-danger-ghost btn-sm" id="friend-spouse-remove" hidden>Remove spouse</button>
+              </div>
+              <div id="friend-spouse-fields" hidden>
+                <div class="grid-3">
+                  <label class="field"><span>First name</span><input name="spouseFirstName" /></label>
+                  <label class="field"><span>Middle</span><input name="spouseMiddleName" /></label>
+                  <label class="field"><span>Last name</span><input name="spouseLastName" /></label>
+                </div>
+                <div class="grid-2">
+                  <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input name="spouseBirthday" type="date" /></label>
+                  <label class="field"><span>Gender</span><select name="spouseGender"><option value="female">Female</option><option value="male">Male</option></select></label>
+                </div>
+                <div class="grid-2">
+                  <label class="field"><span><span class="kv-emoji" aria-hidden="true">📱</span>Phone</span><input name="spousePhone" type="tel" placeholder="(555) 123-4567" /></label>
+                  <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="spouseEmail" type="email" /></label>
+                </div>
+                <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input name="spousePlan529" type="url" placeholder="https://…" /></label>
+                <label class="field">
+                  <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+                  <div class="ethnicity-picker" data-picker="friend-spouse-ethnicity"></div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Kids subsection -->
+            <div class="roster-section">
+              <div class="roster-section-head">
+                <span class="roster-section-title">Kids</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="friend-kid-add">+ Add child</button>
+              </div>
+              <div id="friend-kids-list" class="kids-list"></div>
+            </div>
+          </fieldset>
+
           <p class="form-error" id="friend-error" role="alert" hidden></p>
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit" id="friend-submit">Save friend</button>
