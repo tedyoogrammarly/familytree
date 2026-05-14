@@ -1732,19 +1732,32 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .member-panel { display: block; }
 .page-head-actions { display: inline-flex; gap: 10px; align-items: center; }
 
-/* Expand caret in the leftmost cell of household rows. */
-.friend-expand-cell { width: 22px; padding-right: 0 !important; }
+/* Expand caret in the leftmost cell of household rows. v4.36 bumped the
+   size from 18px → 28px after the original target was too small to click
+   reliably on touch + cluttered icons in a dense row. */
+.friend-expand-cell { width: 32px; padding-right: 0 !important; }
 .friend-expand {
-  width: 18px; height: 18px;
+  width: 28px; height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 0; background: transparent;
-  color: var(--ink-500);
-  border-radius: 4px;
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  color: var(--ink-700);
+  border-radius: 6px;
   cursor: pointer;
-  transition: transform .15s var(--ease-out), color .15s var(--ease-out), background-color .15s var(--ease-out);
+  transition: transform .15s var(--ease-out), color .15s var(--ease-out), background-color .15s var(--ease-out), border-color .15s var(--ease-out);
 }
-.friend-expand:hover { color: var(--ink-900); background: var(--paper-veil); }
-.friend-expand.is-open { transform: rotate(90deg); color: var(--brand-700, var(--brand-900)); }
+.friend-expand:hover {
+  color: var(--brand-900);
+  background: var(--paper-veil);
+  border-color: var(--ink-300, var(--ink-200));
+}
+.friend-expand.is-open {
+  transform: rotate(90deg);
+  color: var(--brand-900);
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.08);
+}
+.friend-expand svg { display: block; }
 
 /* Primary household row: subtle hover for "click anywhere to edit". */
 .friend-row { cursor: pointer; }

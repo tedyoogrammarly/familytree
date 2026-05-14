@@ -819,6 +819,13 @@ const Store = {
       // members keep their current behavior — they still get added when
       // an admin picks "+ Add by group…" on an event.
       if (m.includeInGroupEvents === undefined) m.includeInGroupEvents = true;
+      // v4.36: hard hide from the "+ Add member" picker on events. Distinct
+      // from includeInGroupEvents — that one only opts out of bulk group
+      // invites. This one hides the person from the picker entirely so the
+      // dropdown stays scannable when there are many low-event-attending
+      // people in the archive. Default false (everyone visible) so the
+      // change is opt-in.
+      if (m.excludeFromEventsList === undefined) m.excludeFromEventsList = false;
       // v4.22: per-member private fields for the Admin/vault page. Only
       // populated for the household's nuclear-family members, but every
       // member gets the empty container so save handlers can assign without
@@ -975,6 +982,8 @@ const Store = {
         .forEach(k => { if (f[k] === undefined) f[k] = ''; });
       if (!f.ageGroup) f.ageGroup = 'adult';
       if (!f.createdAt) f.createdAt = Date.now();
+      // v4.36: same "Do not show in events list" flag mirrored from members.
+      if (f.excludeFromEventsList === undefined) f.excludeFromEventsList = false;
       // v4.35: household roster. Each friend record represents a household.
       // `spouse` is a single optional sub-record (adult). `kids` is an array
       // of sub-records (children). Sub-records carry their own birthday +
@@ -984,20 +993,22 @@ const Store = {
       if (f.spouse !== null && (typeof f.spouse !== 'object' || Array.isArray(f.spouse))) f.spouse = null;
       if (f.spouse) {
         if (!f.spouse.id) f.spouse.id = uid('sps');
-        ['firstName','middleName','lastName','displayName','birthday','phone','email','plan529']
+        ['firstName','middleName','lastName','displayName','birthday','phone','email','plan529','photo']
           .forEach(k => { if (f.spouse[k] === undefined) f.spouse[k] = ''; });
         if (!f.spouse.gender) f.spouse.gender = 'female';
         if (!Array.isArray(f.spouse.ethnicities)) f.spouse.ethnicities = [];
+        if (f.spouse.excludeFromEventsList === undefined) f.spouse.excludeFromEventsList = false;
       } else if (f.spouse === undefined) {
         f.spouse = null;
       }
       if (!Array.isArray(f.kids)) f.kids = [];
       f.kids.forEach(k => {
         if (!k.id) k.id = uid('kid');
-        ['firstName','middleName','lastName','displayName','birthday','plan529']
+        ['firstName','middleName','lastName','displayName','birthday','plan529','photo']
           .forEach(key => { if (k[key] === undefined) k[key] = ''; });
         if (!k.gender) k.gender = 'female';
         if (!Array.isArray(k.ethnicities)) k.ethnicities = [];
+        if (k.excludeFromEventsList === undefined) k.excludeFromEventsList = false;
       });
     }
     // Heal asymmetric parent/child links: if A says "B is my parent", make
@@ -2887,6 +2898,8 @@ const Drawer = {
     // members keep their current behavior unless an admin unchecks it.
     const grpEvtBox = $('#edit-group-events');
     if (grpEvtBox) grpEvtBox.checked = m.includeInGroupEvents !== false;
+    const excludeBox = $('#edit-exclude-events');
+    if (excludeBox) excludeBox.checked = !!m.excludeFromEventsList;
     const ePicker = $('[data-picker="edit-ethnicity"]');
     EthnicityPicker.mount(ePicker);
     EthnicityPicker.write(ePicker, m.ethnicities || []);
@@ -2954,6 +2967,7 @@ const Drawer = {
     m.notes      = (fd.get('notes')   || '').toString();
     m.group      = (fd.get('group') || '').toString();
     m.includeInGroupEvents = !!$('#edit-group-events')?.checked;
+    m.excludeFromEventsList = !!$('#edit-exclude-events')?.checked;
     // Anniversary: only meaningful when there's a current spouse; mirror to the
     // spouse so both records stay in sync.
     const sp_save = m.spouseId ? Store.byId(m.spouseId) : null;
@@ -6100,11 +6114,40 @@ const EventsView = {
         </button>
       </div>` : '';
 
+    // v4.36: picker now spans members + friend household persons. Each
+    // friend household contributes its primary + spouse (if any) + every
+    // kid. Members + each person filterable by their excludeFromEventsList
+    // flag so admins can keep the list scannable.
+    const memberOpts = sortMembers(
+      Store.membersList()
+        .filter(m => !m.excludeFromEventsList)
+        .filter(m => !attendeesRaw.some(a => a.memberId === m.id))
+    ).map(m => `<option value="m:${m.id}">${escape(displayName(m))}</option>`);
+
+    const friendOpts = [];
+    sortFriends(Object.values(Store.state.friends || {})).forEach(f => {
+      // Drop sub-options that have already been added to this event by their
+      // synthesized refId so the dropdown doesn't duplicate already-attending
+      // friends.
+      const refIn = (refId) => attendeesRaw.some(a => a.personRef === refId);
+      if (!f.excludeFromEventsList && !refIn('f:' + f.id)) {
+        friendOpts.push(`<option value="f:${f.id}">${escape(displayName(f))}</option>`);
+      }
+      if (f.spouse && !f.spouse.excludeFromEventsList && !refIn('s:' + f.id)) {
+        friendOpts.push(`<option value="s:${f.id}">${escape(displayName(f.spouse))} <span>(spouse of ${escape(displayName(f))})</span></option>`);
+      }
+      (f.kids || []).forEach(k => {
+        if (!k.excludeFromEventsList && !refIn('k:' + f.id + ':' + k.id)) {
+          friendOpts.push(`<option value="k:${f.id}:${k.id}">${escape(displayName(k))} <span>(child of ${escape(displayName(f))})</span></option>`);
+        }
+      });
+    });
+
     const bulkAddBlock = isAdmin ? `
       <select class="input" id="event-add-member">
-        <option value="">+ Add family member…</option>
-        ${sortMembers(Store.membersList().filter(m => !attendeesRaw.some(a => a.memberId === m.id)))
-          .map(m => `<option value="${m.id}">${escape(displayName(m))}</option>`).join('')}
+        <option value="">+ Add member…</option>
+        ${memberOpts.length ? `<optgroup label="Family">${memberOpts.join('')}</optgroup>` : ''}
+        ${friendOpts.length ? `<optgroup label="Friends">${friendOpts.join('')}</optgroup>` : ''}
       </select>
       ${groups.length ? `
         <select class="input" id="event-add-group">
@@ -6241,9 +6284,46 @@ const EventsView = {
         meal: defaultMealForMember(member),
       });
       on($('#event-add-member'), 'change', (e) => {
-        const mid = e.target.value; if (!mid) return;
-        const m = Store.byId(mid); if (!m) return;
-        attendeesRaw.push(pushAttendee(m));
+        const v = e.target.value; if (!v) return;
+        // v4.36: parse prefixed picker value. Members keep the simple
+        // memberId attendee shape (existing code knows how to render
+        // them). Friend household persons are pushed as customName +
+        // email attendees with a `personRef` snapshot of where they came
+        // from — the link survives renames if we ever decide to live-
+        // resolve, but downstream UI doesn't need to change today.
+        if (v.startsWith('m:')) {
+          const m = Store.byId(v.slice(2)); if (!m) return;
+          attendeesRaw.push(pushAttendee(m));
+        } else if (v.startsWith('f:')) {
+          const f = Store.state.friends?.[v.slice(2)]; if (!f) return;
+          attendeesRaw.push({
+            customName: fullName(f),
+            email: f.email || '',
+            status: 'invited', notes: '', plusN: 0,
+            meal: defaultMealForMember(f),
+            personRef: v,
+          });
+        } else if (v.startsWith('s:')) {
+          const f = Store.state.friends?.[v.slice(2)]; if (!f || !f.spouse) return;
+          attendeesRaw.push({
+            customName: fullName(f.spouse),
+            email: f.spouse.email || '',
+            status: 'invited', notes: '', plusN: 0,
+            meal: defaultMealForMember(f.spouse),
+            personRef: v,
+          });
+        } else if (v.startsWith('k:')) {
+          const parts = v.split(':'); // ['k', friendId, kidId]
+          const f = Store.state.friends?.[parts[1]]; if (!f) return;
+          const k = (f.kids || []).find(x => x.id === parts[2]); if (!k) return;
+          attendeesRaw.push({
+            customName: fullName(k),
+            email: '', // kids typically don't have their own email
+            status: 'invited', notes: '', plusN: 0,
+            meal: defaultMealForMember(k),
+            personRef: v,
+          });
+        }
         ev.attendees = attendeesRaw;
         Store.save();
         this.renderDetail();
@@ -9588,6 +9668,22 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.36',
+    date: '2026-05-14',
+    title: 'Friend household polish + cross-archive events picker',
+    changes: [
+      'Friend modal: photo upload for spouse + each kid (kid photos use the same 720px @ 0.84 downscale as friend primaries — same archive footprint per face).',
+      'Friend kids automatically inherit the union of primary + spouse ethnicities on save, dedupe-merged with anything the kid had manually. Matches how family-side children inherit (line 1623). Saving a flag onto a parent later propagates to the kid the next time you save the household.',
+      'Friends tab UX: City column replaced by full Address (one-line postal). Address is shown only on the household primary row — spouse + kid sub-rows render em-dash there since they share the household address.',
+      'Friends tab UX: copy-to-clipboard buttons added to the Email + Address columns. One click copies the value with a toast confirmation.',
+      'Friends tab UX: bigger, more obvious expand caret (28px outlined button instead of 18px ghost icon). Default state is everyone-expanded so rosters are visible without clicking. New "Collapse all / Expand all" toggle in the panel header.',
+      'Friends tab: dedicated "Export to Excel" button on the panel header. Same content as the page-level export when the tab is active, but discoverable without switching tabs first.',
+      'New "Do not show in events list" flag on every member, friend primary, spouse, and kid. When checked, that person is filtered out of the events page "+ Add member" picker. Existing event rosters / RSVPs are untouched — this is a picker filter only, not a retroactive hide.',
+      'Events page: "+ Add family member…" picker renamed to "+ Add member…" and now offers Family members + every friend household person (primary, spouse, each kid) grouped under Family / Friends optgroups. Already-attending people drop out of the dropdown the same way members already did. Friend household picks are pushed as customName + email attendees with a personRef tag so the link to the friend record is preserved.',
+      'CPU/memory: zero new SQL queries, zero new realtime channels. The picker rebuilds in pure client-side JS once per renderDetail() (same as today). Sub-record photos add ~80–120 KB per kid to the friend JSONB blob — only when a photo is uploaded.',
+    ],
+  },
+  {
     version: '4.35',
     date: '2026-05-14',
     title: 'Friends folded into Members page + household roster',
@@ -11882,7 +11978,11 @@ const PageEmojis = {
 // beyond what was already in place for the old card-grid Friend Tree.
 const FriendsTabView = {
   searchQuery: '',
-  expanded: new Set(), // friend ids whose roster sub-rows are currently expanded
+  // v4.36: inverted semantics. We track which household ids are *collapsed*
+  // instead of which are expanded — this way the default (empty set) means
+  // "everything expanded", matching the user's preference for a roster-first
+  // view. Expand-all clears the set; collapse-all fills it.
+  collapsed: new Set(),
   init() {
     on($('#btn-friend-add'),       'click', () => FriendModal.openAdd());
     on($('#btn-friend-add-first'), 'click', () => FriendModal.openAdd());
@@ -11893,6 +11993,8 @@ const FriendsTabView = {
         this.render();
       });
     }
+    on($('#btn-friends-expand-toggle'), 'click', () => this.toggleAll());
+    on($('#btn-friends-export'),        'click', () => AdminView.exportFriendsCSV());
   },
   list() {
     return Object.values(Store.state.friends || {});
@@ -11902,14 +12004,29 @@ const FriendsTabView = {
     let list = this.list();
     if (q) {
       list = list.filter(f => {
-        // Match against primary + spouse + kids — searching for a kid's name
-        // should still surface their household.
         if (friendMatchesQuery(f, q)) return true;
         if (f.spouse && friendMatchesQuery(f.spouse, q)) return true;
         return (f.kids || []).some(k => friendMatchesQuery(k, q));
       });
     }
     return sortFriends(list);
+  },
+  // Households with a spouse or kids are eligible to be (un)collapsed.
+  // Solo friends are always "flat" so the toggle button only acts on real
+  // households.
+  rosterIds() {
+    return this.filtered()
+      .filter(f => !!f.spouse || (f.kids && f.kids.length > 0))
+      .map(f => f.id);
+  },
+  toggleAll() {
+    const ids = this.rosterIds();
+    if (!ids.length) return;
+    // "All currently collapsed" → expand all; otherwise collapse all.
+    const allCollapsed = ids.every(id => this.collapsed.has(id));
+    if (allCollapsed) this.collapsed.clear();
+    else ids.forEach(id => this.collapsed.add(id));
+    this.render();
   },
   render() {
     const tbody = $('#friends-rows');
@@ -11931,18 +12048,31 @@ const FriendsTabView = {
     const rowsHTML = list.map(f => this.householdRowsHTML(f)).join('');
     tbody.innerHTML = rowsHTML || `<tr><td colspan="9" class="muted" style="padding:24px; text-align:center;">No friends matching "${escape(this.searchQuery)}".</td></tr>`;
 
+    // Update the Expand/Collapse-all toggle button to reflect current state.
+    const toggleBtn = $('#btn-friends-expand-toggle');
+    const toggleLab = $('#btn-friends-expand-label');
+    if (toggleBtn && toggleLab) {
+      const ids = this.rosterIds();
+      const allCollapsed = ids.length > 0 && ids.every(id => this.collapsed.has(id));
+      toggleBtn.disabled = !ids.length;
+      toggleBtn.title = allCollapsed ? 'Expand all households' : 'Collapse all households';
+      toggleBtn.setAttribute('aria-pressed', allCollapsed ? 'false' : 'true');
+      toggleLab.textContent = allCollapsed ? 'Expand all' : 'Collapse all';
+    }
+
     tbody.querySelectorAll('[data-friend-toggle]').forEach(btn => {
       on(btn, 'click', (e) => {
         e.stopPropagation();
         const fid = btn.dataset.friendToggle;
-        if (this.expanded.has(fid)) this.expanded.delete(fid);
-        else this.expanded.add(fid);
+        if (this.collapsed.has(fid)) this.collapsed.delete(fid);
+        else this.collapsed.add(fid);
         this.render();
       });
     });
     tbody.querySelectorAll('[data-friend-row]').forEach(tr => {
       on(tr, 'click', (e) => {
         if (e.target.closest('button')) return;
+        if (e.target.closest('a')) return;
         const fid = tr.dataset.friendRow;
         if (fid) FriendModal.openEdit(fid);
       });
@@ -11953,21 +12083,32 @@ const FriendsTabView = {
     tbody.querySelectorAll('[data-friend-action="delete"]').forEach(btn => {
       on(btn, 'click', (e) => { e.stopPropagation(); FriendsTabView.delete(btn.dataset.fid); });
     });
+    // Wire all copy-to-clipboard buttons in this scope.
+    tbody.querySelectorAll('[data-copy]').forEach(btn => {
+      on(btn, 'click', async (e) => {
+        e.stopPropagation();
+        const val = btn.dataset.copy || '';
+        if (!val) return;
+        try { await navigator.clipboard.writeText(val); toast(`${btn.dataset.copyLabel || 'Copied'}.`); }
+        catch { toast('Copy failed.', 'warn'); }
+      });
+    });
   },
   householdRowsHTML(f) {
     const hasRoster = !!f.spouse || (f.kids && f.kids.length > 0);
-    const isOpen = this.expanded.has(f.id);
+    const isOpen = hasRoster && !this.collapsed.has(f.id);
     const toggle = hasRoster
       ? `<button type="button" class="friend-expand ${isOpen ? 'is-open' : ''}" data-friend-toggle="${f.id}" aria-label="${isOpen ? 'Collapse' : 'Expand'} household">
-           <svg viewBox="0 0 16 16" width="11" height="11"><path d="M5 4l5 4-5 4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+           <svg viewBox="0 0 16 16" width="14" height="14"><path d="M5 4l5 4-5 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
          </button>`
       : '';
+    const fullAddress = formatPostalAddress(f).replace(/\n/g, ', ');
     const primaryRow = `
       <tr data-friend-row="${f.id}" class="friend-row ${hasRoster ? 'has-roster' : ''}">
         <td class="friend-expand-cell">${toggle}</td>
         <td>${nameCellHTML(f, 'primary')}</td>
-        <td>${emailCellHTML(f.email)}</td>
-        <td>${escape(f.city || '—')}</td>
+        <td>${emailCellHTML(f.email, { copy: true })}</td>
+        <td>${addressCellHTML(fullAddress, { copy: true })}</td>
         <td>${escape(f.phone || '—')}</td>
         <td>${f.birthday ? formatDate(f.birthday) : '—'}</td>
         <td>${escape(f.group || '—')}</td>
@@ -11989,21 +12130,21 @@ const FriendsTabView = {
     return primaryRow + subRows.join('');
   },
   subRowHTML(parent, person, role) {
-    // Sub-rows inherit address (city) and group from the primary friend.
-    // Spouse may carry own phone/email; children fall back to em-dash.
-    const city  = parent.city || '';
-    const group = parent.group || '';
+    // v4.36: only the primary row shows the address. Spouse + kids inherit
+    // the household address conceptually, but we render em-dash for that
+    // cell to keep the list visually clean (no duplicated street/city on
+    // every household member). Group also stays as an em-dash on sub-rows.
     const phone = role === 'spouse' ? (person.phone || '') : '';
     const email = role === 'spouse' ? (person.email || '') : '';
     return `
       <tr class="friend-subrow friend-subrow-${role}" data-friend-row="${parent.id}">
         <td></td>
         <td>${nameCellHTML(person, role)}</td>
-        <td>${email ? emailCellHTML(email) : '<span class="muted">—</span>'}</td>
-        <td class="muted">${escape(city || '—')}</td>
+        <td>${email ? emailCellHTML(email, { copy: true }) : '<span class="muted">—</span>'}</td>
+        <td><span class="muted">—</span></td>
         <td>${phone ? escape(phone) : '<span class="muted">—</span>'}</td>
         <td>${person.birthday ? formatDate(person.birthday) : '—'}</td>
-        <td class="muted">${escape(group || '—')}</td>
+        <td><span class="muted">—</span></td>
         <td>${plan529CellHTML(person.plan529)}</td>
         <td></td>
       </tr>`;
@@ -12068,9 +12209,26 @@ function nameCellHTML(person, role) {
     </div>`;
 }
 
-function emailCellHTML(email) {
+// Email cell with optional copy-to-clipboard button. `opts.copy=true` swaps
+// the old member-table's data-action="copy-email" attribute for the generic
+// `data-copy` handler wired by FriendsTabView.render — same UX, but the
+// click handler is bound where the helper is used so it doesn't depend on
+// the Members table's older copy-email wiring.
+function emailCellHTML(email, opts = {}) {
   if (!email) return '<span class="muted">—</span>';
+  if (opts.copy) {
+    return `<span class="admin-email-cell"><code>${escape(email)}</code><button class="admin-email-copy" type="button" data-copy="${escape(email)}" data-copy-label="Email copied" title="Copy email"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
+  }
   return `<span class="admin-email-cell"><code>${escape(email)}</code><button class="admin-email-copy" type="button" data-action="copy-email" data-email="${escape(email)}" title="Copy email"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
+}
+
+// One-line address cell with optional copy-to-clipboard button.
+function addressCellHTML(address, opts = {}) {
+  if (!address) return '<span class="muted">—</span>';
+  if (opts.copy) {
+    return `<span class="admin-email-cell"><span title="${escape(address)}">${escape(address)}</span><button class="admin-email-copy" type="button" data-copy="${escape(address)}" data-copy-label="Address copied" title="Copy address"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
+  }
+  return escape(address);
 }
 
 function plan529CellHTML(url) {
@@ -12221,12 +12379,17 @@ function nameSortKey(p) {
 // downscaleImageFile pipeline for inline JPEG storage on the primary only.
 const FriendModal = {
   editingId: null,
-  tempPhoto: '',
+  tempPhoto: '',          // primary in-flight photo
+  _clearPhoto: false,
+  spouseTempPhoto: '',    // spouse in-flight photo
+  _clearSpousePhoto: false,
   // Working copies of the roster so the user can add/remove sub-records
   // before saving without mutating Store.state. Persisted to the friend on
-  // save (or discarded on close).
+  // save (or discarded on close). Kid photos live directly on
+  // kidsDraft[i].photo since drafts are full copies — no separate temp map
+  // is needed, which keeps state simple.
   spouseDraft: null,   // null = "no spouse on record"
-  kidsDraft:   [],     // array of kid objects
+  kidsDraft:   [],     // array of kid objects (each may carry .photo)
   init() {
     const el = $('#friend-modal'); if (!el) return;
     on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
@@ -12234,18 +12397,24 @@ const FriendModal = {
     on($('#friend-delete'), 'click', () => this.deleteCurrent());
     on($('#friend-photo-input'), 'change', (e) => this.onPhotoUpload(e));
     on($('#friend-photo-clear'), 'click', () => this.clearPhoto());
-    on($('#friend-spouse-add'),    'click', () => { this.spouseDraft = this.emptySpouse(); this.syncRoster(); });
+    on($('#friend-spouse-photo-input'), 'change', (e) => this.onSpousePhotoUpload(e));
+    on($('#friend-spouse-photo-clear'), 'click', () => this.clearSpousePhoto());
+    on($('#friend-spouse-add'),    'click', () => { this.spouseDraft = this.emptySpouse(); this.spouseTempPhoto = ''; this._clearSpousePhoto = false; this.syncRoster(); });
     on($('#friend-spouse-remove'), 'click', () => {
       if (!confirm('Remove the spouse from this household? Their record will be deleted on save.')) return;
-      this.spouseDraft = null; this.syncRoster();
+      this.spouseDraft = null;
+      this.spouseTempPhoto = '';
+      this._clearSpousePhoto = false;
+      this.syncRoster();
     });
     on($('#friend-kid-add'), 'click', () => {
       this.captureKidsFromDOM();
       this.kidsDraft.push(this.emptyKid());
       this.syncRoster();
     });
-    // Mount the primary ethnicity picker once on init. The spouse picker is
-    // mounted on demand when spouseDraft becomes non-null (in syncRoster).
+    // Mount the primary ethnicity picker once on init. Spouse + kid pickers
+    // are mounted on demand inside syncRoster() since their containers may
+    // not exist (spouse hidden, kid list dynamic).
     const ePicker = $('[data-picker="friend-ethnicity"]');
     if (ePicker) EthnicityPicker.mount(ePicker);
     // Zip → city/state autofill, mirrors the member drawer wiring.
@@ -12267,16 +12436,21 @@ const FriendModal = {
   },
   emptySpouse() {
     return { id: uid('sps'), firstName: '', middleName: '', lastName: '', displayName: '',
-             birthday: '', phone: '', email: '', gender: 'female', ethnicities: [], plan529: '' };
+             birthday: '', phone: '', email: '', gender: 'female', ethnicities: [],
+             plan529: '', photo: '', excludeFromEventsList: false };
   },
   emptyKid() {
     return { id: uid('kid'), firstName: '', middleName: '', lastName: '', displayName: '',
-             birthday: '', gender: 'female', ethnicities: [], plan529: '' };
+             birthday: '', gender: 'female', ethnicities: [], plan529: '',
+             photo: '', excludeFromEventsList: false };
   },
   openAdd() {
     if (!Auth.isAdmin()) return;
     this.editingId = null;
     this.tempPhoto = '';
+    this._clearPhoto = false;
+    this.spouseTempPhoto = '';
+    this._clearSpousePhoto = false;
     this.spouseDraft = null;
     this.kidsDraft = [];
     $('#friend-modal-title').textContent = 'Add a friend';
@@ -12295,6 +12469,9 @@ const FriendModal = {
     const f = Store.state.friends[fid]; if (!f) return;
     this.editingId = fid;
     this.tempPhoto = '';
+    this._clearPhoto = false;
+    this.spouseTempPhoto = '';
+    this._clearSpousePhoto = false;
     // Deep-clone the spouse/kids so cancellation truly cancels.
     this.spouseDraft = f.spouse ? JSON.parse(JSON.stringify(f.spouse)) : null;
     this.kidsDraft   = (f.kids || []).map(k => JSON.parse(JSON.stringify(k)));
@@ -12318,6 +12495,7 @@ const FriendModal = {
     fm.state.value             = f.state || '';
     fm.notes.value             = f.notes || '';
     fm.gender.value            = f.gender || 'female';
+    if (fm.excludeFromEventsList) fm.excludeFromEventsList.checked = !!f.excludeFromEventsList;
     EthnicityPicker.write($('[data-picker="friend-ethnicity"]'), f.ethnicities || []);
     $('#friend-zip-status').hidden = true;
     this.renderPhoto(f);
@@ -12344,11 +12522,15 @@ const FriendModal = {
       fm.spousePhone.value      = formatPhoneUS(this.spouseDraft.phone || '');
       fm.spouseEmail.value      = this.spouseDraft.email || '';
       fm.spousePlan529.value    = this.spouseDraft.plan529 || '';
+      if (fm.spouseExcludeFromEventsList) {
+        fm.spouseExcludeFromEventsList.checked = !!this.spouseDraft.excludeFromEventsList;
+      }
       const sePicker = $('[data-picker="friend-spouse-ethnicity"]');
       if (sePicker) {
         EthnicityPicker.mount(sePicker);
         EthnicityPicker.write(sePicker, this.spouseDraft.ethnicities || []);
       }
+      this.renderSpousePhoto();
     } else {
       sFields.hidden = true;
       sAdd.hidden = false;
@@ -12376,8 +12558,26 @@ const FriendModal = {
         </div>
         <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input data-kid-field="plan529" type="url" value="${escape(k.plan529 || '')}" placeholder="https://…" /></label>
         <label class="field">
-          <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+          <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity <span class="muted small">(auto-inherits parents' on save)</span></span>
           <div class="ethnicity-picker" data-kid-ethnicity="${i}"></div>
+        </label>
+        <div class="field">
+          <span>Photo</span>
+          <div class="photo-row">
+            <div class="photo-preview" data-kid-photo-preview="${i}" ${k.photo ? `style="background-image:url('${escape(k.photo)}')"` : ''}>${k.photo ? '' : Silhouettes.for(k)}</div>
+            <div class="photo-actions">
+              <label class="btn btn-secondary btn-sm">
+                Upload photo
+                <input type="file" accept="image/*" data-kid-photo-input="${i}" hidden />
+              </label>
+              <button type="button" class="btn btn-ghost btn-sm" data-kid-photo-clear="${i}">Clear photo</button>
+            </div>
+          </div>
+        </div>
+        <label class="field-check">
+          <input type="checkbox" data-kid-field="excludeFromEventsList" ${k.excludeFromEventsList ? 'checked' : ''} />
+          <span>Do not show in events list</span>
+          <small>Hides this child from the "+ Add member" picker on events.</small>
         </label>
         <div class="kid-row-actions">
           <button type="button" class="btn btn-danger-ghost btn-sm" data-kid-remove="${i}">Remove child</button>
@@ -12402,6 +12602,73 @@ const FriendModal = {
         this.syncRoster();
       });
     });
+    // Per-kid photo upload + clear.
+    kidsList.querySelectorAll('[data-kid-photo-input]').forEach(input => {
+      on(input, 'change', async (e) => {
+        const i = Number(input.dataset.kidPhotoInput);
+        const file = e.target.files?.[0]; if (!file) return;
+        try {
+          // Kid photos use the same downscale target as friend primaries
+          // (720px @ 0.84) so the archive doesn't bloat with full-res baby
+          // pics. See PhotoCompressor.TARGETS.friend.
+          this.captureKidsFromDOM();
+          const data = await downscaleImageFile(file, 720, 0.84);
+          this.kidsDraft[i].photo = data;
+          this.renderKidPhoto(i);
+        } catch (err) {
+          toast('Could not load image: ' + err.message, 'warn');
+        } finally {
+          e.target.value = '';
+        }
+      });
+    });
+    kidsList.querySelectorAll('[data-kid-photo-clear]').forEach(btn => {
+      on(btn, 'click', () => {
+        this.captureKidsFromDOM();
+        const i = Number(btn.dataset.kidPhotoClear);
+        this.kidsDraft[i].photo = '';
+        this.renderKidPhoto(i);
+      });
+    });
+  },
+  // Re-render just one kid's photo preview without nuking the whole roster.
+  renderKidPhoto(i) {
+    const k = this.kidsDraft[i]; if (!k) return;
+    const preview = $(`[data-kid-photo-preview="${i}"]`);
+    if (!preview) return;
+    if (k.photo) {
+      preview.style.backgroundImage = `url('${k.photo}')`;
+      preview.innerHTML = '';
+    } else {
+      preview.style.backgroundImage = '';
+      preview.innerHTML = Silhouettes.for(k);
+    }
+  },
+  // Spouse photo: draws from spouseTempPhoto (new upload) or spouseDraft.photo
+  // (existing). _clearSpousePhoto wins over both when set.
+  renderSpousePhoto() {
+    const preview = $('#friend-spouse-photo-preview');
+    if (!preview) return;
+    const src = this._clearSpousePhoto ? '' : (this.spouseTempPhoto || this.spouseDraft?.photo || '');
+    if (src) { preview.style.backgroundImage = `url('${src}')`; preview.innerHTML = ''; }
+    else { preview.style.backgroundImage = ''; preview.innerHTML = Silhouettes.for(this.spouseDraft || { gender: 'female' }); }
+  },
+  async onSpousePhotoUpload(e) {
+    const file = e.target.files?.[0]; if (!file) return;
+    try {
+      this.spouseTempPhoto = await downscaleImageFile(file, 720, 0.84);
+      this._clearSpousePhoto = false;
+      this.renderSpousePhoto();
+    } catch (err) {
+      toast('Could not load image: ' + err.message, 'warn');
+    } finally {
+      e.target.value = '';
+    }
+  },
+  clearSpousePhoto() {
+    this.spouseTempPhoto = '';
+    this._clearSpousePhoto = true;
+    this.renderSpousePhoto();
   },
   // Copy whatever's in the kid-row inputs back into kidsDraft so the next
   // syncRoster() rebuild doesn't blow away in-flight edits.
@@ -12412,7 +12679,9 @@ const FriendModal = {
       const i = Number(row.dataset.kidIndex);
       if (!this.kidsDraft[i]) return;
       row.querySelectorAll('[data-kid-field]').forEach(input => {
-        this.kidsDraft[i][input.dataset.kidField] = input.value;
+        const field = input.dataset.kidField;
+        if (input.type === 'checkbox') this.kidsDraft[i][field] = input.checked;
+        else this.kidsDraft[i][field] = input.value;
       });
       const picker = row.querySelector('.ethnicity-picker');
       if (picker) this.kidsDraft[i].ethnicities = EthnicityPicker.read(picker);
@@ -12430,8 +12699,12 @@ const FriendModal = {
     this.spouseDraft.phone      = formatPhoneUS(fm.spousePhone.value || '');
     this.spouseDraft.email      = fm.spouseEmail.value.trim();
     this.spouseDraft.plan529    = fm.spousePlan529.value.trim();
+    this.spouseDraft.excludeFromEventsList = !!fm.spouseExcludeFromEventsList?.checked;
     const picker = $('[data-picker="friend-spouse-ethnicity"]');
     if (picker) this.spouseDraft.ethnicities = EthnicityPicker.read(picker);
+    // Apply photo resolutions: tempPhoto overrides; clearPhoto wipes.
+    if (this._clearSpousePhoto) this.spouseDraft.photo = '';
+    else if (this.spouseTempPhoto) this.spouseDraft.photo = this.spouseTempPhoto;
   },
   open() {
     const el = $('#friend-modal'); if (!el) return;
@@ -12445,6 +12718,9 @@ const FriendModal = {
     el.classList.remove('is-open');
     this.editingId = null;
     this.tempPhoto = '';
+    this._clearPhoto = false;
+    this.spouseTempPhoto = '';
+    this._clearSpousePhoto = false;
     this.spouseDraft = null;
     this.kidsDraft = [];
   },
@@ -12489,6 +12765,33 @@ const FriendModal = {
     const id = this.editingId || uid('frd');
     const existing = this.editingId ? (Store.state.friends[id] || {}) : {};
     const ethPicker = $('[data-picker="friend-ethnicity"]');
+
+    // Resolve final primary ethnicities once so we can compute the union for
+    // each kid below. (Spouse ethnicities are read off the captured draft.)
+    const primaryEthnicities = ethPicker ? EthnicityPicker.read(ethPicker) : (existing.ethnicities || []);
+    const spouseEthnicities  = this.spouseDraft ? (this.spouseDraft.ethnicities || []) : [];
+
+    // Per-kid: keep manually-added ethnicities, then merge in the union of
+    // primary + spouse (deduplicated). Mirrors the family-side rule at
+    // line 1623 — kid inherits parents' flags but can also have their own.
+    const finalKids = (this.kidsDraft || [])
+      .filter(k => (k.firstName || '').trim())
+      .map(k => {
+        const set = new Set(Array.isArray(k.ethnicities) ? k.ethnicities : []);
+        primaryEthnicities.forEach(e => set.add(e));
+        spouseEthnicities.forEach(e => set.add(e));
+        return {
+          ...k,
+          firstName: k.firstName.trim(),
+          ethnicities: [...set],
+          // Make sure newly-added kids that never went through hydration
+          // still carry the photo + exclude flag fields (so render code can
+          // assume they exist).
+          photo: k.photo || '',
+          excludeFromEventsList: !!k.excludeFromEventsList,
+        };
+      });
+
     const friend = {
       ...existing,
       id,
@@ -12511,15 +12814,19 @@ const FriendModal = {
       ageGroup:          existing.ageGroup || ageGroupForBirthday((fd.get('birthday') || '').toString()) || 'adult',
       photo:             this._clearPhoto ? '' : (this.tempPhoto || existing.photo || ''),
       dateOfDeath:       existing.dateOfDeath || '',
-      ethnicities:       ethPicker ? EthnicityPicker.read(ethPicker) : (existing.ethnicities || []),
+      ethnicities:       primaryEthnicities,
+      excludeFromEventsList: !!fd.get('excludeFromEventsList'),
       // Household roster — derived from drafts. Empty kids (no firstName) are
       // dropped so accidentally added rows don't clutter the list.
       spouse:            this.spouseDraft && (this.spouseDraft.firstName || '').trim()
-                           ? { ...this.spouseDraft, firstName: this.spouseDraft.firstName.trim() }
+                           ? {
+                               ...this.spouseDraft,
+                               firstName: this.spouseDraft.firstName.trim(),
+                               photo: this.spouseDraft.photo || '',
+                               excludeFromEventsList: !!this.spouseDraft.excludeFromEventsList,
+                             }
                            : null,
-      kids:              (this.kidsDraft || [])
-                           .filter(k => (k.firstName || '').trim())
-                           .map(k => ({ ...k, firstName: k.firstName.trim() })),
+      kids:              finalKids,
       createdAt:         existing.createdAt || Date.now(),
     };
     Store.state.friends[id] = friend;
