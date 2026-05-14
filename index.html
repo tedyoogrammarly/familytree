@@ -520,16 +520,23 @@
               </div>
               <div class="panel-head-tools">
                 <input id="friends-search" class="input" type="search" placeholder="Search name / email / phone…" style="min-width: 220px;" />
+                <button class="btn btn-ghost btn-sm" type="button" id="btn-friends-expand-toggle" title="Collapse all households" aria-pressed="true">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 6l5 5 5-5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span id="btn-friends-expand-label">Collapse all</span>
+                </button>
+                <button class="btn btn-secondary btn-sm" type="button" id="btn-friends-export" title="Download flattened CSV of every friend household member">
+                  Export to Excel
+                </button>
               </div>
             </header>
             <div class="table-wrap">
               <table class="table" id="friends-table">
                 <thead>
                   <tr>
-                    <th style="width:22px;"></th>
+                    <th style="width:32px;"></th>
                     <th>Name</th>
                     <th>Email</th>
-                    <th>City</th>
+                    <th>Address</th>
                     <th>Phone</th>
                     <th>Birthday</th>
                     <th>Group</th>
@@ -676,6 +683,11 @@
               <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
             </label>
           </div>
+          <label class="field-check">
+            <input type="checkbox" name="excludeFromEventsList" />
+            <span>Do not show in events list</span>
+            <small>Hides this person from the "+ Add member" picker on events.</small>
+          </label>
 
           <!-- ===== HOUSEHOLD ROSTER ===== -->
           <fieldset class="household-roster">
@@ -705,8 +717,26 @@
                 </div>
                 <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input name="spousePlan529" type="url" placeholder="https://…" /></label>
                 <label class="field">
-                  <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+                  <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity <span class="muted small">(inherited by kids when saved)</span></span>
                   <div class="ethnicity-picker" data-picker="friend-spouse-ethnicity"></div>
+                </label>
+                <div class="field">
+                  <span>Photo</span>
+                  <div class="photo-row">
+                    <div class="photo-preview" id="friend-spouse-photo-preview"></div>
+                    <div class="photo-actions">
+                      <label class="btn btn-secondary btn-sm">
+                        Upload photo
+                        <input type="file" accept="image/*" id="friend-spouse-photo-input" hidden />
+                      </label>
+                      <button type="button" class="btn btn-ghost btn-sm" id="friend-spouse-photo-clear">Clear photo</button>
+                    </div>
+                  </div>
+                </div>
+                <label class="field-check">
+                  <input type="checkbox" name="spouseExcludeFromEventsList" />
+                  <span>Do not show in events list</span>
+                  <small>Hides this person from the "+ Add member" picker on events.</small>
                 </label>
               </div>
             </div>
@@ -1123,6 +1153,11 @@
             <input type="checkbox" name="includeInGroupEvents" id="edit-group-events" />
             <span>Include in group invites</span>
             <small>When checked, this person is added when an admin picks "+ Add by group…" on an event.</small>
+          </label>
+          <label class="field-check">
+            <input type="checkbox" name="excludeFromEventsList" id="edit-exclude-events" />
+            <span>Do not show in events list</span>
+            <small>Hides this person from the "+ Add member" picker on events so the dropdown stays scannable.</small>
           </label>
           <label class="field">
             <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
