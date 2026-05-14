@@ -795,6 +795,11 @@ const Store = {
     //      clear the divorced flag. Idempotent — re-running is safe.
     const members = this.state.members || {};
     for (const m of Object.values(members)) {
+      // v4.33: drop legacy auth fields. Supabase Auth owns credentials now;
+      // these were dead weight on every member record (passwordHash alone
+      // is 64 chars × N members). Free space reclamation.
+      if ('passwordHash'        in m) delete m.passwordHash;
+      if ('mustChangePassword'  in m) delete m.mustChangePassword;
       if (!Array.isArray(m.exSpouseIds)) m.exSpouseIds = [];
       if (m.dateOfDeath === undefined) m.dateOfDeath = '';
       if (m.plan529      === undefined) m.plan529 = '';
@@ -1244,8 +1249,12 @@ const Tree = {
   async addMember(input) {
     const id = uid();
     const username = generateUsername(input.firstName, input.lastName);
+    // The temporary password is still returned to the caller (used to seed
+    // the corresponding Supabase Auth account), but we no longer persist
+    // its hash on the member record — Supabase Auth owns the credential
+    // lifecycle now. v4.33: dropped passwordHash + mustChangePassword
+    // from the on-disk shape to shrink the archive row.
     const password = randomPassword();
-    const passwordHash = await hashPassword(password);
 
     const birthday = input.birthday || '';
     const inferredAge = ageGroupForBirthday(birthday);
@@ -1272,8 +1281,6 @@ const Tree = {
       role: input.role || 'user',
       ethnicities: Array.isArray(input.ethnicities) ? input.ethnicities : [],
       username,
-      passwordHash,
-      mustChangePassword: true,
       parentIds: [],
       spouseId: null,
       childrenIds: [],
@@ -8817,6 +8824,7 @@ async function init() {
   RemindersModal.init();
   FriendTreeView.init();
   FriendModal.init();
+  StorageView.init();
   DashboardView.init();
   PageEmojis.init();
   bindLogin();
@@ -9466,6 +9474,18 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.33',
+    date: '2026-05-14',
+    title: 'Database storage diagnostic + one-click photo compression',
+    changes: [
+      'New "Database storage" panel at the top of the History page (admin only). Shows the in-memory state size, a per-area byte breakdown (members / friends / vault / events / gifts / …), a vault sub-section breakdown, and a per-source photo footprint table so you can see at a glance which area is eating disk.',
+      'New "Compress all photos" button on the same panel. One click re-encodes every photo in the archive at smaller dimensions / lower quality (member 480px, friend 720px, insurance card 1000px, neighbor 800px). Skips photos that are already smaller than the recompressed result. Reports total bytes saved when it completes.',
+      'New upload defaults for vault photos: insurance cards 1000px @ 0.78 (was 1400 / 0.85), neighbor photos 800px @ 0.80 (was 1400 / 0.85). Cards still render readably in the lightbox; the archive shrinks meaningfully on the next upload.',
+      'Legacy passwordHash + mustChangePassword fields are now stripped from every member record on the next save. Supabase Auth has owned credentials since v4.16; carrying these around was dead weight (64 chars × N members).',
+      'New supabase/queries/storage-breakdown.sql — copy-paste SQL block for the Supabase SQL Editor that gives the authoritative on-disk breakdown (archive heap + TOAST size, per-area JSON sizes, photo footprint, autovacuum / bloat stats, and a VACUUM FULL at the end to reclaim TOAST bloat).',
+    ],
+  },
   {
     version: '4.32',
     date: '2026-05-13',
@@ -10568,7 +10588,11 @@ const VaultView = {
         const file = input.files?.[0]; if (!file) return;
         const target = input.dataset.photoTarget;
         try {
-          const dataUrl = await downscaleImageFile(file, 1400, 0.85);
+          // v4.33: dropped 1400→1000 / 0.85→0.78 to keep insurance card
+          // photos legible while shrinking the archive footprint. Cards
+          // render at most ~360px wide in the UI, so 1000px is still ~3x
+          // headroom for the lightbox zoom.
+          const dataUrl = await downscaleImageFile(file, 1000, 0.78);
           const ins = Store.state.vault.insurances.find(x => x.id === iid);
           if (ins) { ins[target] = dataUrl; Store.save(); toast('Photo attached.'); this.renderBenefits(); }
         } catch (e) {
@@ -11266,7 +11290,10 @@ const VaultView = {
       input.addEventListener('change', async () => {
         const file = input.files?.[0]; if (!file) return;
         try {
-          const dataUrl = await downscaleImageFile(file, 1400, 0.85);
+          // v4.33: dropped 1400→800 / 0.85→0.80 for neighbor photos.
+          // These render at ~96px on cards and ~95vw in the lightbox;
+          // 800px is plenty without bloating the archive.
+          const dataUrl = await downscaleImageFile(file, 800, 0.80);
           const n = Store.state.vault.neighbors.find(x => x.id === nid);
           if (n) { n.photo = dataUrl; Store.save(); toast('Photo attached.'); this.renderHome(); }
         } catch (e) {
@@ -11354,24 +11381,262 @@ const HistoryView = {
     const entries = CHANGELOG;
     const current = $('#history-current-version');
     if (current) current.textContent = entries.length ? `v${entries[0].version}` : '—';
-    if (!entries.length) {
+    if (entries.length) {
+      list.innerHTML = entries.map(e => `
+        <article class="history-entry">
+          <header class="history-entry-head">
+            <span class="history-version">v${escape(String(e.version))}</span>
+            <span class="history-date">${escape(e.date || '')}</span>
+          </header>
+          <h3 class="history-title">${escape(e.title || '')}</h3>
+          <ul class="history-changes">
+            ${(e.changes || []).map(c => `<li>${escape(c)}</li>`).join('')}
+          </ul>
+        </article>
+      `).join('');
+    } else {
       list.innerHTML = '<p class="muted small">No history entries yet.</p>';
-      return;
     }
-    list.innerHTML = entries.map(e => `
-      <article class="history-entry">
-        <header class="history-entry-head">
-          <span class="history-version">v${escape(String(e.version))}</span>
-          <span class="history-date">${escape(e.date || '')}</span>
-        </header>
-        <h3 class="history-title">${escape(e.title || '')}</h3>
-        <ul class="history-changes">
-          ${(e.changes || []).map(c => `<li>${escape(c)}</li>`).join('')}
-        </ul>
-      </article>
-    `).join('');
+    // Storage panel only runs for admins (the panel itself is gated by
+    // data-admin-only at the CSS layer, but no point computing sizes if
+    // the panel is hidden).
+    if (Auth.isAdmin()) StorageView.render();
   },
 };
+
+// -------------------- STORAGE DIAGNOSTIC --------------------
+// Breakdown of the in-memory state by area + a one-click compressor for
+// existing photos. Built in v4.33 after the user hit Supabase's free-tier
+// disk quota — photos uploaded prior to the v4.31/v4.29 sizing constants
+// got encoded at 1400px / 0.85, which adds up fast across insurance cards
+// and neighbor photos.
+const StorageView = {
+  // Recompression targets — same dim/quality as the *current* upload
+  // defaults so we converge on one consistent encoding. Re-running this
+  // on already-small photos is a near-no-op (encoder produces ≈same size).
+  TARGETS: {
+    member:     { maxDim: 480,  quality: 0.85 },
+    friend:     { maxDim: 720,  quality: 0.84 },
+    insurance:  { maxDim: 1000, quality: 0.78 },
+    neighbor:   { maxDim: 800,  quality: 0.80 },
+  },
+
+  init() {
+    on($('#btn-storage-refresh'), 'click', () => this.render());
+    on($('#btn-storage-compress'), 'click', () => this.compressAll());
+  },
+
+  // Approximate the byte size of any JSON-serializable value the way it
+  // would land in Postgres (close enough — Postgres's compressed JSONB is
+  // usually within 20% of this, and the relative breakdown is what
+  // matters).
+  bytesOf(v) {
+    try { return new Blob([JSON.stringify(v)]).size; } catch { return 0; }
+  },
+
+  fmt(bytes) {
+    if (!bytes && bytes !== 0) return '—';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  },
+
+  render() {
+    if (!Auth.isAdmin()) return;
+    const summary = $('#storage-summary');
+    const areaEl  = $('#storage-area-table');
+    const vaultEl = $('#storage-vault-table');
+    const photoEl = $('#storage-photo-table');
+    if (!summary || !areaEl || !vaultEl || !photoEl) return;
+
+    const state = Store.state || {};
+    const total = this.bytesOf(state);
+
+    // 1) Headline numbers.
+    summary.innerHTML = `
+      <div class="storage-headline">
+        <div><span class="muted small">Total state</span><strong>${this.fmt(total)}</strong></div>
+        <div><span class="muted small">Members</span><strong>${Object.keys(state.members || {}).length}</strong></div>
+        <div><span class="muted small">Friends</span><strong>${Object.keys(state.friends || {}).length}</strong></div>
+        <div><span class="muted small">Events</span><strong>${(state.events || []).length}</strong></div>
+        <div><span class="muted small">Gifts</span><strong>${(state.gifts || []).length}</strong></div>
+      </div>
+    `;
+
+    // 2) Top-level area breakdown. Sorted biggest-first, with optional
+    // delete affordance hinted via Notes column.
+    const areaRows = Object.entries(state)
+      .map(([k, v]) => {
+        let count = '';
+        if (Array.isArray(v)) count = v.length + ' items';
+        else if (v && typeof v === 'object') count = Object.keys(v).length + ' keys';
+        return { key: k, bytes: this.bytesOf(v), count };
+      })
+      .sort((a, b) => b.bytes - a.bytes);
+
+    areaEl.innerHTML = `
+      <table class="storage-grid">
+        <thead><tr><th>Area</th><th>Size</th><th>Count</th><th>% of total</th></tr></thead>
+        <tbody>
+          ${areaRows.map(r => `<tr>
+            <td><code>${escape(r.key)}</code></td>
+            <td>${this.fmt(r.bytes)}</td>
+            <td class="muted small">${escape(r.count)}</td>
+            <td>${total ? ((r.bytes / total) * 100).toFixed(1) + '%' : '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    // 3) Vault sub-section breakdown.
+    const vault = state.vault || {};
+    const vaultRows = Object.entries(vault)
+      .map(([k, v]) => ({ key: k, bytes: this.bytesOf(v), count: Array.isArray(v) ? v.length : null }))
+      .sort((a, b) => b.bytes - a.bytes);
+    vaultEl.innerHTML = `
+      <table class="storage-grid">
+        <thead><tr><th>Section</th><th>Size</th><th>Items</th></tr></thead>
+        <tbody>
+          ${vaultRows.map(r => `<tr>
+            <td><code>vault.${escape(r.key)}</code></td>
+            <td>${this.fmt(r.bytes)}</td>
+            <td class="muted small">${r.count == null ? '—' : r.count}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    // 4) Photos — count + total bytes per source. Friends and members
+    // each have a single .photo; insurance cards have frontPhoto +
+    // backPhoto; neighbors have .photo.
+    const photoSummary = [
+      this.photoStatsForMap(state.members,  'photo', 'Member photos'),
+      this.photoStatsForMap(state.friends,  'photo', 'Friend photos'),
+      this.photoStatsForArr(vault.insurances || [], 'frontPhoto', 'Insurance front photos'),
+      this.photoStatsForArr(vault.insurances || [], 'backPhoto',  'Insurance back photos'),
+      this.photoStatsForArr(vault.neighbors  || [], 'photo',      'Neighbor photos'),
+    ];
+    const photosTotal = photoSummary.reduce((s, r) => s + r.bytes, 0);
+    photoEl.innerHTML = `
+      <table class="storage-grid">
+        <thead><tr><th>Source</th><th># with photo</th><th>Total bytes</th><th>Avg size</th></tr></thead>
+        <tbody>
+          ${photoSummary.map(r => `<tr>
+            <td>${escape(r.label)}</td>
+            <td class="muted small">${r.count} of ${r.total}</td>
+            <td><strong>${this.fmt(r.bytes)}</strong></td>
+            <td class="muted small">${r.count ? this.fmt(Math.round(r.bytes / r.count)) : '—'}</td>
+          </tr>`).join('')}
+          <tr><td><strong>All photos</strong></td><td></td><td><strong>${this.fmt(photosTotal)}</strong></td><td class="muted small">${photosTotal && total ? ((photosTotal / total) * 100).toFixed(0) + '% of state' : ''}</td></tr>
+        </tbody>
+      </table>`;
+  },
+
+  photoStatsForMap(map, key, label) {
+    const all = Object.values(map || {});
+    let bytes = 0, count = 0;
+    for (const m of all) {
+      const v = m && m[key];
+      if (v && typeof v === 'string') { bytes += v.length; count++; }
+    }
+    return { label, count, total: all.length, bytes };
+  },
+  photoStatsForArr(arr, key, label) {
+    let bytes = 0, count = 0;
+    for (const r of (arr || [])) {
+      const v = r && r[key];
+      if (v && typeof v === 'string') { bytes += v.length; count++; }
+    }
+    return { label, count, total: (arr || []).length, bytes };
+  },
+
+  // One-click pass that walks every photo in the state, re-encodes it at
+  // smaller dimensions / quality, and writes back. Reports before/after.
+  // Skips photos that are already smaller than the recompressed result.
+  async compressAll() {
+    if (!Auth.isAdmin()) return;
+    if (!confirm('Recompress every photo in the database? Existing photos may lose a bit of sharpness, but the database row will shrink. This is a one-time pass — re-running it on already-compressed photos is safe but unnecessary.')) return;
+    const btn = $('#btn-storage-compress');
+    if (btn) { btn.disabled = true; btn.textContent = 'Compressing…'; }
+    let before = 0, after = 0, touched = 0, skipped = 0;
+    const state = Store.state;
+
+    const handle = async (host, key, target) => {
+      const src = host[key];
+      if (!src || typeof src !== 'string' || !src.startsWith('data:image')) return;
+      before += src.length;
+      try {
+        const out = await recompressDataUrl(src, target.maxDim, target.quality);
+        if (out && out.length < src.length * 0.95) {
+          host[key] = out;
+          after += out.length;
+          touched++;
+        } else {
+          // No meaningful savings — keep the original.
+          after += src.length;
+          skipped++;
+        }
+      } catch {
+        after += src.length;
+        skipped++;
+      }
+    };
+
+    // Members
+    for (const m of Object.values(state.members || {})) {
+      await handle(m, 'photo', this.TARGETS.member);
+    }
+    // Friends
+    for (const f of Object.values(state.friends || {})) {
+      await handle(f, 'photo', this.TARGETS.friend);
+    }
+    // Insurances (front + back)
+    for (const ins of (state.vault?.insurances || [])) {
+      await handle(ins, 'frontPhoto', this.TARGETS.insurance);
+      await handle(ins, 'backPhoto',  this.TARGETS.insurance);
+    }
+    // Neighbors
+    for (const n of (state.vault?.neighbors || [])) {
+      await handle(n, 'photo', this.TARGETS.neighbor);
+    }
+
+    Store.save();
+    // Flush immediately so the user sees the network call complete rather
+    // than wait for the 1500ms debounce.
+    try { await Backend.flushSaveArchive(state); } catch {}
+
+    if (btn) { btn.disabled = false; btn.textContent = 'Compress all photos'; }
+    const saved = before - after;
+    toast(`${touched} photo${touched === 1 ? '' : 's'} recompressed — saved ${this.fmt(saved)} (${skipped} skipped).`);
+    this.render();
+  },
+};
+
+// Re-encode an existing JPEG / PNG data URL at a smaller dim + quality.
+// Mirrors downscaleImageFile but takes a data URL instead of a File.
+// Returns a new data URL string (or the original on any decode failure).
+function recompressDataUrl(dataUrl, maxDim = 800, quality = 0.82) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(dataUrl);
+    img.onload = () => {
+      try {
+        const ratio = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * ratio));
+        const h = Math.max(1, Math.round(img.height * ratio));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.src = dataUrl;
+  });
+}
 
 // -------------------- PAGE EMOJIS --------------------
 // Admins can pin an emoji to each page. The emoji shows in the page H2 and
