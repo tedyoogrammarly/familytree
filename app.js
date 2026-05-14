@@ -715,6 +715,12 @@ const Store = {
         neighbors: [],    // [{ id, name, address, phone, kidsNote, photo, notes }]
       },
       vaultAccessIds: [], // optional extra member ids granted vault access
+      // v4.31: Friend Tree. Separate dataset from `members` (which is the
+      // family graph). Each friend record has the same shape as a member
+      // but without parent/child/spouse linking. Stored keyed by id so
+      // lookups stay O(1). Friend Tree view reads from here exclusively;
+      // Family Tree never touches it.
+      friends: {},
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -907,6 +913,22 @@ const Store = {
       });
     }
     if (!Array.isArray(this.state.vaultAccessIds)) this.state.vaultAccessIds = [];
+
+    // v4.31: Friend Tree dataset — defensive backfill so older archives don't
+    // crash on Store.state.friends access. Each existing record is normalized
+    // so the friend renderer can assume the same shape as a family member.
+    if (!this.state.friends || typeof this.state.friends !== 'object') {
+      this.state.friends = {};
+    }
+    for (const f of Object.values(this.state.friends)) {
+      if (!f.id) f.id = uid('frd');
+      ['firstName','middleName','lastName','displayName','internationalName',
+       'birthday','email','phone','address','city','state','zip',
+       'group','notes','photo','gender','dateOfDeath','plan529']
+        .forEach(k => { if (f[k] === undefined) f[k] = ''; });
+      if (!f.ageGroup) f.ageGroup = 'adult';
+      if (!f.createdAt) f.createdAt = Date.now();
+    }
     // Heal asymmetric parent/child links: if A says "B is my parent", make
     // sure B says "A is my child". This fixes profiles where one parent
     // shows up in the drawer but the other doesn't because childrenIds got
@@ -3085,7 +3107,7 @@ const Views = {
   show(name) {
     // Family role gets Calendar (read-only); everything else in the
     // admin-only set still bounces them to Tree.
-    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
+    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history' || name === 'friend-tree') && !Auth.isAdmin()) name = 'tree';
     if (name === 'calendar' && !Auth.canViewCalendar()) name = 'tree';
     if (name === 'vault' && !Auth.canAccessVault()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
@@ -3093,15 +3115,16 @@ const Views = {
     // Synchronous visibility flip — cheap and gives the click immediate
     // visual feedback (active nav-tab + new view shown).
     $$('.nav-tab').forEach(t => t.classList.toggle('is-active', t.dataset.view === name));
-    $('#view-dashboard').hidden  = name !== 'dashboard';
-    $('#view-tree').hidden       = name !== 'tree';
-    $('#view-myfamily').hidden   = name !== 'myfamily';
-    $('#view-admin').hidden      = name !== 'admin';
-    $('#view-vault').hidden      = name !== 'vault';
-    $('#view-history').hidden    = name !== 'history';
-    $('#view-events').hidden     = name !== 'events';
-    $('#view-calendar').hidden   = name !== 'calendar';
-    $('#view-gifts').hidden      = name !== 'gifts';
+    $('#view-dashboard').hidden    = name !== 'dashboard';
+    $('#view-tree').hidden         = name !== 'tree';
+    $('#view-myfamily').hidden     = name !== 'myfamily';
+    $('#view-friend-tree').hidden  = name !== 'friend-tree';
+    $('#view-admin').hidden        = name !== 'admin';
+    $('#view-vault').hidden        = name !== 'vault';
+    $('#view-history').hidden      = name !== 'history';
+    $('#view-events').hidden       = name !== 'events';
+    $('#view-calendar').hidden     = name !== 'calendar';
+    $('#view-gifts').hidden        = name !== 'gifts';
     // Defer the heavy per-view render to a fresh task. The click handler
     // returns immediately and the browser paints the visibility change in
     // <50ms (good INP). The render — which can run 100ms+ on a populated
@@ -3121,6 +3144,7 @@ const Views = {
       if (name === 'gifts')     GiftsView.render();
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'tree')      Canvas.renderAll();
+      if (name === 'friend-tree') FriendTreeView.render();
     }, 0);
   },
 };
@@ -8069,6 +8093,7 @@ function applyRemoteState(state) {
   if (Views?.current === 'calendar') CalendarView.render();
   if (Views?.current === 'gifts')    GiftsView.render();
   if (Views?.current === 'myfamily') MyFamilyView.render();
+  if (Views?.current === 'friend-tree' && typeof FriendTreeView !== 'undefined') FriendTreeView.render();
   refreshEventsNav();
   toast('Updated from another device.');
 }
@@ -8716,6 +8741,8 @@ async function init() {
   GiftsView.init();
   VaultView.init();
   RemindersModal.init();
+  FriendTreeView.init();
+  FriendModal.init();
   DashboardView.init();
   PageEmojis.init();
   bindLogin();
@@ -9365,6 +9392,17 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.31',
+    date: '2026-05-13',
+    title: 'New Friend Tree page + nav re-order (Calendar after Dashboard)',
+    changes: [
+      'New "Friend Tree" page (admin-only) for tracking people outside the family — neighbors, college friends, work, etc. Starts blank. Click "+ Add Friend" to add one. Each friend gets a card with name, photo, birthday, group, and notes; click into the card to edit. Same visual language as Family Tree cards.',
+      'Friends live in a separate dataset from Family Members (state.friends), so they never appear in Family Tree, My Family, Gifts, Events, or the Members admin page. The Friend Tree is intentionally its own world.',
+      'Nav re-ordered: Calendar now sits right after Dashboard. Family Tree → My Family → Friend Tree run as a group. The Events / Gifts / Members / Admin / History tabs follow.',
+      'Note: this is v1 of Friend Tree — friends render in a responsive card grid. The full pan/zoom canvas + relationship lines from Family Tree will come later as the dataset grows; that\'s a follow-up.',
+    ],
+  },
   {
     version: '4.29',
     date: '2026-05-13',
@@ -11343,6 +11381,244 @@ const PageEmojis = {
       prefix.textContent = e;
       prefix.style.marginRight = e ? '6px' : '0';
     });
+  },
+};
+
+// -------------------- FRIEND TREE --------------------
+// A parallel "tree" of friends — same visual language as Family Tree cards
+// but a separate dataset (Store.state.friends). v4.31 ships the page in a
+// card-grid form (no relationship-driven auto-layout yet); the data model
+// is set up so we can grow toward full pan-zoom + relationships later
+// without breaking what's already saved.
+const FriendTreeView = {
+  init() {
+    on($('#btn-friend-add'),       'click', () => FriendModal.openAdd());
+    on($('#btn-friend-add-first'), 'click', () => FriendModal.openAdd());
+  },
+  list() {
+    return Object.values(Store.state.friends || {});
+  },
+  render() {
+    const grid  = $('#friend-tree-grid');
+    const empty = $('#friend-tree-empty');
+    if (!grid || !empty) return;
+    const friends = sortFriends(this.list());
+    if (!friends.length) {
+      grid.innerHTML = '';
+      grid.hidden = true;
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    grid.hidden  = false;
+    grid.innerHTML = friends.map(f => friendCardHTML(f)).join('');
+    // Click on the card body opens the editor. The two inline action
+    // buttons each have their own data-action so we can route without
+    // racing the card click.
+    grid.querySelectorAll('.friend-card').forEach(card => {
+      const fid = card.dataset.fid;
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('[data-friend-action]')) return;
+        FriendModal.openEdit(fid);
+      });
+      card.querySelectorAll('[data-friend-action="edit"]').forEach(b =>
+        on(b, 'click', () => FriendModal.openEdit(fid)));
+      card.querySelectorAll('[data-friend-action="delete"]').forEach(b =>
+        on(b, 'click', () => FriendTreeView.delete(fid)));
+    });
+  },
+  delete(fid) {
+    if (!Auth.isAdmin()) return;
+    const f = Store.state.friends[fid]; if (!f) return;
+    if (!confirm(`Remove ${displayName(f)} from the Friend Tree?`)) return;
+    delete Store.state.friends[fid];
+    Store.save();
+    toast('Friend removed.');
+    this.render();
+  },
+};
+
+// Friends are sorted by last name then first, matching the Family Tree's
+// Members panel ordering. Empty last names fall to the end of the list.
+function sortFriends(list) {
+  return [...list].sort((a, b) => {
+    const al = (a.lastName  || '~').toLowerCase();
+    const bl = (b.lastName  || '~').toLowerCase();
+    if (al !== bl) return al.localeCompare(bl);
+    const af = (a.firstName || '').toLowerCase();
+    const bf = (b.firstName || '').toLowerCase();
+    return af.localeCompare(bf);
+  });
+}
+
+// Render one friend card. Visually matches the Family Tree's `.node` cards
+// (photo on top, name + meta below) but uses the `.friend-card` flow-layout
+// wrapper so it grids cleanly. Each card carries inline Edit / Delete
+// action buttons; clicking elsewhere on the card opens the editor.
+function friendCardHTML(f) {
+  const photoBg = f.photo ? `style="background-image:url('${f.photo}'); background-size: cover;"` : '';
+  const inner   = f.photo ? '' : Silhouettes.for(f);
+  const ageStr  = ageLabel(f.birthday, f.dateOfDeath);
+  const grp     = f.group || '';
+  return `
+    <div class="friend-card node" data-fid="${f.id}">
+      <div class="node-photo is-${f.gender || 'female'}" ${photoBg}>${inner}</div>
+      <div class="node-body">
+        <div class="node-name">${escape(displayName(f))}</div>
+        ${f.internationalName ? `<div class="node-international-name" title="International name">${escape(f.internationalName)}</div>` : ''}
+        ${grp ? `<div class="node-group">${escape(grp)}</div>` : ''}
+        ${ageStr ? `<div class="node-meta">
+          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          ${ageStr}
+        </div>` : ''}
+        <div class="friend-card-actions">
+          <button class="btn btn-ghost btn-sm" type="button" data-friend-action="edit">Edit</button>
+          <button class="btn btn-danger-ghost btn-sm" type="button" data-friend-action="delete">Delete</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// -------------------- FRIEND MODAL --------------------
+// Add / edit a single friend. Lightweight relative to the family
+// MemberModal — no relationship picker, no Supabase login mirror. Pure
+// CRUD against Store.state.friends. Photo upload reuses the existing
+// downscaleImageFile pipeline for inline JPEG storage.
+const FriendModal = {
+  editingId: null,
+  tempPhoto: '',
+  init() {
+    const el = $('#friend-modal'); if (!el) return;
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#friend-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#friend-delete'), 'click', () => this.deleteCurrent());
+    on($('#friend-photo-input'), 'change', (e) => this.onPhotoUpload(e));
+    on($('#friend-photo-clear'), 'click', () => this.clearPhoto());
+  },
+  openAdd() {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.tempPhoto = '';
+    $('#friend-modal-title').textContent = 'Add a friend';
+    $('#friend-delete').hidden = true;
+    $('#friend-submit').textContent = 'Save friend';
+    $('#friend-form').reset();
+    this.renderPhoto({ photo: '', gender: 'female' });
+    this.open();
+    setTimeout(() => $('#friend-form').firstName.focus(), 50);
+  },
+  openEdit(fid) {
+    if (!Auth.isAdmin()) return;
+    const f = Store.state.friends[fid]; if (!f) return;
+    this.editingId = fid;
+    this.tempPhoto = '';
+    $('#friend-modal-title').textContent = `Edit ${displayName(f)}`;
+    $('#friend-delete').hidden = false;
+    $('#friend-submit').textContent = 'Save changes';
+    const fm = $('#friend-form');
+    fm.firstName.value         = f.firstName || '';
+    fm.middleName.value        = f.middleName || '';
+    fm.lastName.value          = f.lastName || '';
+    fm.displayName.value       = f.displayName || '';
+    fm.internationalName.value = f.internationalName || '';
+    fm.birthday.value          = f.birthday || '';
+    fm.phone.value             = formatPhoneUS(f.phone || '');
+    fm.email.value             = f.email || '';
+    fm.group.value             = f.group || '';
+    fm.address.value           = f.address || '';
+    fm.notes.value             = f.notes || '';
+    fm.gender.value            = f.gender || 'female';
+    this.renderPhoto(f);
+    this.open();
+  },
+  open() {
+    const el = $('#friend-modal'); if (!el) return;
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+    $('#friend-error').hidden = true;
+  },
+  close() {
+    const el = $('#friend-modal'); if (!el) return;
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.tempPhoto = '';
+  },
+  renderPhoto(f) {
+    const preview = $('#friend-photo-preview');
+    if (!preview) return;
+    const src = this.tempPhoto || f.photo;
+    if (src) { preview.style.backgroundImage = `url('${src}')`; preview.innerHTML = ''; }
+    else { preview.style.backgroundImage = ''; preview.innerHTML = Silhouettes.for(f); }
+  },
+  async onPhotoUpload(e) {
+    const file = e.target.files?.[0]; if (!file) return;
+    try {
+      this.tempPhoto = await downscaleImageFile(file, 800, 0.88);
+      this.renderPhoto({ gender: $('#friend-form').gender.value });
+    } catch (err) {
+      toast('Could not load image: ' + err.message, 'warn');
+    } finally {
+      e.target.value = '';
+    }
+  },
+  clearPhoto() {
+    this.tempPhoto = '';
+    // Force-render with no photo by passing an empty f.
+    $('#friend-photo-preview').style.backgroundImage = '';
+    $('#friend-photo-preview').innerHTML = Silhouettes.for({ gender: $('#friend-form').gender.value });
+    // If editing an existing friend with a saved photo, mark it for removal
+    // on next save by stashing a sentinel. We use empty string as the
+    // sentinel ("save with no photo") — actually, since the save path
+    // reads this.tempPhoto and falls back to current f.photo, we need
+    // an explicit "clear" flag.
+    this._clearPhoto = true;
+  },
+  save() {
+    if (!Auth.isAdmin()) return;
+    const fm = $('#friend-form');
+    const fd = new FormData(fm);
+    const firstName = (fd.get('firstName') || '').toString().trim();
+    if (!firstName) {
+      $('#friend-error').textContent = 'First name is required.';
+      $('#friend-error').hidden = false;
+      return;
+    }
+    const id = this.editingId || uid('frd');
+    const existing = this.editingId ? (Store.state.friends[id] || {}) : {};
+    const friend = {
+      ...existing,
+      id,
+      firstName,
+      middleName:        (fd.get('middleName')        || '').toString().trim(),
+      lastName:          (fd.get('lastName')          || '').toString().trim(),
+      displayName:       (fd.get('displayName')       || '').toString().trim(),
+      internationalName: (fd.get('internationalName') || '').toString().trim(),
+      birthday:          (fd.get('birthday')          || '').toString(),
+      phone:             formatPhoneUS((fd.get('phone') || '').toString()),
+      email:             (fd.get('email')             || '').toString().trim(),
+      group:             (fd.get('group')             || '').toString().trim(),
+      address:           (fd.get('address')           || '').toString().trim(),
+      notes:             (fd.get('notes')             || '').toString(),
+      gender:            (fd.get('gender')            || 'female').toString(),
+      ageGroup:          existing.ageGroup || ageGroupForBirthday((fd.get('birthday') || '').toString()) || 'adult',
+      photo:             this._clearPhoto ? '' : (this.tempPhoto || existing.photo || ''),
+      dateOfDeath:       existing.dateOfDeath || '',
+      plan529:           existing.plan529 || '',
+      createdAt:         existing.createdAt || Date.now(),
+    };
+    Store.state.friends[id] = friend;
+    Store.save();
+    toast(this.editingId ? 'Friend saved.' : 'Friend added.');
+    this._clearPhoto = false;
+    this.close();
+    FriendTreeView.render();
+  },
+  deleteCurrent() {
+    if (!this.editingId) return;
+    const fid = this.editingId;
+    this.close();
+    FriendTreeView.delete(fid);
   },
 };
 
