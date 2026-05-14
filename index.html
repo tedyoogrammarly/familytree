@@ -82,9 +82,10 @@
         </button>
         <nav class="nav" role="tablist">
           <button class="nav-tab" data-view="dashboard" data-admin-only role="tab">Dashboard</button>
+          <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
-          <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
+          <button class="nav-tab" data-view="friend-tree" data-admin-only role="tab">Friend Tree</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -497,6 +498,85 @@
       </button>
       <div class="vault-lightbox-backdrop" data-vault-lightbox-close></div>
       <img class="vault-lightbox-img" alt="" />
+    </div>
+
+    <!-- ===== FRIEND TREE VIEW (admin only — for now mirrors a card-grid
+         shape of Family Tree; will grow toward full tree/canvas parity
+         as the dataset grows). ===== -->
+    <main id="view-friend-tree" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="friend-tree"></span>Friend Tree</h2>
+            <p class="muted">Friends, neighbors, and people in our world outside the family.</p>
+          </div>
+          <button class="btn btn-primary" id="btn-friend-add" data-admin-only>+ Add Friend</button>
+        </div>
+        <div id="friend-tree-empty" class="tree-empty" hidden>
+          <div class="tree-empty-card">
+            <h3>No friends yet</h3>
+            <p>Start by adding your first friend. They'll appear here as a card you can click into.</p>
+            <button class="btn btn-primary" id="btn-friend-add-first" data-admin-only>+ Add your first friend</button>
+          </div>
+        </div>
+        <div id="friend-tree-grid" class="friend-grid"></div>
+      </div>
+    </main>
+
+    <!-- ===== FRIEND MODAL (add / edit a friend) ===== -->
+    <div id="friend-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="friend-modal-title">
+        <header class="modal-head">
+          <h3 id="friend-modal-title">Add a friend</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="friend-form" class="modal-body">
+          <div class="grid-3">
+            <label class="field"><span>First name *</span><input name="firstName" required /></label>
+            <label class="field"><span>Middle name</span><input name="middleName" placeholder="(optional)" /></label>
+            <label class="field"><span>Last name</span><input name="lastName" /></label>
+          </div>
+          <label class="field"><span>Display name <span class="muted small">(optional)</span></span><input name="displayName" placeholder="e.g. Sam" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🌐</span>International name <span class="muted small">(optional)</span></span><input name="internationalName" /></label>
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📱</span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="email" type="email" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">👥</span>Group</span><input name="group" placeholder="e.g. College friends, Work, Neighbors" /></label>
+          </div>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🏠</span>Address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">📝</span>Notes</span><textarea name="notes" rows="3" placeholder="How you met, kids' names, anything worth remembering"></textarea></label>
+          <div class="field">
+            <span>Photo</span>
+            <div class="photo-row">
+              <div class="photo-preview" id="friend-photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="friend-photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="friend-photo-clear">Clear photo</button>
+              </div>
+            </div>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Gender</span>
+              <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
+            </label>
+          </div>
+          <p class="form-error" id="friend-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="friend-submit">Save friend</button>
+            <button class="btn btn-danger-ghost" type="button" id="friend-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <!-- ===== EVENTS VIEW (admin only) ===== -->
