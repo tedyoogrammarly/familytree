@@ -9475,6 +9475,17 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.34',
+    date: '2026-05-14',
+    title: 'CPU-tuned Supabase diagnostics + system-storage SQL',
+    changes: [
+      'After the user discovered that the Supabase pressure was CPU + system storage (WAL / replication slots / dead tuples) — not user-data size — both SQL helper files were reworked to be cheap to run on a constrained instance.',
+      'supabase/queries/storage-breakdown.sql: rewritten. Replaced every `octet_length(jsonb::text)` (which fully re-serializes the JSONB on each call) with `pg_column_size(jsonb)`. Materialized the archive row in a single CTE per query so we don\'t re-fetch from disk per metric. Coalesced the 5-way UNION ALL photo scan into one pass. Demoted the casual VACUUM FULL recommendation behind a warning + prefers plain VACUUM first.',
+      'New supabase/queries/system-storage-cpu.sql: ten ordered diagnostics — total DB split, top relations, WAL footprint, dead tuples + autovacuum freshness, the archive TOAST dead-tuple count, replication-slot lag (the usual smoking gun on Supabase free tier), pg_stat_statements top consumers, currently long-running queries, cache-hit ratios, and DDL to set aggressive per-table autovacuum + fillfactor=70 on public.archive and its TOAST partner.',
+      'No app behavior changes — diagnostics only.',
+    ],
+  },
+  {
     version: '4.33',
     date: '2026-05-14',
     title: 'Database storage diagnostic + one-click photo compression',
