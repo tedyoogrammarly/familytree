@@ -1761,6 +1761,34 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .table-friends th, .table-friends td { vertical-align: middle; }
 .table-friends td.muted-cell, .table-friends td .muted { color: var(--ink-500, #6b7280); }
 
+/* v4.38: two-line address cell on the Friends tab. Street on top, City/
+   State/Zip below. The flex layout keeps the copy button aligned with the
+   top line so its position is consistent regardless of cell height. */
+.address-multiline {
+  align-items: flex-start;
+  gap: 4px;
+}
+.address-multiline .address-lines { line-height: 1.35; }
+.address-multiline .address-lines > div + div {
+  color: var(--ink-500, #6b7280);
+  font-size: 12.5px;
+}
+.address-multiline .admin-email-copy { margin-top: 2px; }
+
+/* v4.38: inline "Event" toggle in the Members table. Sized to be tappable
+   on touch without looking heavy on desktop. */
+.event-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: background-color .12s ease-out;
+}
+.event-toggle:hover { background: var(--paper-soft, #f1ece1); }
+.event-toggle input { width: 16px; height: 16px; cursor: pointer; }
+
 /* v4.37: bank / utility account numbers — monospace + tabular numerals so
    the bullets line up cleanly, with a subtle reminder color. */
 .masked-number {
