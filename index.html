@@ -92,6 +92,7 @@
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
           <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
           <button class="nav-tab" data-view="recipes" role="tab">Recipes</button>
+          <button class="nav-tab" data-view="memories" role="tab">Memories</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -625,6 +626,96 @@
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit" id="recipe-submit">Save recipe</button>
             <button class="btn btn-danger-ghost" type="button" id="recipe-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== MEMORIES WALL (v4.45 — Wave 3b) =====
+         Reverse-chrono family feed. Admin-only post; everyone
+         authenticated views. Each post: date + rich-text body + up to
+         6 photos + multi-tag of people (members or friend household
+         persons). Photos in family-photos bucket (Wave 1 storage). -->
+    <main id="view-memories" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="memories"></span>Memories</h2>
+            <p>Moments worth holding on to — quick notes, a few photos, who was there.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-memory-add" data-admin-only>+ New post</button>
+          </div>
+        </div>
+        <section class="panel memories-panel">
+          <header class="panel-head">
+            <div>
+              <h3 id="memories-list-title">All memories</h3>
+            </div>
+            <div class="panel-head-tools">
+              <input id="memories-search" class="input" type="search" placeholder="Search posts…" autocomplete="off" />
+            </div>
+          </header>
+          <div id="memories-feed" class="memories-feed"></div>
+          <div id="memories-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No memories yet</h3>
+              <p>The first post gets the wall started. Pictures, a sentence about what happened, the people who were there.</p>
+              <button class="btn btn-primary" id="btn-memory-add-first" data-admin-only>+ Add the first memory</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== MEMORY POST MODAL (v4.45) -->
+    <div id="memory-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="memory-modal-title">
+        <header class="modal-head">
+          <h3 id="memory-modal-title">New post</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="memory-form" class="modal-body">
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Date *</span><input name="date" type="date" required /></label>
+          <div class="field">
+            <span>What happened</span>
+            <div class="rich-text-editor" id="memory-body-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Post formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="memory-body-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="A few sentences. Who was there, what made it memorable."></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Tag people <span class="muted small">(optional — family or friends)</span></span>
+            <div id="memory-tag-chips" class="memory-tag-chips" aria-live="polite"></div>
+            <select id="memory-tag-picker" class="input">
+              <option value="">+ Add person to tag…</option>
+            </select>
+          </div>
+          <div class="field" id="memory-photos-wrap">
+            <span>Photos <span class="muted small">(up to 6)</span></span>
+            <div class="mykids-photo-grid" id="memory-photo-grid"></div>
+            <label class="btn btn-secondary btn-sm" id="memory-photo-add-label">
+              + Add photo
+              <input type="file" accept="image/*" id="memory-photo-input" hidden multiple />
+            </label>
+          </div>
+          <p class="form-error" id="memory-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="memory-submit">Save post</button>
+            <button class="btn btn-danger-ghost" type="button" id="memory-delete" hidden>Delete post</button>
             <button class="btn btn-ghost" type="button" data-close>Cancel</button>
           </div>
         </form>
