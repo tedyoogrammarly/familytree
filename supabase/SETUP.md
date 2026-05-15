@@ -20,6 +20,19 @@ A short, one-time setup so the app reads/writes from a real database instead of 
    - RLS policies (auth required to read, admin required to write)
    - `claim_first_admin()` — promotes the first sign-up to admin
 
+## 2b. Set up Storage buckets *(needed for v4.39+ features)*
+
+Photos, audio, and video for the newer features (Memories Wall, My Kids, Voice Stories, Documents) live in Supabase Storage rather than the JSONB archive — that's what keeps the row from ballooning to multi-MB and tipping over the database CPU.
+
+1. SQL Editor (same place you ran `schema.sql`).
+2. Open `supabase/storage.sql`, copy the whole file, paste, **Run**.
+3. You should see "Success. No rows returned." That created:
+   - `family-photos`, `family-audio`, `family-video`, `family-documents` buckets (all private)
+   - File-size limits per bucket (10 MB photos / 20 MB audio / 100 MB video / 25 MB docs)
+   - RLS policies — admin can upload/delete in every bucket; authenticated users can view photos / audio / video; documents are admin-only end-to-end.
+
+You can verify by going to **Storage** in the left sidebar — you should see all four buckets listed.
+
 ## 3. Enable email auth
 
 1. Left sidebar → **Authentication** → **Providers**.

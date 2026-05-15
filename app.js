@@ -239,6 +239,61 @@ const Backend = {
     return this.saveInFlight;
   },
 
+  // -------------------------------------------------------------
+  // v4.39: Supabase Storage helpers for media-heavy features
+  // (Memories Wall, My Kids, Recipes, Voice/Video Stories, Documents).
+  // Buckets + RLS are set up by supabase/storage.sql. The archive JSONB
+  // only stores `{ bucket, path }` references; uploadMedia returns those
+  // and getMediaUrl resolves them to a signed URL on display.
+  // -------------------------------------------------------------
+  // Upload a File (from <input type=file>) to a named bucket.
+  //   opts: { bucket: 'family-photos', folder: 'memories', maxBytes }
+  // Returns { ok, bucket, path, contentType, sizeBytes } or { ok: false, reason }.
+  async uploadMedia(file, opts = {}) {
+    if (!this.client) return { ok: false, reason: 'Backend unavailable.' };
+    if (!file)        return { ok: false, reason: 'No file selected.' };
+    const bucket = opts.bucket;
+    if (!bucket) return { ok: false, reason: 'Missing bucket.' };
+    if (opts.maxBytes && file.size > opts.maxBytes) {
+      return { ok: false, reason: `File is ${(file.size / 1024 / 1024).toFixed(1)} MB; max allowed is ${(opts.maxBytes / 1024 / 1024).toFixed(0)} MB.` };
+    }
+    // Object path: `{folder}/{ts}-{random}.{ext}`. The timestamp gives a
+    // rough chronology when browsing the bucket in the dashboard; the
+    // random suffix prevents accidental collisions on rapid uploads.
+    const folder = (opts.folder || 'misc').replace(/[^a-z0-9/_-]/gi, '');
+    const dot    = file.name.lastIndexOf('.');
+    const extRaw = dot > 0 ? file.name.slice(dot + 1) : '';
+    const ext    = (extRaw || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6) || 'bin';
+    const rand   = Math.random().toString(36).slice(2, 9);
+    const path   = `${folder}/${Date.now()}-${rand}.${ext}`;
+    const { data, error } = await this.client.storage
+      .from(bucket)
+      .upload(path, file, { contentType: file.type || undefined, upsert: false });
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true, bucket, path: data.path, contentType: file.type || '', sizeBytes: file.size };
+  },
+
+  // Resolve a `{ bucket, path }` reference to a signed URL the browser
+  // can render. expirySec defaults to 1 hour, which is long enough for a
+  // page session — callers should re-resolve when re-entering a page.
+  async getMediaUrl(bucket, path, expirySec = 3600) {
+    if (!this.client || !bucket || !path) return null;
+    const { data, error } = await this.client.storage
+      .from(bucket)
+      .createSignedUrl(path, expirySec);
+    if (error) return null;
+    return data.signedUrl;
+  },
+
+  // Delete a media object. Admin-only (enforced by storage RLS). Safe to
+  // call from cleanup paths — returns true if deleted or didn't exist.
+  async deleteMedia(bucket, path) {
+    if (!this.client || !bucket || !path) return false;
+    const { error } = await this.client.storage.from(bucket).remove([path]);
+    if (error) { console.warn('deleteMedia:', error.message); return false; }
+    return true;
+  },
+
   // Realtime: re-hydrate Store.state when another device updates the row.
   // We ignore our own echoes by checking updated_by.
   subscribeArchive() {
@@ -9733,6 +9788,16 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.39',
+    date: '2026-05-15',
+    title: 'Storage foundation (Wave 1 of family-portal expansion)',
+    changes: [
+      'New supabase/storage.sql migration creates four private buckets — family-photos, family-audio, family-video, family-documents — with per-file size limits and RLS policies. Admin can upload/delete in all four; authenticated users can view photos/audio/video; documents are admin-only end-to-end. Run it once from the Supabase SQL Editor (see supabase/SETUP.md step 2b).',
+      'Backend.uploadMedia() / getMediaUrl() / deleteMedia() helpers added. Uploads return { bucket, path } refs that get stored back in the JSONB archive; getMediaUrl resolves to a signed URL on display. Keeps the archive row small (the CPU pain point) while still letting features hold rich media.',
+      'No visible UI changes — this PR is pure infrastructure for the upcoming My Kids, Annual Letter, Recipes, Memories Wall, Time Capsule, Voice/Video Stories, Documents, Health Locker, and Newsletter features.',
+    ],
+  },
   {
     version: '4.38',
     date: '2026-05-15',
