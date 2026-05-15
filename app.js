@@ -841,6 +841,11 @@ const Store = {
       // / 'k:fid:kid_id'), plus a free-text fallback for non-people
       // attribution ("from a Korean cookbook").
       recipes: [],
+      // v4.45: Memories Wall. Admin-only CRUD; everyone authenticated
+      // views. Each post: date + rich-text body + up to 6 photos
+      // (bucket+path refs into Storage) + multi-tag list of people refs
+      // (m:/f:/s:/k:). Reverse-chrono feed.
+      memories: [],
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -1064,6 +1069,18 @@ const Store = {
        'fromRef','fromText'].forEach(k => { if (r[k] === undefined) r[k] = ''; });
       if (r.photo !== null && (typeof r.photo !== 'object' || Array.isArray(r.photo))) r.photo = null;
       if (r.createdAt === undefined) r.createdAt = Date.now();
+    }
+
+    // v4.45: memories feed. Defensive backfill so render code can assume
+    // the shape — photos array, tags array, body string.
+    if (!Array.isArray(this.state.memories)) this.state.memories = [];
+    for (const m of this.state.memories) {
+      if (!m.id) m.id = uid('mem');
+      if (!Array.isArray(m.photos)) m.photos = [];
+      if (!Array.isArray(m.tags))   m.tags = [];
+      if (m.body      === undefined) m.body = '';
+      if (m.date      === undefined) m.date = '';
+      if (m.createdAt === undefined) m.createdAt = Date.now();
     }
     for (const kidId of Object.keys(this.state.myKids)) {
       const k = this.state.myKids[kidId];
@@ -3338,6 +3355,7 @@ const Views = {
     $('#view-myfamily').hidden     = name !== 'myfamily';
     $('#view-mykids').hidden       = name !== 'mykids';
     $('#view-recipes').hidden      = name !== 'recipes';
+    $('#view-memories').hidden     = name !== 'memories';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3367,6 +3385,7 @@ const Views = {
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
+      if (name === 'memories')  MemoriesView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9206,6 +9225,7 @@ async function init() {
   DashboardView.init();
   MyKidsView.init();
   RecipesView.init();
+  MemoriesView.init();
   PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
@@ -9854,6 +9874,19 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.45',
+    date: '2026-05-15',
+    title: 'Memories Wall (Wave 3b of family-portal expansion)',
+    changes: [
+      'New "Memories" top-level nav tab — a reverse-chrono family feed. Admin-only post; everyone authenticated can view.',
+      'Post shape: date (required) + rich-text body (B/I/U/list/link/emoji) + up to 6 photos + multi-tag of people. Tags can be any family member or any friend household person (primary / spouse / kid).',
+      'Live search box filters posts across body, date, and tagged-people names.',
+      'Photos: same Wave 1 Storage pipeline as My Kids — 2400px downscale, uploaded to family-photos. The archive row only carries { bucket, path } refs per photo.',
+      'Photo click → reuses MyKidsLightbox for full-screen + prev/next nav.',
+      'CPU/memory: zero new SQL or realtime channels. Posts live as a flat JSONB list; photo binaries stay in Storage.',
+    ],
+  },
   {
     version: '4.44',
     date: '2026-05-15',
@@ -14680,6 +14713,453 @@ const RecipeModal = {
     const id = this.editingId;
     this.close();
     RecipesView.deleteRecipe(id);
+  },
+};
+
+// -------------------- MEMORIES WALL (v4.45 — Wave 3b) --------------------
+// Reverse-chrono feed of memory posts. Each post: date + rich-text body
+// + up to 6 photos + multi-tag of people. Admin-only write, everyone
+// authenticated can read. Tags use the same m:/f:/s:/k: ref shape as
+// the events picker, so a tagged person resolves to a member or any
+// friend household person consistently across the app.
+const MemoriesView = {
+  searchQuery: '',
+  signedUrlCache: new Map(),
+
+  init() {
+    on($('#btn-memory-add'),       'click', () => MemoryModal.openAdd());
+    on($('#btn-memory-add-first'), 'click', () => MemoryModal.openAdd());
+    const search = $('#memories-search');
+    if (search) {
+      on(search, 'input', () => {
+        this.searchQuery = (search.value || '').trim().toLowerCase();
+        this.render();
+      });
+    }
+    MemoryModal.init();
+  },
+
+  list() {
+    return Array.isArray(Store.state.memories) ? Store.state.memories : [];
+  },
+
+  // Filter + sort. Sort by date descending (newest first), falling back
+  // to createdAt for posts that share a date.
+  filtered() {
+    const q = this.searchQuery;
+    let list = this.list();
+    if (q) {
+      list = list.filter(m => {
+        const hay = [
+          (m.body || '').replace(/<[^>]+>/g, ''),
+          m.date,
+          (m.tags || []).map(t => resolvePersonRefLabel(t)).join(' '),
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    return list.slice().sort((a, z) => {
+      const cmp = (z.date || '').localeCompare(a.date || '');
+      if (cmp !== 0) return cmp;
+      return (z.createdAt || 0) - (a.createdAt || 0);
+    });
+  },
+
+  render() {
+    const feed  = $('#memories-feed');
+    const empty = $('#memories-empty');
+    if (!feed || !empty) return;
+    const list = this.filtered();
+    const title = $('#memories-list-title');
+    if (title) {
+      title.textContent = this.searchQuery
+        ? `Matches for "${this.searchQuery}" (${list.length})`
+        : `All memories (${list.length})`;
+    }
+    const totalUnfiltered = this.list().length;
+    if (!totalUnfiltered) {
+      feed.innerHTML = '';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    if (!list.length) {
+      feed.innerHTML = `<p class="muted" style="padding:24px; text-align:center;">No posts matching "${escape(this.searchQuery)}".</p>`;
+      return;
+    }
+    feed.innerHTML = list.map(m => this.postHTML(m)).join('');
+    feed.querySelectorAll('[data-mem-edit]').forEach(btn => {
+      on(btn, 'click', () => MemoryModal.openEdit(btn.dataset.memEdit));
+    });
+    feed.querySelectorAll('[data-mem-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deletePost(btn.dataset.memDelete));
+    });
+    feed.querySelectorAll('[data-mem-photo]').forEach(el => this.resolvePhotoSrc(el));
+    feed.querySelectorAll('[data-mem-photo]').forEach(tile => {
+      on(tile, 'click', () => this.openLightboxFromTile(tile));
+      on(tile, 'keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this.openLightboxFromTile(tile);
+        }
+      });
+    });
+  },
+
+  postHTML(m) {
+    const photos = (m.photos || []).map((p, i) => `
+      <div class="mykids-photo" data-mem-photo data-bucket="${escape(p.bucket || 'family-photos')}" data-path="${escape(p.path || '')}" data-mem-id="${escape(m.id)}" data-photo-idx="${i}" tabindex="0" aria-label="Photo ${i + 1}"></div>
+    `).join('');
+    const bodyHTML = m.body
+      ? (/<[a-z][^>]*>/i.test(m.body)
+          ? `<div class="memory-body rich">${RichText.sanitize(m.body)}</div>`
+          : `<div class="memory-body">${escape(m.body).replace(/\n/g, '<br>')}</div>`)
+      : '';
+    const tagsHTML = (m.tags || []).length
+      ? `<div class="memory-tags">${(m.tags || []).map(t => {
+          const label = resolvePersonRefLabel(t);
+          return label ? `<span class="memory-tag">${escape(label)}</span>` : '';
+        }).join('')}</div>`
+      : '';
+    const actions = Auth.isAdmin() ? `
+      <div class="memory-actions">
+        <button class="btn btn-ghost btn-sm"        type="button" data-mem-edit="${escape(m.id)}">Edit</button>
+        <button class="btn btn-danger-ghost btn-sm" type="button" data-mem-delete="${escape(m.id)}">Delete</button>
+      </div>` : '';
+    return `
+      <article class="memory-post" data-id="${escape(m.id)}">
+        <header class="memory-head">
+          <time class="memory-date">${m.date ? formatDate(m.date) : '—'}</time>
+          ${actions}
+        </header>
+        ${bodyHTML}
+        ${tagsHTML}
+        ${photos ? `<div class="memory-photos">${photos}</div>` : ''}
+      </article>`;
+  },
+
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket;
+    const path   = el.dataset.path;
+    if (!bucket || !path) return;
+    const key = `${bucket}|${path}`;
+    const now = Date.now();
+    const cached = this.signedUrlCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      el.style.backgroundImage = `url('${cached.url}')`;
+      return;
+    }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${url}')`;
+  },
+
+  openLightboxFromTile(tile) {
+    const memId = tile.dataset.memId;
+    const idx   = Number(tile.dataset.photoIdx) || 0;
+    const m = this.list().find(x => x.id === memId);
+    if (!m || !m.photos?.length) return;
+    MyKidsLightbox.open(m.photos, idx);
+  },
+
+  async deletePost(id) {
+    if (!Auth.isAdmin()) return;
+    const m = this.list().find(x => x.id === id); if (!m) return;
+    if (!confirm('Delete this post? Photos attached to it are also removed from storage.')) return;
+    for (const p of (m.photos || [])) {
+      await Backend.deleteMedia(p.bucket, p.path);
+    }
+    Store.state.memories = this.list().filter(x => x.id !== id);
+    Store.save();
+    toast('Post deleted.');
+    this.render();
+  },
+};
+
+// Resolve a person ref (m:/f:/s:/k:) to a display label. Used by the
+// memories feed for tag chips + search. Centralized so other features
+// can reuse the same shape (e.g. recipes already does this inline).
+function resolvePersonRefLabel(ref) {
+  if (!ref || typeof ref !== 'string') return '';
+  if (ref.startsWith('m:')) {
+    const m = Store.byId(ref.slice(2));
+    return m ? displayName(m) : '';
+  }
+  if (ref.startsWith('f:')) {
+    const f = Store.state.friends?.[ref.slice(2)];
+    return f ? displayName(f) : '';
+  }
+  if (ref.startsWith('s:')) {
+    const f = Store.state.friends?.[ref.slice(2)];
+    return f?.spouse ? displayName(f.spouse) : '';
+  }
+  if (ref.startsWith('k:')) {
+    const parts = ref.split(':');
+    const f = Store.state.friends?.[parts[1]];
+    const k = (f?.kids || []).find(x => x.id === parts[2]);
+    return k ? displayName(k) : '';
+  }
+  return '';
+}
+
+// -------------------- MEMORY MODAL (v4.45) --------------------
+const MemoryModal = {
+  editingId: null,
+  pendingPhotos: [],
+  workingTags: [],
+  uploading: 0,
+
+  init() {
+    const el = $('#memory-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#memory-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#memory-delete'), 'click', () => this.deleteCurrent());
+    on($('#memory-photo-input'), 'change', (e) => this.onPhotoPick(e));
+    on($('#memory-tag-picker'),  'change', (e) => this.onTagPick(e));
+    RichText.mount($('#memory-body-editor'));
+    // Emoji button in body editor → reuse the same proxy pattern other
+    // editors use.
+    $('#memory-body-editor')?.addEventListener('rt-emoji', () => {
+      const surface = $('#memory-body-editor [data-rt-surface]');
+      let proxy = $('#memory-body-emoji-proxy');
+      if (!proxy) {
+        proxy = document.createElement('input');
+        proxy.type = 'hidden';
+        proxy.id = 'memory-body-emoji-proxy';
+        document.body.appendChild(proxy);
+        proxy.addEventListener('change', () => {
+          const ch = proxy.value; if (!ch) return;
+          proxy.value = '';
+          surface?.focus();
+          try { document.execCommand('insertText', false, ch); }
+          catch { surface?.appendChild(document.createTextNode(ch)); }
+        });
+      }
+      EmojiPicker.open(proxy, $('#memory-body-emoji'));
+    });
+  },
+
+  populateTagPicker() {
+    const sel = $('#memory-tag-picker'); if (!sel) return;
+    const taken = new Set(this.workingTags);
+    const memberOpts = sortMembers(Store.membersList())
+      .filter(m => !m.dateOfDeath && !taken.has('m:' + m.id))
+      .map(m => `<option value="m:${m.id}">${escape(displayName(m))}</option>`);
+    const friendOpts = [];
+    sortFriends(Object.values(Store.state.friends || {})).forEach(f => {
+      if (!taken.has('f:' + f.id)) friendOpts.push(`<option value="f:${f.id}">${escape(displayName(f))}</option>`);
+      if (f.spouse && !taken.has('s:' + f.id)) {
+        friendOpts.push(`<option value="s:${f.id}">${escape(displayName(f.spouse))} (spouse of ${escape(displayName(f))})</option>`);
+      }
+      (f.kids || []).forEach(k => {
+        if (!taken.has(`k:${f.id}:${k.id}`)) {
+          friendOpts.push(`<option value="k:${f.id}:${k.id}">${escape(displayName(k))} (child of ${escape(displayName(f))})</option>`);
+        }
+      });
+    });
+    sel.innerHTML = `
+      <option value="">+ Add person to tag…</option>
+      ${memberOpts.length ? `<optgroup label="Family">${memberOpts.join('')}</optgroup>` : ''}
+      ${friendOpts.length ? `<optgroup label="Friends">${friendOpts.join('')}</optgroup>` : ''}
+    `;
+    sel.value = '';
+  },
+
+  renderTagChips() {
+    const host = $('#memory-tag-chips'); if (!host) return;
+    host.innerHTML = this.workingTags.map(ref => {
+      const label = resolvePersonRefLabel(ref) || '(unknown)';
+      return `<span class="memory-tag-chip"><span>${escape(label)}</span><button type="button" class="memory-tag-x" data-remove-tag="${escape(ref)}" aria-label="Remove tag">×</button></span>`;
+    }).join('') || '<span class="muted small">Nobody tagged yet.</span>';
+    host.querySelectorAll('[data-remove-tag]').forEach(btn => {
+      on(btn, 'click', () => {
+        this.workingTags = this.workingTags.filter(t => t !== btn.dataset.removeTag);
+        this.renderTagChips();
+        this.populateTagPicker();
+      });
+    });
+  },
+
+  onTagPick(e) {
+    const v = e.target.value; if (!v) return;
+    if (!this.workingTags.includes(v)) this.workingTags.push(v);
+    this.renderTagChips();
+    this.populateTagPicker();
+  },
+
+  openAdd() {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.pendingPhotos = [];
+    this.workingTags = [];
+    this.reset();
+    $('#memory-modal-title').textContent = 'New post';
+    $('#memory-submit').textContent = 'Save post';
+    $('#memory-delete').hidden = true;
+    RichText.write($('#memory-body-editor'), '');
+    $('#memory-form').date.value = new Date().toISOString().slice(0, 10);
+    this.populateTagPicker();
+    this.renderTagChips();
+    this.renderPhotoGrid();
+    this.open();
+    setTimeout(() => $('#memory-form').date.focus(), 50);
+  },
+
+  openEdit(id) {
+    if (!Auth.isAdmin()) return;
+    const m = (Store.state.memories || []).find(x => x.id === id); if (!m) return;
+    this.editingId = id;
+    this.pendingPhotos = (m.photos || []).map(p => ({ status: 'saved', bucket: p.bucket, path: p.path }));
+    this.workingTags = (m.tags || []).slice();
+    this.reset();
+    $('#memory-modal-title').textContent = 'Edit post';
+    $('#memory-submit').textContent = 'Save changes';
+    $('#memory-delete').hidden = false;
+    RichText.write($('#memory-body-editor'), m.body || '');
+    $('#memory-form').date.value = m.date || '';
+    this.populateTagPicker();
+    this.renderTagChips();
+    this.renderPhotoGrid();
+    this.open();
+  },
+
+  reset() {
+    const fm = $('#memory-form');
+    if (fm) { fm.reset(); }
+    $('#memory-error').hidden = true;
+  },
+  open() {
+    const el = $('#memory-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+  },
+  close() {
+    const el = $('#memory-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.pendingPhotos = [];
+    this.workingTags = [];
+  },
+
+  async onPhotoPick(e) {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (!files.length) return;
+    const room = 6 - this.pendingPhotos.length;
+    if (room <= 0) { toast('Max 6 photos per post.', 'warn'); return; }
+    const toUpload = files.slice(0, room);
+    if (files.length > room) toast(`Only first ${room} added — max 6 per post.`, 'warn');
+    for (const file of toUpload) {
+      const placeholder = { status: 'uploading' };
+      this.pendingPhotos.push(placeholder);
+      this.renderPhotoGrid();
+      this.uploading++;
+      try {
+        const blob = await downscaleImageToBlob(file, 2400, 0.85);
+        const result = await Backend.uploadMedia(
+          new File([blob], file.name, { type: 'image/jpeg' }),
+          { bucket: 'family-photos', folder: 'memories', maxBytes: 10 * 1024 * 1024 }
+        );
+        if (!result.ok) throw new Error(result.reason);
+        placeholder.status = 'saved';
+        placeholder.bucket = result.bucket;
+        placeholder.path = result.path;
+      } catch (err) {
+        placeholder.status = 'failed';
+        toast(`Photo upload failed: ${err.message || err}`, 'warn');
+      } finally {
+        this.uploading--;
+        this.renderPhotoGrid();
+      }
+    }
+  },
+
+  renderPhotoGrid() {
+    const grid = $('#memory-photo-grid');
+    if (!grid) return;
+    grid.innerHTML = this.pendingPhotos.map((p, i) => {
+      const badge = p.status === 'uploading' ? '<span class="mk-photo-badge">Uploading…</span>'
+                  : p.status === 'failed'    ? '<span class="mk-photo-badge is-fail">Failed</span>'
+                  : '';
+      return `
+        <div class="mykids-photo mk-photo-pending ${p.status === 'failed' ? 'is-failed' : ''}">
+          ${p.status === 'saved' ? `<div class="mk-photo-img" data-mem-photo-preview data-bucket="${escape(p.bucket || '')}" data-path="${escape(p.path || '')}"></div>` : ''}
+          ${badge}
+          <button type="button" class="mk-photo-remove" data-remove-photo="${i}" aria-label="Remove photo">×</button>
+        </div>`;
+    }).join('');
+    grid.querySelectorAll('[data-remove-photo]').forEach(btn => {
+      on(btn, 'click', () => {
+        const i = Number(btn.dataset.removePhoto);
+        const p = this.pendingPhotos[i];
+        if (p?.status === 'saved' && p.bucket && p.path) Backend.deleteMedia(p.bucket, p.path);
+        this.pendingPhotos.splice(i, 1);
+        this.renderPhotoGrid();
+      });
+    });
+    grid.querySelectorAll('[data-mem-photo-preview]').forEach(el => MemoriesView.resolvePhotoSrc(el));
+    const lbl = $('#memory-photo-add-label');
+    if (lbl) lbl.style.display = (this.pendingPhotos.length >= 6 ? 'none' : '');
+  },
+
+  async save() {
+    if (!Auth.isAdmin()) return;
+    if (this.uploading > 0) {
+      $('#memory-error').textContent = 'Wait for photos to finish uploading.';
+      $('#memory-error').hidden = false;
+      return;
+    }
+    const fm = $('#memory-form');
+    const fd = new FormData(fm);
+    const date = (fd.get('date') || '').toString().trim();
+    if (!date) {
+      $('#memory-error').textContent = 'Date is required.';
+      $('#memory-error').hidden = false;
+      return;
+    }
+    const body = RichText.read($('#memory-body-editor'));
+    const photos = this.pendingPhotos
+      .filter(p => p.status === 'saved' && p.bucket && p.path)
+      .map(p => ({ bucket: p.bucket, path: p.path }));
+    if (!body && !photos.length) {
+      $('#memory-error').textContent = 'Add a few words or at least one photo.';
+      $('#memory-error').hidden = false;
+      return;
+    }
+    if (!Array.isArray(Store.state.memories)) Store.state.memories = [];
+    const existing = this.editingId
+      ? Store.state.memories.find(m => m.id === this.editingId)
+      : null;
+    const record = {
+      ...(existing || {}),
+      id: this.editingId || uid('mem'),
+      date,
+      body,
+      photos,
+      tags: this.workingTags.slice(),
+      createdAt: existing?.createdAt || Date.now(),
+      createdBy: existing?.createdBy || Backend.user?.id || null,
+    };
+    if (existing) {
+      const idx = Store.state.memories.findIndex(m => m.id === this.editingId);
+      Store.state.memories[idx] = record;
+    } else {
+      Store.state.memories.push(record);
+    }
+    Store.save();
+    toast(this.editingId ? 'Post saved.' : 'Post added.');
+    this.close();
+    MemoriesView.render();
+  },
+
+  async deleteCurrent() {
+    if (!this.editingId) return;
+    const id = this.editingId;
+    this.close();
+    MemoriesView.deletePost(id);
   },
 };
 

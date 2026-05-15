@@ -4995,3 +4995,107 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .recipe-detail-name { font-size: 24px; }
   .recipe-detail-photo { max-width: 100%; }
 }
+
+/* ============================================================
+   v4.45  MEMORIES WALL (Wave 3b)
+   Reverse-chrono feed of posts. Each post is a card with a date,
+   body, optional tags, optional photo grid. Photos click-to-lightbox
+   reusing MyKidsLightbox.
+   ============================================================ */
+
+.memories-panel { padding-bottom: 8px; }
+.memories-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px 22px;
+}
+.memory-post {
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-radius: 14px;
+  padding: 16px 18px;
+  transition: border-color .15s var(--ease-out), box-shadow .15s var(--ease-out);
+}
+.memory-post:hover {
+  border-color: rgba(99, 102, 241, 0.25);
+}
+.memory-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.memory-date {
+  font-size: 13px;
+  color: var(--ink-500);
+  font-weight: 500;
+}
+.memory-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.memory-body {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-900);
+}
+.memory-body.rich a {
+  color: var(--brand-900, #0044cc);
+  text-decoration: underline;
+}
+.memory-body.rich ul, .memory-body.rich ol { margin: 6px 0 6px 22px; padding: 0; }
+.memory-tags {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.memory-tag {
+  background: rgba(99, 102, 241, 0.10);
+  color: var(--brand-900);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: 99px;
+}
+.memory-photos {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+/* Composer modal — tag chips inline above the picker. */
+.memory-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-height: 22px;
+}
+.memory-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px 3px 10px;
+  background: rgba(99, 102, 241, 0.10);
+  color: var(--brand-900);
+  border-radius: 99px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.memory-tag-x {
+  border: 0;
+  background: transparent;
+  color: var(--brand-900);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 50%;
+}
+.memory-tag-x:hover { background: rgba(99, 102, 241, 0.2); }
+
+@media (max-width: 760px) {
+  .memories-feed { padding: 10px 12px 18px; }
+  .memory-photos { grid-template-columns: repeat(3, 1fr); }
+}
