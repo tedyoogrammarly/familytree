@@ -565,6 +565,11 @@ const EthnicityPicker = {
       const set = new Set(cur);
       set.has(code) ? set.delete(code) : set.add(code);
       container.dataset.value = [...set].join(',');
+      // v4.37: clear the search box after a pick so the next ethnicity
+      // search starts fresh. Previously you had to manually backspace out
+      // the previous query before searching again, which got tedious when
+      // tagging a multi-ethnic person.
+      if (search) { search.value = ''; setTimeout(() => search.focus(), 0); }
       render();
     });
     chips.addEventListener('click', (e) => {
@@ -1787,21 +1792,6 @@ function heartMarker(x, y, divorced) {
     <path d="${path}" class="heart-fill"/>
     <path d="M -1.4 -0.5 L 1 4 L -1 8 L 1.4 13 L -0.5 17" class="heart-crack"/>
   </g>`;
-}
-
-function setOrientation(value) {
-  Store.state.orientation = value;
-  Store.save();
-  // re-layout to match the new orientation
-  autoLayout(value);
-  Canvas.renderAll();
-  Canvas.fit();
-  // swap toolbar icon
-  const v = document.getElementById('orient-icon-vertical');
-  const h = document.getElementById('orient-icon-horizontal');
-  const btn = document.getElementById('btn-orientation');
-  if (value === 'horizontal') { v.hidden = true; h.hidden = false; btn.title = 'Switch to vertical view'; }
-  else { v.hidden = false; h.hidden = true; btn.title = 'Switch to horizontal view'; }
 }
 
 // -------------------- LAYOUT --------------------
@@ -8424,11 +8414,10 @@ function bindTreeToolbar() {
   });
   on($('#btn-expand-all'), 'click', () => { expandAll(); autoLayout(); Canvas.renderAll(); Canvas.fit(); toast('All branches expanded.'); });
   on($('#btn-collapse-all'), 'click', () => { collapseAll(); autoLayout(); Canvas.renderAll(); Canvas.fit(); toast('All branches collapsed.'); });
-  on($('#btn-orientation'), 'click', () => {
-    const next = (Store.state.orientation === 'horizontal') ? 'vertical' : 'horizontal';
-    setOrientation(next);
-    toast(next === 'horizontal' ? 'Horizontal view.' : 'Vertical view.');
-  });
+  // v4.37: orientation toggle removed — tree is always vertical now. The
+  // underlying orientation state is preserved in Store.state.orientation
+  // for backward compat (existing archives may have it set to 'horizontal')
+  // but it's force-normalized below.
 
   // theme popover
   const themeBtn = $('#btn-theme');
@@ -8787,6 +8776,25 @@ function defaultMealForMember(m) {
   return 'none';
 }
 
+// v4.37: bank account / routing number masking. Always shows only the last 4
+// digits with a bullets prefix — e.g. "••••1234". Returns an em-dash when
+// the field is blank so callers don't have to null-check. The full value is
+// never rendered anywhere in the UI (admin must look it up off-app to grab
+// the full number; this is intentional per the v4.37 security ask).
+function maskAccountNumber(value) {
+  const s = (value || '').toString().replace(/\s+/g, '');
+  if (!s) return '—';
+  const last4 = s.slice(-4);
+  return s.length <= 4 ? `••••${last4}` : `••••${last4}`;
+}
+// Short hint string used in edit-form placeholders so admins can confirm
+// they're touching the right field without ever seeing the full number.
+function maskAccountHint(value) {
+  const s = (value || '').toString().replace(/\s+/g, '');
+  if (!s) return '';
+  return `Current ends in ${s.slice(-4)} — type a new number to replace, or leave blank to keep.`;
+}
+
 // Compose a single-line postal address from the new split fields, falling back
 // gracefully when only some are present (or only the legacy `address` field).
 function formatPostalAddress(m) {
@@ -8981,13 +8989,9 @@ function enterApp() {
   normalizeDivorced();
   inheritEthnicities();
   applyTheme();
-  // sync orientation toolbar icon with stored value
-  const orient = Store.state.orientation || 'vertical';
-  const v = document.getElementById('orient-icon-vertical');
-  const h = document.getElementById('orient-icon-horizontal');
-  const btn = document.getElementById('btn-orientation');
-  if (orient === 'horizontal') { v.hidden = true; h.hidden = false; btn.title = 'Switch to vertical view'; }
-  else { v.hidden = false; h.hidden = true; btn.title = 'Switch to horizontal view'; }
+  // v4.37: orientation toggle removed. Force-normalize any old archives
+  // that were saved with 'horizontal' so the tree renders vertically.
+  if (Store.state.orientation === 'horizontal') Store.state.orientation = 'vertical';
   Canvas.renderAll();
   setTimeout(() => { if (Store.membersList().length) Canvas.fit(); }, 60);
   // Push stored page emojis into the H2 slots and nav tabs.
@@ -9667,6 +9671,21 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.37',
+    date: '2026-05-14',
+    title: 'Friends list polish + bank masking + mobile responsive pass',
+    changes: [
+      'Friends tab: name cell now shows ethnicity flag(s) + age in parens after the name when both are filled in. Example: "Paul Cho 🇰🇷 (40)". Adults render as bare years; kids/babies render as "3" or "5mo".',
+      'Friends tab: Edit column removed (clicking the row already opens the editor). Phone column locked to a single-line min-width so it stops wrapping into two rows; the Members page now uses a wider 1400px container so Address + Phone + 529 all fit comfortably on one line.',
+      'Friend modal: phone fields format to (XXX) XXX-XXXX on blur for both the primary and spouse, matching the family-side member form.',
+      'Friend modal: each kid row now has a Middle name field, consistent with the primary + spouse roster shape.',
+      'Ethnicity picker: clears the search input after a pick so the next tag search starts fresh. Previously you had to manually backspace the old query.',
+      'Family Tree: orientation toggle (horizontal/vertical) removed from the toolbar. The tree is always vertical now. Archives saved with the old "horizontal" preference are force-normalized on load.',
+      'Admin → Finance: bank Account # + Routing # always render as "••••1234" everywhere. Edit inputs start blank with a "Current ends in 1234" hint — type a new number to replace, or leave blank to preserve. Utilities Account # masked the same way. No reveal toggle, no full value in any UI surface.',
+      'Mobile (≤760px): top nav, Members tabs, and Vault tabs scroll horizontally; container padding shrinks; page heads stack; Dashboard / Events / admin-grid layouts collapse to a single column; modals + drawers go edge-to-edge; tables scroll horizontally inside their wrapper. Tighter pass at ≤480px hides the brand-name + user-chip text for max real-estate.',
+    ],
+  },
   {
     version: '4.36',
     date: '2026-05-14',
@@ -10503,8 +10522,8 @@ const VaultView = {
             <div class="vault-row-title vault-bank-title">${escape(title)}</div>
             ${b.accountType ? `<div class="vault-bank-type"><span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span></div>` : ''}
             <dl class="vault-bank-details">
-              ${b.accountNumber ? `<div><dt><span class="kv-emoji">#️⃣</span>Account number</dt><dd>${escape(b.accountNumber)}</dd></div>` : ''}
-              ${b.routingNumber ? `<div><dt><span class="kv-emoji">🏦</span>Routing number</dt><dd>${escape(b.routingNumber)}</dd></div>` : ''}
+              ${b.accountNumber ? `<div><dt><span class="kv-emoji">#️⃣</span>Account number</dt><dd class="masked-number" title="Only the last 4 digits are shown for security.">${escape(maskAccountNumber(b.accountNumber))}</dd></div>` : ''}
+              ${b.routingNumber ? `<div><dt><span class="kv-emoji">🏦</span>Routing number</dt><dd class="masked-number" title="Only the last 4 digits are shown for security.">${escape(maskAccountNumber(b.routingNumber))}</dd></div>` : ''}
               ${holderNames.length ? `<div><dt><span class="kv-emoji">👥</span>Account holder${holderNames.length > 1 ? 's' : ''}</dt><dd>${escape(holderNames.join(', '))}</dd></div>` : ''}
             </dl>
             ${b.notes ? `<div class="vault-bank-notes muted">📝 ${escape(b.notes)}</div>` : ''}
@@ -10527,8 +10546,8 @@ const VaultView = {
                 <option value="other"    ${b.accountType === 'other'    ? 'selected' : ''}>Other</option>
               </select>
             </label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Account number</span><input name="accountNumber" value="${escape(b.accountNumber || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Routing number</span><input name="routingNumber" value="${escape(b.routingNumber || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Account number</span><input name="accountNumber" value="" placeholder="${b.accountNumber ? '••••' + escape(b.accountNumber.slice(-4)) : 'e.g. 123456789'}" /><span class="muted small" style="display:block; margin-top:4px;">${b.accountNumber ? escape(maskAccountHint(b.accountNumber)) : ''}</span></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Routing number</span><input name="routingNumber" value="" placeholder="${b.routingNumber ? '••••' + escape(b.routingNumber.slice(-4)) : 'e.g. 021000021'}" /><span class="muted small" style="display:block; margin-top:4px;">${b.routingNumber ? escape(maskAccountHint(b.routingNumber)) : ''}</span></label>
           </div>
           <fieldset class="vault-edit-fieldset">
             <legend>Account holder(s) <span class="muted small">— pick one or more</span></legend>
@@ -10665,8 +10684,13 @@ const VaultView = {
     b.bankName      = v('bankName');
     b.nickname      = v('nickname');
     b.accountType   = v('accountType') || 'checking';
-    b.accountNumber = v('accountNumber');
-    b.routingNumber = v('routingNumber');
+    // v4.37: account + routing number inputs are blank by default to avoid
+    // exposing the stored value. Only overwrite if the admin actually typed
+    // a new number; leave the stored value untouched on blank submit.
+    const newAcct = v('accountNumber');
+    const newRtg  = v('routingNumber');
+    if (newAcct) b.accountNumber = newAcct;
+    if (newRtg)  b.routingNumber = newRtg;
     b.holderIds     = [...row.querySelectorAll('input[name="holderIds"]:checked')].map(i => i.value);
     b.notes         = v('notes');
     // Collect balance history rows. Skip blank rows so accidental "+ Add"
@@ -11161,7 +11185,7 @@ const VaultView = {
             <div class="vault-info-grid muted small" style="margin-top:6px;">
               ${u.website       ? `<div>🌐 <a href="${escape(websiteHref)}" target="_blank" rel="noopener">${escape(u.website)}</a></div>` : ''}
               ${u.phone         ? `<div>📞 ${escape(u.phone)}</div>` : ''}
-              ${u.accountNumber ? `<div>#️⃣ <strong>Account:</strong> ${escape(u.accountNumber)}</div>` : ''}
+              ${u.accountNumber ? `<div>#️⃣ <strong>Account:</strong> <span class="masked-number" title="Only the last 4 digits are shown for security.">${escape(maskAccountNumber(u.accountNumber))}</span></div>` : ''}
             </div>
             ${u.notes ? `<div class="muted small" style="margin-top:6px;">${escape(u.notes)}</div>` : ''}
           </div>
@@ -11176,7 +11200,7 @@ const VaultView = {
             <label class="vault-edit-field"><span class="vault-edit-label">Name</span><input name="name" placeholder="e.g. NV Energy" value="${escape(u.name || '')}" /></label>
             <label class="vault-edit-field"><span class="vault-edit-label">Website</span><input name="website" type="url" placeholder="https://" value="${escape(u.website || '')}" /></label>
             <label class="vault-edit-field"><span class="vault-edit-label">Phone</span><input name="phone" type="tel" value="${escape(u.phone || '')}" /></label>
-            <label class="vault-edit-field"><span class="vault-edit-label">Account #</span><input name="accountNumber" value="${escape(u.accountNumber || '')}" /></label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Account #</span><input name="accountNumber" value="" placeholder="${u.accountNumber ? '••••' + escape(u.accountNumber.slice(-4)) : 'e.g. 1234567890'}" /><span class="muted small" style="display:block; margin-top:4px;">${u.accountNumber ? escape(maskAccountHint(u.accountNumber)) : ''}</span></label>
             <label class="vault-edit-field" style="grid-column: 1 / -1;"><span class="vault-edit-label">Notes</span><textarea name="notes" rows="2">${escape(u.notes || '')}</textarea></label>
           </div>
           <div class="vault-edit-actions">
@@ -11216,7 +11240,9 @@ const VaultView = {
     u.name          = v('name');
     u.website       = v('website');
     u.phone         = v('phone');
-    u.accountNumber = v('accountNumber');
+    // v4.37: same blank-preserves-existing rule as bank accounts.
+    const newAcct = v('accountNumber');
+    if (newAcct) u.accountNumber = newAcct;
     u.notes         = v('notes');
     Store.save();
     toast('Utility saved.');
@@ -12109,13 +12135,12 @@ const FriendsTabView = {
         <td>${nameCellHTML(f, 'primary')}</td>
         <td>${emailCellHTML(f.email, { copy: true })}</td>
         <td>${addressCellHTML(fullAddress, { copy: true })}</td>
-        <td>${escape(f.phone || '—')}</td>
-        <td>${f.birthday ? formatDate(f.birthday) : '—'}</td>
+        <td style="white-space:nowrap;">${escape(f.phone || '—')}</td>
+        <td style="white-space:nowrap;">${f.birthday ? formatDate(f.birthday) : '—'}</td>
         <td>${escape(f.group || '—')}</td>
         <td>${plan529CellHTML(f.plan529)}</td>
         <td style="text-align:right; white-space:nowrap;">
-          <button class="btn btn-ghost btn-sm" type="button" data-friend-action="edit" data-fid="${f.id}">Edit</button>
-          <button class="btn btn-danger-ghost btn-sm" type="button" data-friend-action="delete" data-fid="${f.id}">Delete</button>
+          <button class="btn btn-danger-ghost btn-sm" type="button" data-friend-action="delete" data-fid="${f.id}" title="Delete this household">Delete</button>
         </td>
       </tr>`;
     if (!hasRoster || !isOpen) return primaryRow;
@@ -12189,6 +12214,9 @@ function sortFriends(list) {
 // Small avatar + name cell shared across Friends and All tabs. `role` is one
 // of 'primary' | 'spouse' | 'child' | 'family' — controls a tiny inline
 // badge so admins can tell sub-rows apart at a glance.
+// v4.37: append ethnicity flag + age in parens after the name when both are
+// present — e.g. "Paul Cho 🇰🇷 (40)". Either field can be missing; the
+// suffix only renders for what's actually filled in.
 function nameCellHTML(person, role) {
   const bg = person.photo ? `style="background-image:url('${person.photo}')"` : '';
   const sub = (() => {
@@ -12199,11 +12227,32 @@ function nameCellHTML(person, role) {
   const intl = person.internationalName
     ? `<div class="muted small">${escape(person.internationalName)}</div>`
     : '';
+  // Ethnicity flags: up to 2 inline next to the name (more would get noisy
+  // in a row). `flagFor()` returns the country emoji for an ISO code.
+  const eths = Array.isArray(person.ethnicities) ? person.ethnicities : [];
+  const flagsHTML = eths.length
+    ? eths.slice(0, 2).map(c => `<span class="row-name-flag" title="${escape(ETH_BY_CODE[c]?.name || c)}">${flagFor(c) || '🏳️'}</span>`).join('')
+    : '';
+  // Age in parens. Only render when a birthday exists. Use a short form
+  // ("40") for adults, fall back to ageLabel for kids/babies which renders
+  // "3 years" / "5 months".
+  const ageSuffix = (() => {
+    if (!person.birthday) return '';
+    const parts = ageParts(person.birthday, person.dateOfDeath);
+    if (!parts) return '';
+    const short = parts.years >= 1 ? `${parts.years}` : `${parts.months}mo`;
+    return `<span class="row-name-age">(${short})</span>`;
+  })();
   return `
     <div class="row-name">
       <div class="row-avatar is-${person.gender || 'female'}" ${bg}></div>
       <div>
-        <div style="font-weight:600">${escape(displayName(person))} ${sub}</div>
+        <div class="row-name-line">
+          <span class="row-name-text">${escape(displayName(person))}</span>
+          ${flagsHTML}
+          ${ageSuffix}
+          ${sub}
+        </div>
         ${intl}
       </div>
     </div>`;
@@ -12417,6 +12466,17 @@ const FriendModal = {
     // not exist (spouse hidden, kid list dynamic).
     const ePicker = $('[data-picker="friend-ethnicity"]');
     if (ePicker) EthnicityPicker.mount(ePicker);
+    // v4.37: format phone fields on blur so the saved value matches the
+    // (XXX) XXX-XXXX shape immediately. Save-time formatting was already
+    // doing this, but visually-mid-typing values looked ragged before save.
+    const fm = $('#friend-form');
+    if (fm) {
+      on(fm.phone, 'blur', () => { fm.phone.value = formatPhoneUS(fm.phone.value); });
+      // spouse phone may not exist in the DOM until syncRoster renders the
+      // spouse fields — defensive optional chain handles that.
+      const sp = fm.spousePhone;
+      if (sp) on(sp, 'blur', () => { sp.value = formatPhoneUS(sp.value); });
+    }
     // Zip → city/state autofill, mirrors the member drawer wiring.
     on($('#friend-zip'), 'blur', async () => {
       const zip = $('#friend-zip').value.trim();
@@ -12544,9 +12604,10 @@ const FriendModal = {
       <div class="kid-row" data-kid-index="${i}">
         <div class="grid-3">
           <label class="field"><span>First name</span><input data-kid-field="firstName" value="${escape(k.firstName || '')}" /></label>
+          <label class="field"><span>Middle name</span><input data-kid-field="middleName" value="${escape(k.middleName || '')}" placeholder="(optional)" /></label>
           <label class="field"><span>Last name</span><input data-kid-field="lastName" value="${escape(k.lastName || '')}" /></label>
-          <label class="field"><span>Display name</span><input data-kid-field="displayName" value="${escape(k.displayName || '')}" placeholder="(optional)" /></label>
         </div>
+        <label class="field"><span>Display name <span class="muted small">(optional)</span></span><input data-kid-field="displayName" value="${escape(k.displayName || '')}" placeholder="e.g. Jin" /></label>
         <div class="grid-2">
           <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input data-kid-field="birthday" type="date" value="${escape(k.birthday || '')}" /></label>
           <label class="field"><span>Gender</span>
