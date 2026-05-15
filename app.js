@@ -823,6 +823,13 @@ const Store = {
       // lookups stay O(1). Friend Tree view reads from here exclusively;
       // Family Tree never touches it.
       friends: {},
+      // v4.40: per-kid timeline dataset. Keyed by member id. Each kid has
+      // four parallel arrays — milestones, school, art, letters — each
+      // entry referencing photos by { bucket, path } pointers into
+      // Supabase Storage (not inline base64) so the archive row stays
+      // small. The kid roster auto-derives from members whose age < 18
+      // (computed at render time) — no per-kid flag in this map.
+      myKids: {},
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -1027,6 +1034,28 @@ const Store = {
       });
     }
     if (!Array.isArray(this.state.vaultAccessIds)) this.state.vaultAccessIds = [];
+
+    // v4.40: My Kids per-kid timeline. Defensive backfill. Each kid record
+    // must have four arrays so render code can assume the shape.
+    if (!this.state.myKids || typeof this.state.myKids !== 'object') {
+      this.state.myKids = {};
+    }
+    for (const kidId of Object.keys(this.state.myKids)) {
+      const k = this.state.myKids[kidId];
+      if (!k || typeof k !== 'object') { delete this.state.myKids[kidId]; continue; }
+      for (const section of ['milestones', 'school', 'art', 'letters']) {
+        if (!Array.isArray(k[section])) k[section] = [];
+        // Normalize each entry — older shapes may be missing optional fields.
+        k[section].forEach(e => {
+          if (!e.id)        e.id = uid('mk');
+          if (!Array.isArray(e.photos)) e.photos = [];
+          if (e.title       === undefined) e.title = '';
+          if (e.body        === undefined) e.body  = '';
+          if (e.date        === undefined) e.date  = '';
+          if (e.createdAt   === undefined) e.createdAt = Date.now();
+        });
+      }
+    }
 
     // v4.31: Friend Tree dataset — defensive backfill so older archives don't
     // crash on Store.state.friends access. Each existing record is normalized
@@ -3269,6 +3298,10 @@ const Views = {
     if (name === 'calendar' && !Auth.canViewCalendar()) name = 'tree';
     if (name === 'vault' && !Auth.canAccessVault()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
+    // v4.40: My Kids access. Admin can always view. A linked kid can view
+    // their own page only (handled inside MyKidsView when selecting a kid).
+    // Non-admin, non-kid users are bounced to Tree.
+    if (name === 'mykids' && !Auth.isAdmin() && !MyKidsView.canViewerAccess()) name = 'tree';
     this.current = name;
     // Synchronous visibility flip — cheap and gives the click immediate
     // visual feedback (active nav-tab + new view shown).
@@ -3276,6 +3309,7 @@ const Views = {
     $('#view-dashboard').hidden    = name !== 'dashboard';
     $('#view-tree').hidden         = name !== 'tree';
     $('#view-myfamily').hidden     = name !== 'myfamily';
+    $('#view-mykids').hidden       = name !== 'mykids';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3303,6 +3337,7 @@ const Views = {
       if (name === 'calendar')  CalendarView.render();
       if (name === 'gifts')     GiftsView.render();
       if (name === 'myfamily')  MyFamilyView.render();
+      if (name === 'mykids')    MyKidsView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9140,6 +9175,7 @@ async function init() {
   FriendModal.init();
   StorageView.init();
   DashboardView.init();
+  MyKidsView.init();
   PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
@@ -9788,6 +9824,20 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.40',
+    date: '2026-05-15',
+    title: 'My Kids + Annual Letters (Wave 2 of family-portal expansion)',
+    changes: [
+      'New admin-only "My Kids" page in the top nav. Roster auto-populates with every family member whose age < 18 (deceased excluded). Click a kid card → opens their detail page with four tabs.',
+      'Per-kid tabs: Milestones (first steps, lost a tooth, etc.), School (year + grade + teacher + notes), Art (uploaded creations), Letters (one per year per kid).',
+      'Each entry has date + title + body + up to 6 photos. Letters skip photos (it\'s written prose). Each entry can be edited or deleted; deletes also clean up the photo objects in Supabase Storage so the bucket doesn\'t accumulate orphans.',
+      'Photos live in the family-photos bucket from Wave 1 (NOT inlined in the JSONB archive). Each photo downscaled to 1600px JPEG before upload — keeps Storage usage low while still high enough resolution to re-zoom later. The JSONB archive only stores { bucket, path } pointers per photo, so the row size stays bounded even with hundreds of entries.',
+      'Photo display uses signed URLs (1-hour expiry) cached in-memory per session. Re-renders within the same session don\'t re-hit the Supabase API.',
+      'Viewer access: admins always; the kid themselves once they have a linked Supabase login (auto-routes them to their own page, no roster). Other family roles are bounced to the Family Tree page.',
+      'CPU/memory: zero new SQL queries beyond the existing JSONB upsert + a few Storage signed-URL requests on render. Photos no longer bloat the archive row.',
+    ],
+  },
   {
     version: '4.39',
     date: '2026-05-15',
@@ -13092,5 +13142,497 @@ const FriendModal = {
     FriendsTabView.delete(fid);
   },
 };
+
+// -------------------- MY KIDS VIEW (v4.40 Wave 2) --------------------
+// Per-kid growing-up archive. The kid roster auto-derives from family
+// members under 18 — no per-member flag. Each kid has four sections
+// (milestones / school / art / letters) stored in `state.myKids[memberId]`.
+// Photos live in Supabase Storage (family-photos bucket), referenced by
+// `{ bucket, path }` pointers in the entry — keeps the JSONB archive row
+// small (Postgres CPU is the limiting resource).
+const MyKidsView = {
+  selectedKidId: null,            // null = show roster; member id = show detail
+  activeTab: 'milestones',        // 'milestones' | 'school' | 'art' | 'letters'
+  signedUrlCache: new Map(),      // `${bucket}|${path}` → { url, expiresAt }
+
+  init() {
+    on($('#btn-mykids-back'), 'click', () => this.openRoster());
+    on($('#btn-mykids-add'),  'click', () => MyKidsEntryModal.openAdd(this.selectedKidId, this.activeTab));
+    $$('.mykids-tab').forEach(btn => {
+      on(btn, 'click', () => this.setTab(btn.dataset.mykidsTab));
+    });
+    MyKidsEntryModal.init();
+  },
+
+  // True when the current viewer is allowed to use the page at all. Admins
+  // always pass. Non-admins are allowed only when they have a linked member
+  // and that member is themselves under 18 — i.e. they're viewing their own
+  // archive.
+  canViewerAccess() {
+    if (Auth.isAdmin()) return true;
+    const me = Auth.current;
+    if (!me || me === 'admin-bootstrap') return false;
+    if (typeof me !== 'object') return false;
+    return memberIsKid(me);
+  },
+
+  // Auto-roster: every member with age < 18 (excludes deceased), sorted by
+  // age ascending so the youngest appear first.
+  rosterMembers() {
+    return Store.membersList()
+      .filter(m => memberIsKid(m))
+      .sort((a, b) => (b.birthday || '').localeCompare(a.birthday || ''));
+  },
+
+  render() {
+    if (!Auth.isAdmin()) {
+      // Non-admin (the kid themselves) auto-routes to their own detail page.
+      const me = Auth.current;
+      if (me && typeof me === 'object' && memberIsKid(me)) {
+        this.selectedKidId = me.id;
+      }
+    }
+    const detail  = $('#mykids-detail');
+    const roster  = $('#mykids-roster');
+    const back    = $('#btn-mykids-back');
+    if (!detail || !roster) return;
+    const showDetail = !!this.selectedKidId && Store.byId(this.selectedKidId);
+    detail.hidden = !showDetail;
+    roster.hidden = !!showDetail;
+    if (back) back.hidden = !showDetail || !Auth.isAdmin();
+    if (showDetail) {
+      this.renderDetail();
+    } else {
+      this.renderRoster();
+    }
+  },
+
+  renderRoster() {
+    const grid  = $('#mykids-roster-grid');
+    const empty = $('#mykids-empty');
+    if (!grid || !empty) return;
+    const list = this.rosterMembers();
+    if (!list.length) {
+      grid.innerHTML = '';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    grid.innerHTML = list.map(m => {
+      const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+      const age = ageLabel(m.birthday) || '';
+      const entries = this.totalEntriesFor(m.id);
+      return `
+        <button class="mykids-roster-card" type="button" data-kid="${m.id}">
+          <div class="mykids-roster-avatar is-${m.gender || 'female'}" ${bg}>${m.photo ? '' : Silhouettes.for(m)}</div>
+          <div class="mykids-roster-name">${escape(displayName(m))}</div>
+          <div class="muted small">${escape(age)}</div>
+          <div class="mykids-roster-stat">${entries} ${entries === 1 ? 'entry' : 'entries'}</div>
+        </button>`;
+    }).join('');
+    grid.querySelectorAll('[data-kid]').forEach(btn => {
+      on(btn, 'click', () => this.openKid(btn.dataset.kid));
+    });
+  },
+
+  totalEntriesFor(kidId) {
+    const k = Store.state.myKids?.[kidId];
+    if (!k) return 0;
+    return (k.milestones?.length || 0) + (k.school?.length || 0) + (k.art?.length || 0) + (k.letters?.length || 0);
+  },
+
+  openKid(kidId) {
+    this.selectedKidId = kidId;
+    this.activeTab = 'milestones';
+    this.render();
+  },
+  openRoster() {
+    this.selectedKidId = null;
+    this.render();
+  },
+  setTab(tab) {
+    if (!['milestones','school','art','letters'].includes(tab)) return;
+    this.activeTab = tab;
+    this.render();
+  },
+
+  renderDetail() {
+    const kid = Store.byId(this.selectedKidId);
+    if (!kid) { this.openRoster(); return; }
+    const bg = kid.photo ? `style="background-image:url('${kid.photo}')"` : '';
+    $('#mykids-kid-avatar').className = `mykids-kid-avatar is-${kid.gender || 'female'}`;
+    $('#mykids-kid-avatar').setAttribute('style', kid.photo ? `background-image:url('${kid.photo}')` : '');
+    $('#mykids-kid-avatar').innerHTML = kid.photo ? '' : Silhouettes.for(kid);
+    $('#mykids-kid-name').textContent = displayName(kid);
+    const sub = [];
+    if (kid.birthday) sub.push(ageLabel(kid.birthday));
+    if (kid.group)    sub.push(escape(kid.group));
+    $('#mykids-kid-sub').textContent = sub.filter(Boolean).join(' · ') || '—';
+    // Active tab UI
+    $$('.mykids-tab').forEach(btn => btn.classList.toggle('is-active', btn.dataset.mykidsTab === this.activeTab));
+    // Show/hide Add button based on viewer permissions. Only admins can add.
+    $('#btn-mykids-add').hidden = !Auth.isAdmin();
+
+    const k = Store.state.myKids[this.selectedKidId] || {};
+    const entries = [...(k[this.activeTab] || [])].sort((a, z) => (z.date || '').localeCompare(a.date || ''));
+    const host = $('#mykids-entries');
+    if (!entries.length) {
+      host.innerHTML = `<p class="muted" style="padding:24px; text-align:center;">No ${escape(this.activeTab)} entries yet. ${Auth.isAdmin() ? 'Click <strong>+ Add entry</strong> to start.' : ''}</p>`;
+      return;
+    }
+    host.innerHTML = entries.map(e => this.entryCardHTML(e)).join('');
+    // Wire actions per card.
+    host.querySelectorAll('[data-mk-edit]').forEach(btn => {
+      on(btn, 'click', () => MyKidsEntryModal.openEdit(this.selectedKidId, this.activeTab, btn.dataset.mkEdit));
+    });
+    host.querySelectorAll('[data-mk-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deleteEntry(btn.dataset.mkDelete));
+    });
+    // Lazy-resolve signed URLs for every photo placeholder in this view.
+    host.querySelectorAll('[data-mk-photo]').forEach(img => this.resolvePhotoSrc(img));
+  },
+
+  // Render one entry card. Letters skip the photo grid. School entries
+  // show the schoolYear meta line. All show date + title + body + actions.
+  entryCardHTML(e) {
+    const photos = (e.photos || []).map((p, i) => `
+      <div class="mykids-photo" data-mk-photo data-bucket="${escape(p.bucket || 'family-photos')}" data-path="${escape(p.path || '')}" tabindex="0" aria-label="Photo ${i + 1}"></div>
+    `).join('');
+    const meta = [
+      e.date ? `<time>${formatDate(e.date)}</time>` : '',
+      (this.activeTab === 'school' && e.schoolYear) ? `<span class="muted small">${escape(e.schoolYear)}</span>` : '',
+    ].filter(Boolean).join(' · ');
+    const actions = Auth.isAdmin()
+      ? `<div class="mykids-entry-actions">
+           <button class="btn btn-ghost btn-sm" type="button" data-mk-edit="${e.id}">Edit</button>
+           <button class="btn btn-danger-ghost btn-sm" type="button" data-mk-delete="${e.id}">Delete</button>
+         </div>`
+      : '';
+    return `
+      <article class="mykids-entry" data-id="${e.id}">
+        <header class="mykids-entry-head">
+          <div>
+            <h4 class="mykids-entry-title">${escape(e.title || 'Untitled')}</h4>
+            <div class="mykids-entry-meta muted small">${meta}</div>
+          </div>
+          ${actions}
+        </header>
+        ${e.body ? `<div class="mykids-entry-body">${escape(e.body).replace(/\n/g, '<br>')}</div>` : ''}
+        ${this.activeTab !== 'letters' && photos ? `<div class="mykids-entry-photos">${photos}</div>` : ''}
+      </article>`;
+  },
+
+  // Resolve a single photo placeholder's signed URL and apply it as the
+  // background image. Cached for ~50 min per session so flipping between
+  // tabs doesn't re-hit the Supabase API.
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket;
+    const path   = el.dataset.path;
+    if (!bucket || !path) return;
+    const key = `${bucket}|${path}`;
+    const now = Date.now();
+    const cached = this.signedUrlCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      el.style.backgroundImage = `url('${cached.url}')`;
+      return;
+    }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.style.backgroundImage = ''; el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${url}')`;
+  },
+
+  async deleteEntry(entryId) {
+    if (!Auth.isAdmin()) return;
+    if (!confirm('Delete this entry? Photos attached to it will also be deleted from storage. This can\'t be undone.')) return;
+    const k = Store.state.myKids[this.selectedKidId];
+    if (!k) return;
+    const list = k[this.activeTab];
+    const idx = list.findIndex(e => e.id === entryId);
+    if (idx < 0) return;
+    const entry = list[idx];
+    // Best-effort: delete attached photos from Storage so the bucket doesn't
+    // accumulate orphans. Errors are logged but don't block the JSONB delete.
+    for (const p of (entry.photos || [])) {
+      await Backend.deleteMedia(p.bucket, p.path);
+    }
+    list.splice(idx, 1);
+    Store.save();
+    toast('Entry deleted.');
+    this.render();
+  },
+};
+
+// `memberIsKid(m)` — true when the member has a birthday making them under
+// 18 AND is alive. Used by MyKidsView to derive the roster and to gate kid-
+// self access. Centralized here so other callers stay consistent.
+function memberIsKid(m) {
+  if (!m || m.dateOfDeath) return false;
+  if (!m.birthday) return false;
+  const parts = ageParts(m.birthday);
+  if (!parts) return false;
+  return parts.years < 18;
+}
+
+// -------------------- MY KIDS ENTRY MODAL (v4.40 Wave 2) --------------------
+// Add / edit one entry on a kid's timeline. The kid id + section are
+// captured at open() time; the form is reused across all 4 sections,
+// hiding/showing fields per section (e.g. Letters have no photos).
+const MyKidsEntryModal = {
+  editingId: null,         // entry id, or null for "add"
+  kidId: null,
+  section: 'milestones',
+  pendingPhotos: [],       // photos queued to upload OR already on the entry
+                           //   each: { bucket, path, status: 'saved' | 'uploading' | 'failed', file? }
+  uploading: 0,
+
+  init() {
+    const el = $('#mykids-entry-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#mykids-entry-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#mykids-entry-delete'), 'click', () => this.deleteCurrent());
+    on($('#mykids-photo-input'), 'change', (e) => this.onPhotoPick(e));
+  },
+
+  openAdd(kidId, section) {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.kidId     = kidId;
+    this.section   = section;
+    this.pendingPhotos = [];
+    this.reset();
+    $('#mykids-entry-title').textContent = this.titleFor(section, 'add');
+    $('#mykids-entry-submit').textContent = 'Save entry';
+    $('#mykids-entry-delete').hidden = true;
+    $('#mykids-school-year-wrap').hidden = section !== 'school';
+    $('#mykids-photos-wrap').hidden = section === 'letters';
+    // Default the date to today so common case is "log today's event".
+    const today = new Date(); const iso = today.toISOString().slice(0, 10);
+    $('#mykids-entry-form').date.value = iso;
+    this.renderPhotoGrid();
+    this.open();
+    setTimeout(() => $('#mykids-entry-form').title.focus(), 50);
+  },
+
+  openEdit(kidId, section, entryId) {
+    if (!Auth.isAdmin()) return;
+    const k = Store.state.myKids[kidId]; if (!k) return;
+    const list = k[section] || [];
+    const e = list.find(x => x.id === entryId); if (!e) return;
+    this.editingId = entryId;
+    this.kidId     = kidId;
+    this.section   = section;
+    // Pending list seeded with already-saved photos so removals on this
+    // session can flag them for deletion on save.
+    this.pendingPhotos = (e.photos || []).map(p => ({ bucket: p.bucket, path: p.path, status: 'saved' }));
+    this.reset();
+    $('#mykids-entry-title').textContent = this.titleFor(section, 'edit');
+    $('#mykids-entry-submit').textContent = 'Save changes';
+    $('#mykids-entry-delete').hidden = false;
+    $('#mykids-school-year-wrap').hidden = section !== 'school';
+    $('#mykids-photos-wrap').hidden = section === 'letters';
+    const fm = $('#mykids-entry-form');
+    fm.date.value       = e.date || '';
+    fm.title.value      = e.title || '';
+    fm.body.value       = e.body || '';
+    if (section === 'school') fm.schoolYear.value = e.schoolYear || '';
+    this.renderPhotoGrid();
+    this.open();
+  },
+
+  titleFor(section, mode) {
+    const labels = { milestones: 'Milestone', school: 'School entry', art: 'Artwork', letters: 'Letter' };
+    const noun = labels[section] || 'Entry';
+    return `${mode === 'add' ? 'Add' : 'Edit'} ${noun}`;
+  },
+
+  reset() {
+    $('#mykids-entry-form').reset();
+    $('#mykids-entry-error').hidden = true;
+    $('#mykids-photo-status').textContent = '';
+  },
+  open() {
+    const el = $('#mykids-entry-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+  },
+  close() {
+    const el = $('#mykids-entry-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.kidId = null;
+    this.pendingPhotos = [];
+  },
+
+  // Photo picker: each file goes through a downscale (no crop — multi-photo
+  // crop is too clunky), then an upload to family-photos. The pendingPhotos
+  // entry tracks each one's status so the grid can show "uploading…" tags.
+  async onPhotoPick(e) {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (!files.length) return;
+    const room = 6 - this.pendingPhotos.length;
+    if (room <= 0) {
+      toast('Max 6 photos per entry.', 'warn');
+      return;
+    }
+    const toUpload = files.slice(0, room);
+    if (files.length > room) toast(`Only first ${room} added — max 6 per entry.`, 'warn');
+    for (const file of toUpload) {
+      const placeholder = { status: 'uploading', file };
+      this.pendingPhotos.push(placeholder);
+      this.renderPhotoGrid();
+      this.uploading++;
+      try {
+        // Downscale to ~1600px before upload. Photos are stored full-rez in
+        // Storage so they can be re-cropped or zoomed later; we cap dimension
+        // to keep upload + transfer fast.
+        const blob = await downscaleImageToBlob(file, 1600, 0.85);
+        const folder = `kids/${this.kidId || 'unknown'}/${this.section || 'misc'}`;
+        const result = await Backend.uploadMedia(
+          new File([blob], file.name, { type: 'image/jpeg' }),
+          { bucket: 'family-photos', folder, maxBytes: 10 * 1024 * 1024 }
+        );
+        if (!result.ok) throw new Error(result.reason);
+        placeholder.status = 'saved';
+        placeholder.bucket = result.bucket;
+        placeholder.path = result.path;
+        delete placeholder.file;
+      } catch (err) {
+        placeholder.status = 'failed';
+        placeholder.error = err.message || String(err);
+        toast(`Photo upload failed: ${placeholder.error}`, 'warn');
+      } finally {
+        this.uploading--;
+        this.renderPhotoGrid();
+      }
+    }
+  },
+
+  renderPhotoGrid() {
+    const grid = $('#mykids-photo-grid');
+    if (!grid) return;
+    grid.innerHTML = this.pendingPhotos.map((p, i) => {
+      const status = p.status === 'uploading' ? '<span class="mk-photo-badge">Uploading…</span>'
+                   : p.status === 'failed'    ? '<span class="mk-photo-badge is-fail">Failed</span>'
+                   : '';
+      return `
+        <div class="mykids-photo mk-photo-pending ${p.status === 'failed' ? 'is-failed' : ''}" data-i="${i}">
+          ${p.status === 'saved' ? `<div class="mk-photo-img" data-mk-photo data-bucket="${escape(p.bucket || '')}" data-path="${escape(p.path || '')}"></div>` : ''}
+          ${status}
+          <button type="button" class="mk-photo-remove" data-remove-photo="${i}" aria-label="Remove photo">×</button>
+        </div>`;
+    }).join('');
+    grid.querySelectorAll('[data-remove-photo]').forEach(btn => {
+      on(btn, 'click', () => {
+        const i = Number(btn.dataset.removePhoto);
+        // Saved photos: delete from Storage immediately (unsaved entry would
+        // leak the upload otherwise). For pending/failed placeholders just
+        // drop from the list.
+        const p = this.pendingPhotos[i];
+        if (p?.status === 'saved' && p.bucket && p.path) {
+          Backend.deleteMedia(p.bucket, p.path);
+        }
+        this.pendingPhotos.splice(i, 1);
+        this.renderPhotoGrid();
+      });
+    });
+    // Resolve signed URLs for any saved photos already in the grid.
+    grid.querySelectorAll('[data-mk-photo]').forEach(el => MyKidsView.resolvePhotoSrc(el));
+    // Toggle the "+ Add photo" affordance when full.
+    const lbl = $('#mykids-photo-add-label');
+    if (lbl) lbl.style.display = (this.pendingPhotos.length >= 6 ? 'none' : '');
+  },
+
+  async save() {
+    if (!Auth.isAdmin()) return;
+    if (this.uploading > 0) {
+      $('#mykids-entry-error').textContent = 'Wait for photos to finish uploading.';
+      $('#mykids-entry-error').hidden = false;
+      return;
+    }
+    const fm = $('#mykids-entry-form');
+    const fd = new FormData(fm);
+    const title = (fd.get('title') || '').toString().trim();
+    const date  = (fd.get('date')  || '').toString().trim();
+    if (!title) {
+      $('#mykids-entry-error').textContent = 'Title is required.';
+      $('#mykids-entry-error').hidden = false;
+      return;
+    }
+    if (!date) {
+      $('#mykids-entry-error').textContent = 'Date is required.';
+      $('#mykids-entry-error').hidden = false;
+      return;
+    }
+    const k = Store.state.myKids[this.kidId] = Store.state.myKids[this.kidId] || {
+      milestones: [], school: [], art: [], letters: [],
+    };
+    if (!Array.isArray(k[this.section])) k[this.section] = [];
+    const list = k[this.section];
+    const existing = this.editingId ? list.find(x => x.id === this.editingId) : null;
+    const photos = this.pendingPhotos
+      .filter(p => p.status === 'saved' && p.bucket && p.path)
+      .map(p => ({ bucket: p.bucket, path: p.path }));
+    const record = {
+      ...(existing || {}),
+      id: this.editingId || uid('mk'),
+      date,
+      title,
+      body: (fd.get('body') || '').toString(),
+      photos: this.section === 'letters' ? [] : photos,
+      createdAt: existing?.createdAt || Date.now(),
+      createdBy: existing?.createdBy || Backend.user?.id || null,
+    };
+    if (this.section === 'school') {
+      record.schoolYear = (fd.get('schoolYear') || '').toString().trim();
+    }
+    if (existing) {
+      const idx = list.findIndex(x => x.id === this.editingId);
+      list[idx] = record;
+    } else {
+      list.push(record);
+    }
+    Store.save();
+    toast(this.editingId ? 'Entry saved.' : 'Entry added.');
+    this.close();
+    MyKidsView.render();
+  },
+
+  async deleteCurrent() {
+    if (!this.editingId) return;
+    const id = this.editingId;
+    this.close();
+    MyKidsView.activeTab = this.section;
+    MyKidsView.deleteEntry(id);
+  },
+};
+
+// Downscale a File into a Blob. Mirrors downscaleImageFile() but returns a
+// Blob (so we can upload it directly to Storage without a base64 round-trip).
+function downscaleImageToBlob(file, maxDim = 1600, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Image decode failed'));
+      img.onload = () => {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        const scale = Math.min(1, maxDim / Math.max(w, h));
+        const dw = Math.round(w * scale);
+        const dh = Math.round(h * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = dw; canvas.height = dh;
+        canvas.getContext('2d').drawImage(img, 0, 0, dw, dh);
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob returned null')), 'image/jpeg', quality);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 document.addEventListener('DOMContentLoaded', init);
