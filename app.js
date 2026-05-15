@@ -9833,6 +9833,14 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.43',
+    date: '2026-05-15',
+    title: 'Bug fix: emoji buttons on My Kids entry modal',
+    changes: [
+      'Title and Notes emoji buttons on the My Kids entry editor now actually open the picker. They were opening it and immediately closing it on the same click — the popover\'s document-level outside-click handler bails on elements marked [data-emoji-trigger], and the two new buttons were missing that attribute.',
+    ],
+  },
+  {
     version: '4.42',
     date: '2026-05-15',
     title: 'My Kids — manual picker for when parent links aren\'t set up',
