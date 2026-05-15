@@ -538,7 +538,7 @@
             <span>Title</span>
             <div class="title-with-emoji">
               <input name="title" placeholder="e.g. First day of kindergarten" required />
-              <button type="button" class="btn btn-ghost btn-sm title-emoji-btn" id="mykids-title-emoji" title="Insert emoji" aria-label="Insert emoji into title">😊</button>
+              <button type="button" class="btn btn-ghost btn-sm title-emoji-btn" id="mykids-title-emoji" data-emoji-trigger title="Insert emoji" aria-label="Insert emoji into title">😊</button>
             </div>
           </label>
           <!-- v4.41: link field shown only for Art + Letters tabs (toggled in JS). -->
@@ -560,7 +560,7 @@
                 <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
                 <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
                 <span class="rt-sep" aria-hidden="true"></span>
-                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="mykids-notes-emoji">😊</button>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="mykids-notes-emoji" data-emoji-trigger>😊</button>
               </div>
               <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="What happened, who was there, anything worth remembering."></div>
               <textarea name="body" id="mykids-body-mirror" hidden></textarea>
