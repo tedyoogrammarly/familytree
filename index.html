@@ -93,6 +93,7 @@
           <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
           <button class="nav-tab" data-view="recipes" role="tab">Recipes</button>
           <button class="nav-tab" data-view="memories" role="tab">Memories</button>
+          <button class="nav-tab" data-view="timecapsule" role="tab">Time Capsule</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -720,6 +721,113 @@
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit" id="memory-submit">Save post</button>
             <button class="btn btn-danger-ghost" type="button" id="memory-delete" hidden>Delete post</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== TIME CAPSULE VIEW (v4.47 — Wave 4a) =====
+         Sealed letters addressed to a family member, locked until the
+         unlock date. Admin writes; recipient sees a sealed envelope
+         card until the unlock date passes (admin can override and
+         reveal early — admin override policy). -->
+    <main id="view-timecapsule" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="timecapsule"></span>Time Capsule</h2>
+            <p id="timecapsule-page-sub">Letters written today, sealed until a chosen date.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-tcp-add" data-admin-only>+ New capsule</button>
+          </div>
+        </div>
+
+        <section class="panel">
+          <header class="panel-head">
+            <h3>Opened — ready to read</h3>
+          </header>
+          <div id="tcp-opened-list" class="tcp-list"></div>
+          <p class="muted small" id="tcp-opened-empty" style="padding:0 18px 18px;" hidden>No opened capsules yet.</p>
+        </section>
+
+        <section class="panel" style="margin-top:18px;">
+          <header class="panel-head">
+            <h3>Sealed — waiting</h3>
+          </header>
+          <div id="tcp-sealed-list" class="tcp-list"></div>
+          <p class="muted small" id="tcp-sealed-empty" style="padding:0 18px 18px;" hidden>No sealed capsules.</p>
+        </section>
+
+        <div id="tcp-empty" class="tree-empty" hidden>
+          <div class="tree-empty-card">
+            <h3>No capsules yet</h3>
+            <p>Write a letter to one of your kids, your spouse, or anyone in the family. Pick the date when they can read it. It stays sealed until then.</p>
+            <button class="btn btn-primary" id="btn-tcp-add-first" data-admin-only>+ Write your first capsule</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== TIME CAPSULE MODAL (write / edit) ===== -->
+    <div id="tcp-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="tcp-modal-title">
+        <header class="modal-head">
+          <h3 id="tcp-modal-title">New capsule</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="tcp-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">📨</span>For *</span>
+              <select name="recipientRef" id="tcp-recipient" class="input" required>
+                <option value="">— Pick recipient —</option>
+              </select>
+            </label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Unlock on *</span><input name="unlockDate" type="date" required /></label>
+          </div>
+          <label class="field"><span>Title <span class="muted small">(optional)</span></span><input name="title" placeholder="e.g. On your 18th birthday" /></label>
+          <div class="field">
+            <span>Letter *</span>
+            <div class="rich-text-editor" id="tcp-body-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Letter formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="tcp-body-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="Write what you want them to read on the day this opens."></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Photo <span class="muted small">(optional, one)</span></span>
+            <div class="photo-row">
+              <div class="photo-preview" id="tcp-photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="tcp-photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="tcp-photo-clear">Clear photo</button>
+              </div>
+            </div>
+          </div>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">🔗</span>Link <span class="muted small">(optional — e.g. a song or a Google Doc)</span></span>
+            <input name="link" type="url" placeholder="https://…" />
+          </label>
+          <p class="form-error" id="tcp-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="tcp-submit">Seal capsule</button>
+            <button class="btn btn-danger-ghost" type="button" id="tcp-delete" hidden>Delete</button>
             <button class="btn btn-ghost" type="button" data-close>Cancel</button>
           </div>
         </form>
