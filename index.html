@@ -90,6 +90,7 @@
           <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
+          <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -426,6 +427,101 @@
         <div id="history-list" class="history-list"></div>
       </div>
     </main>
+
+    <!-- ===== MY KIDS VIEW (admin only — Wave 2 of v4.39 family-portal expansion) =====
+         Per-kid growing-up archive. The kid roster auto-derives from members
+         whose age < 18 at render time (no separate flag). Each kid has four
+         tabs: Milestones / School / Art / Letters. Entries reference photos
+         by { bucket, path } pointers into Supabase Storage (family-photos
+         bucket) so the JSONB archive row stays small. -->
+    <main id="view-mykids" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="mykids"></span>My Kids</h2>
+            <p id="mykids-page-sub">A growing-up archive for each kid in the family.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-mykids-back" hidden>← All kids</button>
+          </div>
+        </div>
+
+        <!-- Kid roster: shown when no kid is selected -->
+        <section id="mykids-roster" class="panel" hidden>
+          <header class="panel-head"><h3>Pick a kid</h3></header>
+          <div id="mykids-roster-grid" class="mykids-roster-grid"></div>
+          <div id="mykids-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No kids yet</h3>
+              <p>Anyone in the family tree with a birthday making them under 18 appears here automatically. Add a kid from the Members page to get started.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Per-kid detail: shown when a kid is selected -->
+        <section id="mykids-detail" class="panel" hidden>
+          <header class="panel-head mykids-kid-head">
+            <div class="mykids-kid-head-main">
+              <div class="mykids-kid-avatar" id="mykids-kid-avatar"></div>
+              <div>
+                <h3 id="mykids-kid-name">—</h3>
+                <p class="muted small" id="mykids-kid-sub">—</p>
+              </div>
+            </div>
+          </header>
+          <div class="mykids-tabs" role="tablist">
+            <button class="mykids-tab is-active" data-mykids-tab="milestones" role="tab">Milestones</button>
+            <button class="mykids-tab"           data-mykids-tab="school"     role="tab">School</button>
+            <button class="mykids-tab"           data-mykids-tab="art"        role="tab">Art</button>
+            <button class="mykids-tab"           data-mykids-tab="letters"    role="tab">Letters</button>
+          </div>
+          <div class="mykids-tab-actions">
+            <button class="btn btn-primary btn-sm" id="btn-mykids-add" data-admin-only>+ Add entry</button>
+          </div>
+          <div id="mykids-entries" class="mykids-entries"></div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== ENTRY EDITOR MODAL (Wave 2) =====
+         Used for adding / editing one entry across all four sections.
+         The section context determines which fields are shown (e.g.
+         Letters hides the photos block since they're written, not photo
+         entries). -->
+    <div id="mykids-entry-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mykids-entry-title">
+        <header class="modal-head">
+          <h3 id="mykids-entry-title">Add entry</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="mykids-entry-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Date</span><input name="date" type="date" required /></label>
+            <label class="field" id="mykids-school-year-wrap" hidden><span>School year</span><input name="schoolYear" placeholder="e.g. 2025-26 · 1st grade" /></label>
+          </div>
+          <label class="field"><span>Title</span><input name="title" placeholder="e.g. First day of kindergarten" required /></label>
+          <label class="field"><span>Notes</span><textarea name="body" rows="4" placeholder="What happened, who was there, anything worth remembering."></textarea></label>
+          <div class="field" id="mykids-photos-wrap">
+            <span>Photos <span class="muted small">(up to 6)</span></span>
+            <div class="mykids-photo-grid" id="mykids-photo-grid"></div>
+            <label class="btn btn-secondary btn-sm" id="mykids-photo-add-label">
+              + Add photo
+              <input type="file" accept="image/*" id="mykids-photo-input" hidden multiple />
+            </label>
+            <p class="muted small" id="mykids-photo-status" style="margin: 6px 0 0;"></p>
+          </div>
+          <p class="form-error" id="mykids-entry-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="mykids-entry-submit">Save entry</button>
+            <button class="btn btn-danger-ghost" type="button" id="mykids-entry-delete" hidden>Delete entry</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ===== ADMIN VIEW (Members) =====
          v4.35: now three-tabbed — Family, Friends, All. Family tab keeps the

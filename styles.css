@@ -4424,3 +4424,192 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .vault-edit-actions .btn,
   .modal-actions .btn { padding: 10px 12px; }
 }
+
+/* ============================================================
+   v4.40  MY KIDS PAGE
+   Per-kid growing-up archive. Roster card grid → per-kid detail
+   with four section tabs (Milestones / School / Art / Letters).
+   ============================================================ */
+
+/* Roster card grid */
+.mykids-roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+  padding: 18px;
+}
+.mykids-roster-card {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px;
+  padding: 18px 14px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  cursor: pointer;
+  text-align: center;
+  transition: transform .15s var(--ease-out), box-shadow .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+.mykids-roster-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 8px 24px -12px rgba(19, 24, 38, 0.18);
+}
+.mykids-roster-avatar {
+  width: 88px; height: 88px;
+  border-radius: 50%;
+  background-color: var(--paper-soft, #f1ece1);
+  background-size: cover; background-position: center;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.mykids-roster-avatar svg { width: 70%; height: 70%; }
+.mykids-roster-name { font-weight: 600; }
+.mykids-roster-stat {
+  font-size: 12px;
+  color: var(--ink-500);
+  background: var(--paper-soft, #f1ece1);
+  padding: 2px 10px;
+  border-radius: 10px;
+  margin-top: 2px;
+}
+
+/* Kid detail header */
+.mykids-kid-head {
+  align-items: center;
+  gap: 16px;
+}
+.mykids-kid-head-main { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.mykids-kid-avatar {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background-color: var(--paper-soft, #f1ece1);
+  background-size: cover; background-position: center;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; flex-shrink: 0;
+}
+.mykids-kid-avatar svg { width: 70%; height: 70%; }
+.mykids-kid-head h3 { margin: 0; }
+.mykids-kid-head p  { margin: 2px 0 0; }
+
+/* Four-section tab strip (mirrors vault-tabs pattern) */
+.mykids-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  margin: 0 18px;
+  background: var(--paper-soft, #f1ece1);
+  border-radius: 10px;
+}
+.mykids-tab {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 500;
+  color: var(--ink-700);
+  cursor: pointer;
+  transition: background-color .12s var(--ease-out), color .12s var(--ease-out);
+}
+.mykids-tab:hover { color: var(--ink-900); }
+.mykids-tab.is-active {
+  background: #fff;
+  color: var(--brand-900);
+  box-shadow: var(--shadow-soft);
+}
+.mykids-tab-actions {
+  display: flex; justify-content: flex-end;
+  padding: 10px 18px 0;
+}
+
+/* Entry list */
+.mykids-entries {
+  display: flex; flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 22px;
+}
+.mykids-entry {
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.mykids-entry-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.mykids-entry-title { margin: 0; font-size: 18px; }
+.mykids-entry-meta { margin-top: 2px; }
+.mykids-entry-body {
+  margin: 8px 0 0;
+  color: var(--ink-700);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.mykids-entry-photos {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+.mykids-entry-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Photo tiles (used in both view + editor) */
+.mykids-photo, .mk-photo-img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background-color: var(--paper-soft, #f1ece1);
+  background-size: cover; background-position: center;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform .12s var(--ease-out);
+}
+.mykids-photo:hover { transform: scale(1.02); }
+.mykids-photo.is-missing {
+  background: repeating-linear-gradient(45deg, var(--paper-soft) 0 8px, #fff 8px 16px);
+}
+
+/* Photo editor grid (in modal) */
+.mykids-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mk-photo-pending {
+  position: relative;
+}
+.mk-photo-pending.is-failed { outline: 2px solid #ef4444; outline-offset: -2px; }
+.mk-photo-img { width: 100%; height: 100%; }
+.mk-photo-badge {
+  position: absolute;
+  top: 6px; left: 6px;
+  background: rgba(19, 24, 38, 0.78);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.mk-photo-badge.is-fail { background: #ef4444; }
+.mk-photo-remove {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(19, 24, 38, 0.78);
+  color: #fff;
+  font-size: 14px; line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.mk-photo-remove:hover { background: #ef4444; }
+
+@media (max-width: 760px) {
+  .mykids-roster-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 12px; }
+  .mykids-tabs { margin: 0 12px; }
+  .mykids-tab-actions { padding: 8px 12px 0; }
+  .mykids-entries { padding: 10px 12px 18px; }
+  .mykids-entry-photos { grid-template-columns: repeat(3, 1fr); }
+}
