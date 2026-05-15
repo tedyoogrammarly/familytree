@@ -5304,3 +5304,122 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .memory-react-picks { flex-wrap: wrap; }
   .memory-comment-add { flex-direction: column; align-items: stretch; }
 }
+
+/* ============================================================
+   v4.47  TIME CAPSULE
+   Two sections: Opened (full content), Sealed (envelope cards).
+   ============================================================ */
+.tcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px 18px;
+}
+.tcp-card {
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.tcp-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.tcp-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.tcp-card-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  margin: 2px 0 4px;
+  letter-spacing: -0.015em;
+}
+
+/* Sealed: envelope-shape card with a tan paper feel + a lock icon. */
+.tcp-card.is-sealed {
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(168, 138, 90, 0.45);
+  background: linear-gradient(180deg, #f7eed8 0%, #efe3c0 100%);
+}
+.tcp-envelope {
+  position: relative;
+  padding: 18px 22px 22px;
+}
+.tcp-envelope-flap {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 28px;
+  background: linear-gradient(180deg, rgba(168, 138, 90, 0.28), transparent);
+  clip-path: polygon(0 0, 50% 100%, 100% 0);
+}
+.tcp-envelope-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 14px;
+}
+.tcp-envelope-lock {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(168, 138, 90, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.tcp-envelope-to { font-size: 13px; }
+.tcp-envelope-when {
+  font-size: 14px;
+  color: var(--ink-900);
+  margin-top: 2px;
+}
+.tcp-envelope-title { margin-top: 6px; }
+.tcp-card.is-sealed .tcp-card-actions {
+  padding: 0 22px 16px;
+  margin-top: 0;
+}
+
+/* Opened: standard card with body + photo. */
+.tcp-body {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ink-900);
+  margin-top: 6px;
+}
+.tcp-body.rich a { color: var(--brand-900, #0044cc); text-decoration: underline; }
+.tcp-body.rich ul, .tcp-body.rich ol { margin: 6px 0 6px 22px; padding: 0; }
+.tcp-photo {
+  margin-top: 14px;
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  background-color: var(--paper-soft, #f1ece1);
+  background-size: cover;
+  background-position: center;
+  cursor: zoom-in;
+}
+.tcp-override-tag {
+  background: rgba(168, 138, 90, 0.28);
+  color: #6e5125;
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .tcp-list { padding: 10px 12px 14px; }
+  .tcp-envelope { padding: 14px 14px 18px; }
+  .tcp-card-head { flex-direction: column; }
+}

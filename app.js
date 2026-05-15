@@ -846,6 +846,12 @@ const Store = {
       // (bucket+path refs into Storage) + multi-tag list of people refs
       // (m:/f:/s:/k:). Reverse-chrono feed.
       memories: [],
+      // v4.47: Time Capsule. Admin-only authorship. Each capsule is
+      // addressed to a recipient (m:/f:/s:/k: ref) and sealed until
+      // unlockDate. Admin can force-reveal early (admin override policy).
+      // Recipient sees a sealed-envelope card for locked capsules
+      // addressed to them; the body is hidden until unlock or override.
+      timeCapsules: [],
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -1069,6 +1075,19 @@ const Store = {
        'fromRef','fromText'].forEach(k => { if (r[k] === undefined) r[k] = ''; });
       if (r.photo !== null && (typeof r.photo !== 'object' || Array.isArray(r.photo))) r.photo = null;
       if (r.createdAt === undefined) r.createdAt = Date.now();
+    }
+
+    // v4.47: time capsules. Each entry has a fixed shape so render +
+    // lock-check code can assume the fields exist.
+    if (!Array.isArray(this.state.timeCapsules)) this.state.timeCapsules = [];
+    for (const c of this.state.timeCapsules) {
+      if (!c.id) c.id = uid('tcp');
+      ['recipientRef','unlockDate','title','body','link','authorName']
+        .forEach(k => { if (c[k] === undefined) c[k] = ''; });
+      if (c.photo !== null && (typeof c.photo !== 'object' || Array.isArray(c.photo))) c.photo = null;
+      if (c.authorId  === undefined) c.authorId = null;
+      if (c.sealedAt  === undefined) c.sealedAt = Date.now();
+      if (c.revealedBy === undefined) c.revealedBy = null;
     }
 
     // v4.45: memories feed. Defensive backfill so render code can assume
@@ -3366,6 +3385,7 @@ const Views = {
     $('#view-mykids').hidden       = name !== 'mykids';
     $('#view-recipes').hidden      = name !== 'recipes';
     $('#view-memories').hidden     = name !== 'memories';
+    $('#view-timecapsule').hidden  = name !== 'timecapsule';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3396,6 +3416,7 @@ const Views = {
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
       if (name === 'memories')  MemoriesView.render();
+      if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9254,6 +9275,7 @@ async function init() {
   MyKidsView.init();
   RecipesView.init();
   MemoriesView.init();
+  TimeCapsuleView.init();
   PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
@@ -9902,6 +9924,20 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.47',
+    date: '2026-05-15',
+    title: 'Time Capsule (Wave 4a of family-portal expansion)',
+    changes: [
+      'New "Time Capsule" top-level nav tab. Admin writes letters addressed to one family member or friend household person, sealed until an unlock date.',
+      'Capsule shape: recipient (m:/f:/s:/k: ref) + unlock date + optional title + rich-text letter body + optional single photo + optional link. Author + sealed-on stamps auto-recorded.',
+      'Two sections on the page: Opened (full content, click photo for lightbox, link chip below body) and Sealed (envelope-card preview showing only the unlock date + an optional title — body never renders until unlock).',
+      'Lock check: capsule is locked when today\'s local date is before unlockDate. Once today catches up to the unlock date, the body becomes visible to the recipient automatically.',
+      'Admin override: an admin sees a "Reveal early" button on any sealed capsule. Clicking stamps the capsule with revealedBy = admin user id and immediately makes it visible. The opened card displays an "(early reveal)" tag so the recipient knows the unlock wasn\'t strict.',
+      'Permission: admin sees all capsules (locked + unlocked). A linked recipient sees only their own capsules; sealed ones show as a generic envelope (no "To: name" line for them — it\'s their letter). Non-admin, non-recipient viewers route back to Family Tree.',
+      'CPU/memory: zero new SQL or realtime channels. Each capsule lives as one row in state.timeCapsules on the JSONB blob; only photo { bucket, path } refs live there. Photo binaries stay in the family-photos Storage bucket from Wave 1.',
+    ],
+  },
   {
     version: '4.46',
     date: '2026-05-15',
@@ -15448,6 +15484,433 @@ const MemoryModal = {
     const id = this.editingId;
     this.close();
     MemoriesView.deletePost(id);
+  },
+};
+
+// -------------------- TIME CAPSULE (v4.47 — Wave 4a) --------------------
+// Sealed letters addressed to a family member, locked until an admin-chosen
+// unlock date. Admin writes; the recipient sees a "sealed envelope" card
+// until the date passes (admin can override and reveal early — admin
+// override policy chosen in v4.47). Capsules with photo/link attach
+// through the same Wave 1 Storage pipeline as everything else.
+const TimeCapsuleView = {
+  signedUrlCache: new Map(),
+
+  init() {
+    on($('#btn-tcp-add'),       'click', () => TimeCapsuleModal.openAdd());
+    on($('#btn-tcp-add-first'), 'click', () => TimeCapsuleModal.openAdd());
+    TimeCapsuleModal.init();
+  },
+
+  list() {
+    return Array.isArray(Store.state.timeCapsules) ? Store.state.timeCapsules : [];
+  },
+
+  // Lock check: today's date is compared lexicographically against the
+  // capsule's unlockDate (both YYYY-MM-DD strings, both in local time).
+  // Capsule is locked when today < unlockDate.
+  isLocked(c) {
+    if (!c.unlockDate) return false;
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    return todayIso < c.unlockDate;
+  },
+
+  // Permission: who's allowed on this view at all. Admin always. Non-admin
+  // members allowed when at least one capsule is addressed to them (their
+  // own).
+  canViewerAccess() {
+    if (Auth.isAdmin()) return true;
+    const me = Auth.current;
+    if (!me || me === 'admin-bootstrap' || typeof me !== 'object') return false;
+    const myRef = 'm:' + me.id;
+    return this.list().some(c => c.recipientRef === myRef);
+  },
+
+  // Visible-to-this-user capsules. Admin sees everything; recipients see
+  // only the capsules addressed to them.
+  visibleCapsules() {
+    if (Auth.isAdmin()) return this.list();
+    const me = Auth.current;
+    if (!me || typeof me !== 'object') return [];
+    const myRef = 'm:' + me.id;
+    return this.list().filter(c => c.recipientRef === myRef);
+  },
+
+  render() {
+    const visible = this.visibleCapsules();
+    const sealed  = visible.filter(c => this.isLocked(c) && !c.revealedBy);
+    const opened  = visible.filter(c => !this.isLocked(c) || c.revealedBy);
+
+    // Newest unlock-date first within each bucket.
+    sealed.sort((a, b) => (a.unlockDate || '').localeCompare(b.unlockDate || ''));
+    opened.sort((a, b) => (b.unlockDate || '').localeCompare(a.unlockDate || ''));
+
+    $('#tcp-opened-list').innerHTML = opened.map(c => this.openedCardHTML(c)).join('');
+    $('#tcp-sealed-list').innerHTML = sealed.map(c => this.sealedCardHTML(c)).join('');
+    $('#tcp-opened-empty').hidden = opened.length > 0;
+    $('#tcp-sealed-empty').hidden = sealed.length > 0;
+    $('#tcp-empty').hidden = visible.length > 0;
+    // Add button visible only to admins.
+    $('#btn-tcp-add').hidden = !Auth.isAdmin();
+
+    // Wire actions
+    document.querySelectorAll('[data-tcp-reveal]').forEach(btn => {
+      on(btn, 'click', () => this.revealNow(btn.dataset.tcpReveal));
+    });
+    document.querySelectorAll('[data-tcp-edit]').forEach(btn => {
+      on(btn, 'click', () => TimeCapsuleModal.openEdit(btn.dataset.tcpEdit));
+    });
+    document.querySelectorAll('[data-tcp-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deleteCapsule(btn.dataset.tcpDelete));
+    });
+    document.querySelectorAll('[data-tcp-photo]').forEach(el => this.resolvePhotoSrc(el));
+    document.querySelectorAll('[data-tcp-photo]').forEach(tile => {
+      on(tile, 'click', () => {
+        const c = this.list().find(x => x.id === tile.dataset.tcpPhotoCap);
+        if (c?.photo) MyKidsLightbox.open([c.photo], 0);
+      });
+    });
+  },
+
+  // SEALED envelope card. Admins see who it's for + the unlock date +
+  // a "Reveal early" override; recipients see just the unlock date and
+  // a generic envelope.
+  sealedCardHTML(c) {
+    const isAdmin = Auth.isAdmin();
+    const recipient = resolvePersonRefLabel(c.recipientRef) || 'someone';
+    const adminControls = isAdmin ? `
+      <div class="tcp-card-actions">
+        <button class="btn btn-secondary btn-sm" type="button" data-tcp-reveal="${escape(c.id)}" title="Force-reveal this capsule now (admin override)">Reveal early</button>
+        <button class="btn btn-ghost btn-sm"     type="button" data-tcp-edit="${escape(c.id)}">Edit</button>
+        <button class="btn btn-danger-ghost btn-sm" type="button" data-tcp-delete="${escape(c.id)}">Delete</button>
+      </div>` : '';
+    return `
+      <article class="tcp-card is-sealed" data-id="${escape(c.id)}">
+        <div class="tcp-envelope">
+          <div class="tcp-envelope-flap"></div>
+          <div class="tcp-envelope-body">
+            <div class="tcp-envelope-lock">🔒</div>
+            <div class="tcp-envelope-meta">
+              ${isAdmin ? `<div class="tcp-envelope-to">To: <strong>${escape(recipient)}</strong></div>` : ''}
+              <div class="tcp-envelope-when">Opens on <strong>${escape(formatDate(c.unlockDate))}</strong></div>
+              ${c.title ? `<div class="tcp-envelope-title muted small">${escape(c.title)}</div>` : ''}
+            </div>
+          </div>
+        </div>
+        ${adminControls}
+      </article>`;
+  },
+
+  // OPENED card — full content visible. Title + body + photo + link.
+  // Author + sealed-on stamp at the bottom; if force-revealed, that's
+  // also called out so the recipient knows the unlock wasn't strict.
+  openedCardHTML(c) {
+    const isAdmin = Auth.isAdmin();
+    const recipient = resolvePersonRefLabel(c.recipientRef) || 'someone';
+    const author = c.authorName || 'someone';
+    const bodyHTML = c.body
+      ? (/<[a-z][^>]*>/i.test(c.body)
+          ? `<div class="tcp-body rich">${RichText.sanitize(c.body)}</div>`
+          : `<div class="tcp-body">${escape(c.body).replace(/\n/g, '<br>')}</div>`)
+      : '';
+    const wasOverride = !!c.revealedBy && this.isLocked(c);
+    const photoHTML = c.photo?.path
+      ? `<div class="tcp-photo" data-tcp-photo data-bucket="${escape(c.photo.bucket)}" data-path="${escape(c.photo.path)}" data-tcp-photo-cap="${escape(c.id)}" tabindex="0"></div>`
+      : '';
+    const adminControls = isAdmin ? `
+      <div class="tcp-card-actions">
+        <button class="btn btn-ghost btn-sm"        type="button" data-tcp-edit="${escape(c.id)}">Edit</button>
+        <button class="btn btn-danger-ghost btn-sm" type="button" data-tcp-delete="${escape(c.id)}">Delete</button>
+      </div>` : '';
+    return `
+      <article class="tcp-card is-opened" data-id="${escape(c.id)}">
+        <header class="tcp-card-head">
+          <div>
+            <div class="muted small">To <strong>${escape(recipient)}</strong> · From <strong>${escape(author)}</strong></div>
+            ${c.title ? `<h3 class="tcp-card-title">${escape(c.title)}</h3>` : ''}
+            <div class="muted small">Sealed ${escape(formatDate(new Date(c.sealedAt).toISOString().slice(0, 10)))} · Opened ${escape(formatDate(c.unlockDate))}${wasOverride ? ' <span class="tcp-override-tag">(early reveal)</span>' : ''}</div>
+          </div>
+          ${adminControls}
+        </header>
+        ${bodyHTML}
+        ${photoHTML}
+        ${c.link ? `<a href="${escape(c.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip">🔗 Open link</a>` : ''}
+      </article>`;
+  },
+
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket;
+    const path   = el.dataset.path;
+    if (!bucket || !path) return;
+    const key = `${bucket}|${path}`;
+    const now = Date.now();
+    const cached = this.signedUrlCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      el.style.backgroundImage = `url('${cached.url}')`;
+      return;
+    }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${url}')`;
+  },
+
+  // Admin override: stamp the capsule as force-revealed by this admin so
+  // the recipient sees "(early reveal)" instead of being misled into
+  // thinking the unlock date had passed.
+  revealNow(id) {
+    if (!Auth.isAdmin()) return;
+    const c = this.list().find(x => x.id === id); if (!c) return;
+    if (!confirm(`Reveal "${c.title || 'this capsule'}" early? The recipient will be able to read it now.`)) return;
+    c.revealedBy = Backend.user?.id || 'admin';
+    Store.save();
+    toast('Capsule revealed.');
+    this.render();
+  },
+
+  async deleteCapsule(id) {
+    if (!Auth.isAdmin()) return;
+    const c = this.list().find(x => x.id === id); if (!c) return;
+    if (!confirm('Delete this capsule? The photo is also removed from storage.')) return;
+    if (c.photo?.bucket && c.photo.path) await Backend.deleteMedia(c.photo.bucket, c.photo.path);
+    Store.state.timeCapsules = this.list().filter(x => x.id !== id);
+    Store.save();
+    toast('Capsule deleted.');
+    this.render();
+  },
+};
+
+// -------------------- TIME CAPSULE MODAL (v4.47) --------------------
+const TimeCapsuleModal = {
+  editingId: null,
+  tempPhoto: null,
+  _clearPhoto: false,
+  uploading: 0,
+
+  init() {
+    const el = $('#tcp-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#tcp-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#tcp-delete'), 'click', () => this.deleteCurrent());
+    on($('#tcp-photo-input'), 'change', (e) => this.onPhotoPick(e));
+    on($('#tcp-photo-clear'), 'click', () => this.clearPhoto());
+    RichText.mount($('#tcp-body-editor'));
+    // Emoji button → proxy + EmojiPicker (same pattern as Memories /
+    // My Kids notes editors).
+    $('#tcp-body-editor')?.addEventListener('rt-emoji', () => {
+      const surface = $('#tcp-body-editor [data-rt-surface]');
+      let proxy = $('#tcp-body-emoji-proxy');
+      if (!proxy) {
+        proxy = document.createElement('input');
+        proxy.type = 'hidden';
+        proxy.id = 'tcp-body-emoji-proxy';
+        document.body.appendChild(proxy);
+        proxy.addEventListener('change', () => {
+          const ch = proxy.value; if (!ch) return;
+          proxy.value = '';
+          surface?.focus();
+          try { document.execCommand('insertText', false, ch); }
+          catch { surface?.appendChild(document.createTextNode(ch)); }
+        });
+      }
+      EmojiPicker.open(proxy, $('#tcp-body-emoji'));
+    });
+  },
+
+  // Same recipient picker shape we use for recipes + memories tags.
+  populateRecipientPicker(currentRef) {
+    const sel = $('#tcp-recipient'); if (!sel) return;
+    const memberOpts = sortMembers(Store.membersList())
+      .filter(m => !m.dateOfDeath)
+      .map(m => `<option value="m:${m.id}">${escape(displayName(m))}</option>`);
+    const friendOpts = [];
+    sortFriends(Object.values(Store.state.friends || {})).forEach(f => {
+      friendOpts.push(`<option value="f:${f.id}">${escape(displayName(f))}</option>`);
+      if (f.spouse) friendOpts.push(`<option value="s:${f.id}">${escape(displayName(f.spouse))} (spouse of ${escape(displayName(f))})</option>`);
+      (f.kids || []).forEach(k => {
+        friendOpts.push(`<option value="k:${f.id}:${k.id}">${escape(displayName(k))} (child of ${escape(displayName(f))})</option>`);
+      });
+    });
+    sel.innerHTML = `
+      <option value="">— Pick recipient —</option>
+      ${memberOpts.length ? `<optgroup label="Family">${memberOpts.join('')}</optgroup>` : ''}
+      ${friendOpts.length ? `<optgroup label="Friends">${friendOpts.join('')}</optgroup>` : ''}
+    `;
+    sel.value = currentRef || '';
+  },
+
+  openAdd() {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.tempPhoto = null;
+    this._clearPhoto = false;
+    this.reset();
+    this.populateRecipientPicker('');
+    $('#tcp-modal-title').textContent = 'New capsule';
+    $('#tcp-submit').textContent = 'Seal capsule';
+    $('#tcp-delete').hidden = true;
+    RichText.write($('#tcp-body-editor'), '');
+    // Default the unlock date to one year out — most capsule use cases
+    // are "open in N years," not "open tomorrow."
+    const d = new Date(); d.setFullYear(d.getFullYear() + 1);
+    $('#tcp-form').unlockDate.value = d.toISOString().slice(0, 10);
+    this.renderPhotoPreview(null);
+    this.open();
+    setTimeout(() => $('#tcp-recipient').focus(), 50);
+  },
+
+  openEdit(id) {
+    if (!Auth.isAdmin()) return;
+    const c = (Store.state.timeCapsules || []).find(x => x.id === id); if (!c) return;
+    this.editingId = id;
+    this.tempPhoto = null;
+    this._clearPhoto = false;
+    this.reset();
+    this.populateRecipientPicker(c.recipientRef || '');
+    $('#tcp-modal-title').textContent = `Edit capsule`;
+    $('#tcp-submit').textContent = 'Save changes';
+    $('#tcp-delete').hidden = false;
+    const fm = $('#tcp-form');
+    fm.unlockDate.value = c.unlockDate || '';
+    fm.title.value      = c.title || '';
+    fm.link.value       = c.link || '';
+    RichText.write($('#tcp-body-editor'), c.body || '');
+    this.renderPhotoPreview(c.photo || null);
+    this.open();
+  },
+
+  reset() {
+    $('#tcp-form').reset();
+    $('#tcp-error').hidden = true;
+  },
+  open() {
+    const el = $('#tcp-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+  },
+  close() {
+    const el = $('#tcp-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.tempPhoto = null;
+    this._clearPhoto = false;
+  },
+
+  async renderPhotoPreview(existing) {
+    const el = $('#tcp-photo-preview');
+    if (!el) return;
+    const ref = this._clearPhoto ? null : (this.tempPhoto || existing || null);
+    if (!ref) { el.style.backgroundImage = ''; el.innerHTML = '<span style="opacity:.45; font-size:36px;">📷</span>'; return; }
+    const url = await Backend.getMediaUrl(ref.bucket, ref.path, 3600);
+    if (url) { el.style.backgroundImage = `url('${url}')`; el.innerHTML = ''; }
+  },
+
+  async onPhotoPick(e) {
+    const file = e.target.files?.[0]; if (!file) return;
+    e.target.value = '';
+    this.uploading++;
+    try {
+      const blob = await downscaleImageToBlob(file, 2400, 0.85);
+      const result = await Backend.uploadMedia(
+        new File([blob], `tcp-${Date.now()}.jpg`, { type: 'image/jpeg' }),
+        { bucket: 'family-photos', folder: 'timecapsules', maxBytes: 10 * 1024 * 1024 }
+      );
+      if (!result.ok) throw new Error(result.reason);
+      if (this.tempPhoto?.bucket) await Backend.deleteMedia(this.tempPhoto.bucket, this.tempPhoto.path);
+      this.tempPhoto = { bucket: result.bucket, path: result.path };
+      this._clearPhoto = false;
+      this.renderPhotoPreview(null);
+    } catch (err) {
+      toast(`Photo upload failed: ${err.message || err}`, 'warn');
+    } finally {
+      this.uploading--;
+    }
+  },
+
+  async clearPhoto() {
+    if (this.tempPhoto?.bucket) await Backend.deleteMedia(this.tempPhoto.bucket, this.tempPhoto.path);
+    this.tempPhoto = null;
+    this._clearPhoto = true;
+    this.renderPhotoPreview(null);
+  },
+
+  async save() {
+    if (!Auth.isAdmin()) return;
+    if (this.uploading > 0) {
+      $('#tcp-error').textContent = 'Wait for the photo to finish uploading.';
+      $('#tcp-error').hidden = false;
+      return;
+    }
+    const fm = $('#tcp-form');
+    const fd = new FormData(fm);
+    const recipientRef = (fd.get('recipientRef') || '').toString().trim();
+    const unlockDate   = (fd.get('unlockDate')   || '').toString().trim();
+    if (!recipientRef) { this.error('Pick a recipient.'); return; }
+    if (!unlockDate)   { this.error('Pick an unlock date.'); return; }
+    const body = RichText.read($('#tcp-body-editor'));
+    if (!body) { this.error('Write something for the recipient to read.'); return; }
+    const existing = this.editingId
+      ? (Store.state.timeCapsules || []).find(c => c.id === this.editingId)
+      : null;
+
+    let photo = existing?.photo || null;
+    if (this._clearPhoto) {
+      if (existing?.photo?.bucket) await Backend.deleteMedia(existing.photo.bucket, existing.photo.path);
+      photo = null;
+    } else if (this.tempPhoto) {
+      if (existing?.photo?.bucket && existing.photo.path !== this.tempPhoto.path) {
+        await Backend.deleteMedia(existing.photo.bucket, existing.photo.path);
+      }
+      photo = this.tempPhoto;
+    }
+
+    const record = {
+      ...(existing || {}),
+      id: this.editingId || uid('tcp'),
+      recipientRef,
+      unlockDate,
+      title:    (fd.get('title') || '').toString().trim(),
+      body,
+      link:     (fd.get('link')  || '').toString().trim(),
+      photo,
+      authorId:   existing?.authorId   ?? (Backend.user?.id || null),
+      authorName: existing?.authorName ?? this.currentAuthorName(),
+      sealedAt:   existing?.sealedAt   ?? Date.now(),
+      // Editing a previously-revealed capsule keeps it revealed.
+      revealedBy: existing?.revealedBy || null,
+    };
+    if (!Array.isArray(Store.state.timeCapsules)) Store.state.timeCapsules = [];
+    if (existing) {
+      const idx = Store.state.timeCapsules.findIndex(c => c.id === this.editingId);
+      Store.state.timeCapsules[idx] = record;
+    } else {
+      Store.state.timeCapsules.push(record);
+    }
+    Store.save();
+    toast(this.editingId ? 'Capsule saved.' : 'Capsule sealed.');
+    this.close();
+    TimeCapsuleView.render();
+  },
+
+  currentAuthorName() {
+    const me = Auth.current;
+    if (me && me !== 'admin-bootstrap' && typeof me === 'object') return displayName(me);
+    return Backend.user?.email || 'Admin';
+  },
+
+  error(msg) {
+    $('#tcp-error').textContent = msg;
+    $('#tcp-error').hidden = false;
+  },
+
+  async deleteCurrent() {
+    if (!this.editingId) return;
+    const id = this.editingId;
+    this.close();
+    TimeCapsuleView.deleteCapsule(id);
   },
 };
 
