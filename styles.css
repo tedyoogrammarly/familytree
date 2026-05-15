@@ -4613,3 +4613,160 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .mykids-entries { padding: 10px 12px 18px; }
   .mykids-entry-photos { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ============================================================
+   v4.41  MY KIDS POLISH
+   Title emoji button, rich-text Notes editor, link chip, photo
+   lightbox prev/next controls.
+   ============================================================ */
+
+/* Title input + inline emoji button */
+.title-with-emoji {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.title-with-emoji input {
+  flex: 1;
+  min-width: 0;
+}
+.title-emoji-btn {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Rich-text editor (Notes) */
+.rich-text-editor {
+  border: 1px solid var(--ink-200);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+.rt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--paper-soft, #f1ece1);
+  border-bottom: 1px solid var(--ink-200);
+}
+.rt-btn {
+  border: 0;
+  background: transparent;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink-700);
+  cursor: pointer;
+  transition: background-color .12s ease-out;
+  min-width: 28px;
+}
+.rt-btn:hover { background: #fff; color: var(--brand-900); }
+.rt-btn:active { background: rgba(99, 102, 241, 0.12); }
+.rt-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--ink-200);
+  margin: 0 4px;
+}
+.rt-surface {
+  min-height: 110px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  outline: none;
+  color: var(--ink-900);
+}
+.rt-surface:focus {
+  background: #fff;
+}
+.rt-surface[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ink-500);
+  pointer-events: none;
+}
+.rt-surface ul, .rt-surface ol { margin: 4px 0 4px 22px; padding: 0; }
+.rt-surface li { margin: 2px 0; }
+.rt-surface a { color: var(--brand-900, #0044cc); text-decoration: underline; }
+
+/* Rich-text body in entry cards (render side) */
+.mykids-entry-body.rich { line-height: 1.55; }
+.mykids-entry-body.rich ul, .mykids-entry-body.rich ol { margin: 4px 0 4px 22px; padding: 0; }
+.mykids-entry-body.rich li { margin: 2px 0; }
+.mykids-entry-body.rich a {
+  color: var(--brand-900, #0044cc);
+  text-decoration: underline;
+}
+
+/* Link chip on Art / Letters entries */
+.mykids-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: var(--brand-900);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color .12s, border-color .12s;
+}
+.mykids-link-chip:hover {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+/* Lightbox prev/next/counter (shown only when .is-mykids is set on
+   the shared #vault-lightbox element). */
+#vault-lightbox.is-mykids .mk-lb-prev,
+#vault-lightbox.is-mykids .mk-lb-next {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink-900);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: background-color .15s ease-out, transform .12s ease-out;
+}
+#vault-lightbox.is-mykids .mk-lb-prev { left: 18px; }
+#vault-lightbox.is-mykids .mk-lb-next { right: 18px; }
+#vault-lightbox.is-mykids .mk-lb-prev:hover,
+#vault-lightbox.is-mykids .mk-lb-next:hover {
+  background: #fff;
+  transform: translateY(-50%) scale(1.05);
+}
+#vault-lightbox.is-mykids .mk-lb-counter {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border-radius: 99px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  z-index: 2;
+}
+#vault-lightbox.is-mykids [hidden] { display: none !important; }
+
+@media (max-width: 760px) {
+  #vault-lightbox.is-mykids .mk-lb-prev { left: 8px; }
+  #vault-lightbox.is-mykids .mk-lb-next { right: 8px; }
+  .rt-btn { padding: 4px 8px; }
+}

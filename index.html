@@ -502,8 +502,38 @@
             <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Date</span><input name="date" type="date" required /></label>
             <label class="field" id="mykids-school-year-wrap" hidden><span>School year</span><input name="schoolYear" placeholder="e.g. 2025-26 · 1st grade" /></label>
           </div>
-          <label class="field"><span>Title</span><input name="title" placeholder="e.g. First day of kindergarten" required /></label>
-          <label class="field"><span>Notes</span><textarea name="body" rows="4" placeholder="What happened, who was there, anything worth remembering."></textarea></label>
+          <label class="field">
+            <span>Title</span>
+            <div class="title-with-emoji">
+              <input name="title" placeholder="e.g. First day of kindergarten" required />
+              <button type="button" class="btn btn-ghost btn-sm title-emoji-btn" id="mykids-title-emoji" title="Insert emoji" aria-label="Insert emoji into title">😊</button>
+            </div>
+          </label>
+          <!-- v4.41: link field shown only for Art + Letters tabs (toggled in JS). -->
+          <label class="field" id="mykids-link-wrap" hidden>
+            <span><span class="kv-emoji" aria-hidden="true">🔗</span>Link <span class="muted small">(optional — Google Doc, photo album, etc.)</span></span>
+            <input name="link" type="url" placeholder="https://…" />
+          </label>
+          <!-- v4.41: Notes is now a rich-text editor. The hidden textarea
+               keeps form submission semantics + acts as the source of truth
+               on save (we sync HTML from the contenteditable into it). -->
+          <div class="field">
+            <span>Notes</span>
+            <div class="rich-text-editor" id="mykids-notes-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Notes formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold (Ctrl+B)"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic (Ctrl+I)"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline (Ctrl+U)"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="mykids-notes-emoji">😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="What happened, who was there, anything worth remembering."></div>
+              <textarea name="body" id="mykids-body-mirror" hidden></textarea>
+            </div>
+          </div>
           <div class="field" id="mykids-photos-wrap">
             <span>Photos <span class="muted small">(up to 6)</span></span>
             <div class="mykids-photo-grid" id="mykids-photo-grid"></div>

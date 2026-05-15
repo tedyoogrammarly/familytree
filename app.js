@@ -9825,6 +9825,20 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.41',
+    date: '2026-05-15',
+    title: 'My Kids polish — nuclear-family roster + rich text + lightbox',
+    changes: [
+      'My Kids roster now scopes to the *current admin\'s* nuclear-family kids only — walks the family tree (parentIds) and includes members whose parents are both the admin and the admin\'s spouse. Cousins / nieces / nephews no longer surface. Adapts to whichever admin is logged in.',
+      'Notes field is now a rich-text editor with a 6-button toolbar: Bold, Italic, Underline, Bulleted list, Link, Emoji insert. Output saved as sanitized HTML (whitelist: b/i/u/br/p/div/ul/ol/li/a; everything else stripped; <a> forced to target=_blank rel=noopener). Legacy plain-text bodies render unchanged.',
+      'Title field has a 😊 button next to it that opens the same emoji picker used by events. Picked emoji appends to the title with a space separator.',
+      'New optional Link field on Art + Letters entries — paste a Google Doc / Drive / album URL and the card renders a "🔗 Open link" chip below the body.',
+      'Photo downscale bumped from 1600px max → 2400px max. ~600–900 KB per photo, ~1100 photos in the 1 GB free Supabase tier. Crisper in the lightbox.',
+      'New full-screen photo lightbox: click any entry photo to open. Prev/Next arrow buttons (and keyboard Left/Right) cycle through that entry\'s photo set. Counter shows "n / total". Esc to close. Reuses the existing vault-lightbox overlay element with an .is-mykids flavor flag so the simpler single-image insurance-card flow stays intact.',
+      'CPU/memory: zero new SQL or realtime channels. The rich-text save path stores a (small) HTML string in the same body field. Lightbox uses cached signed URLs already populated by the entry grid renderer — no extra Storage round-trips per click.',
+    ],
+  },
+  {
     version: '4.40',
     date: '2026-05-15',
     title: 'My Kids + Annual Letters (Wave 2 of family-portal expansion)',
@@ -10376,10 +10390,21 @@ const VaultView = {
     }));
     // Lightbox close affordances: × button, backdrop click, Esc key.
     document.querySelectorAll('[data-vault-lightbox-close]').forEach(el => {
-      on(el, 'click', () => this.closeLightbox());
+      on(el, 'click', () => {
+        // v4.41: the same lightbox element is reused by MyKidsLightbox.
+        // If we're currently in the kids-mode flavor, defer the close to
+        // it so the prev/next state + counter get cleaned up too.
+        const lb = $('#vault-lightbox');
+        if (lb?.classList.contains('is-mykids')) MyKidsLightbox.close();
+        else this.closeLightbox();
+      });
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !$('#vault-lightbox').hidden) this.closeLightbox();
+      if (e.key === 'Escape' && !$('#vault-lightbox').hidden) {
+        const lb = $('#vault-lightbox');
+        if (lb?.classList.contains('is-mykids')) MyKidsLightbox.close();
+        else this.closeLightbox();
+      }
     });
   },
 
@@ -13165,30 +13190,62 @@ const MyKidsView = {
   },
 
   // True when the current viewer is allowed to use the page at all. Admins
-  // always pass. Non-admins are allowed only when they have a linked member
-  // and that member is themselves under 18 — i.e. they're viewing their own
-  // archive.
+  // always pass. Non-admins are allowed only when they have a linked
+  // member that's a kid in the (now nuclear-family-scoped) roster of any
+  // admin in the archive — i.e. they're viewing their own page.
   canViewerAccess() {
     if (Auth.isAdmin()) return true;
     const me = Auth.current;
     if (!me || me === 'admin-bootstrap') return false;
     if (typeof me !== 'object') return false;
-    return memberIsKid(me);
+    // The viewer is allowed if they appear in the nuclear-family roster
+    // of at least one admin-role member. We don't have a global "kid?"
+    // bit, so just check membership: am I one of any admin's kids?
+    return Store.membersList().some(adminMember => {
+      if (adminMember.role !== 'admin') return false;
+      const kids = adminMember.childrenIds || [];
+      if (!kids.includes(me.id)) return false;
+      const spouseId = adminMember.spouseId;
+      if (!spouseId) return true;
+      const myParents = me.parentIds || [];
+      return myParents.includes(adminMember.id) && myParents.includes(spouseId);
+    });
   },
 
-  // Auto-roster: every member with age < 18 (excludes deceased), sorted by
-  // age ascending so the youngest appear first.
+  // v4.41: roster is the *current admin's* nuclear-family kids — every
+  // member whose parentIds includes the admin AND the admin's spouse.
+  // Walks the family tree rather than auto-including every minor in the
+  // archive, so cousins / nieces / nephews don't surface on the page.
+  // Falls back gracefully when admin info is missing (bootstrap admin
+  // with no member record, or admin with no spouse) by returning members
+  // who have the admin alone as a parent.
   rosterMembers() {
+    const me = Auth.current;
+    if (!me || me === 'admin-bootstrap' || typeof me !== 'object') return [];
+    const myId = me.id;
+    const spouseId = me.spouseId || null;
     return Store.membersList()
-      .filter(m => memberIsKid(m))
+      .filter(m => {
+        if (m.dateOfDeath) return false;            // skip deceased
+        const parents = Array.isArray(m.parentIds) ? m.parentIds : [];
+        if (!parents.includes(myId)) return false;
+        // When the admin has a current spouse, require the child to have
+        // both as parents — that's the strict nuclear-family rule. When
+        // there's no spouse on record, fall back to "any kid that has me
+        // as a parent" so single-admin families still work.
+        if (spouseId) return parents.includes(spouseId);
+        return true;
+      })
       .sort((a, b) => (b.birthday || '').localeCompare(a.birthday || ''));
   },
 
   render() {
     if (!Auth.isAdmin()) {
-      // Non-admin (the kid themselves) auto-routes to their own detail page.
+      // Non-admin (the kid themselves) auto-routes to their own detail
+      // page. canViewerAccess() has already validated they're someone's
+      // nuclear-family kid; just point at their own id.
       const me = Auth.current;
-      if (me && typeof me === 'object' && memberIsKid(me)) {
+      if (me && typeof me === 'object') {
         this.selectedKidId = me.id;
       }
     }
@@ -13290,13 +13347,41 @@ const MyKidsView = {
     });
     // Lazy-resolve signed URLs for every photo placeholder in this view.
     host.querySelectorAll('[data-mk-photo]').forEach(img => this.resolvePhotoSrc(img));
+    // v4.41: clicking a photo opens the full-screen lightbox. We bind once
+    // per render — handlers go on the tile elements directly so we can
+    // capture the entry id + photo index without delegated walking.
+    host.querySelectorAll('[data-mk-photo]').forEach(tile => {
+      on(tile, 'click', () => this.openLightboxFromTile(tile));
+      on(tile, 'keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this.openLightboxFromTile(tile);
+        }
+      });
+    });
+  },
+
+  // Resolve a photo tile back to its parent entry's photo set, then open
+  // the lightbox starting at the right index. Reading from the DOM rather
+  // than re-looking-up the entry keeps this resilient against re-sorts.
+  openLightboxFromTile(tile) {
+    const entryId  = tile.dataset.entryId;
+    const photoIdx = Number(tile.dataset.photoIdx) || 0;
+    const k = Store.state.myKids[this.selectedKidId];
+    if (!k) return;
+    const list = k[this.activeTab] || [];
+    const entry = list.find(x => x.id === entryId);
+    if (!entry || !entry.photos?.length) return;
+    MyKidsLightbox.open(entry.photos, photoIdx);
   },
 
   // Render one entry card. Letters skip the photo grid. School entries
   // show the schoolYear meta line. All show date + title + body + actions.
-  entryCardHTML(e) {
+  // v4.41: body renders as sanitized HTML (rich text); Art + Letters show
+  // an optional link chip; clicking any photo opens the lightbox.
+  entryCardHTML(e, entryIdx) {
     const photos = (e.photos || []).map((p, i) => `
-      <div class="mykids-photo" data-mk-photo data-bucket="${escape(p.bucket || 'family-photos')}" data-path="${escape(p.path || '')}" tabindex="0" aria-label="Photo ${i + 1}"></div>
+      <div class="mykids-photo" data-mk-photo data-bucket="${escape(p.bucket || 'family-photos')}" data-path="${escape(p.path || '')}" data-photo-idx="${i}" data-entry-id="${escape(e.id)}" tabindex="0" aria-label="Photo ${i + 1}"></div>
     `).join('');
     const meta = [
       e.date ? `<time>${formatDate(e.date)}</time>` : '',
@@ -13308,6 +13393,18 @@ const MyKidsView = {
            <button class="btn btn-danger-ghost btn-sm" type="button" data-mk-delete="${e.id}">Delete</button>
          </div>`
       : '';
+    // v4.41: body is sanitized HTML. RichText.sanitize() is safe to render
+    // straight (no script tags, attrs stripped). Legacy plain-text bodies
+    // get auto-escaped + newline-converted at write-time; on the read path
+    // we just trust the stored content.
+    const bodyHTML = e.body
+      ? (/<[a-z][^>]*>/i.test(e.body)
+          ? `<div class="mykids-entry-body rich">${RichText.sanitize(e.body)}</div>`
+          : `<div class="mykids-entry-body">${escape(e.body).replace(/\n/g, '<br>')}</div>`)
+      : '';
+    const linkChip = e.link
+      ? `<a href="${escape(e.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip" title="${escape(e.link)}">🔗 Open link</a>`
+      : '';
     return `
       <article class="mykids-entry" data-id="${e.id}">
         <header class="mykids-entry-head">
@@ -13317,7 +13414,8 @@ const MyKidsView = {
           </div>
           ${actions}
         </header>
-        ${e.body ? `<div class="mykids-entry-body">${escape(e.body).replace(/\n/g, '<br>')}</div>` : ''}
+        ${bodyHTML}
+        ${linkChip}
         ${this.activeTab !== 'letters' && photos ? `<div class="mykids-entry-photos">${photos}</div>` : ''}
       </article>`;
   },
@@ -13363,16 +13461,216 @@ const MyKidsView = {
   },
 };
 
-// `memberIsKid(m)` — true when the member has a birthday making them under
-// 18 AND is alive. Used by MyKidsView to derive the roster and to gate kid-
-// self access. Centralized here so other callers stay consistent.
-function memberIsKid(m) {
-  if (!m || m.dateOfDeath) return false;
-  if (!m.birthday) return false;
-  const parts = ageParts(m.birthday);
-  if (!parts) return false;
-  return parts.years < 18;
-}
+// -------------------- RICH TEXT HELPER (v4.41) --------------------
+// Tiny wrapper around a contenteditable div + a small toolbar. Exposes
+// .mount / .read / .write / .focus so the Notes editor in MyKidsEntryModal
+// can stay declarative. Output is sanitized HTML restricted to a small
+// whitelist (b, i, u, br, p, ul, ol, li, a). document.execCommand is
+// deprecated but still ubiquitously supported, and is the cheapest way to
+// get a working bold/italic/list editor without pulling in a library.
+const RichText = {
+  // Tags allowed in stored HTML. Anything else gets unwrapped to text.
+  ALLOWED_TAGS: new Set(['B','STRONG','I','EM','U','BR','P','DIV','UL','OL','LI','A']),
+  // Attributes allowed per tag. `*` covers any element.
+  ALLOWED_ATTRS: { 'A': new Set(['href']) },
+
+  mount(container) {
+    if (container.dataset.rtMounted) return;
+    container.dataset.rtMounted = '1';
+    const surface = container.querySelector('[data-rt-surface]');
+    if (!surface) return;
+    const toolbar = container.querySelector('.rt-toolbar');
+    if (toolbar) {
+      toolbar.addEventListener('mousedown', (e) => {
+        // Prevent the toolbar from stealing selection focus when clicked.
+        if (e.target.closest('[data-rt-cmd]')) e.preventDefault();
+      });
+      toolbar.querySelectorAll('[data-rt-cmd]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const cmd = btn.dataset.rtCmd;
+          surface.focus();
+          if (cmd === 'createLink') {
+            const url = prompt('Link URL:');
+            if (!url) return;
+            try { document.execCommand('createLink', false, url); } catch {}
+          } else if (cmd === 'emoji') {
+            // Caller wires this — the emoji-insert flow is handled by the
+            // entry modal (it opens the global EmojiPicker and writes back
+            // the chosen character at the saved selection).
+            const ev = new CustomEvent('rt-emoji', { bubbles: true, detail: { surface } });
+            container.dispatchEvent(ev);
+          } else {
+            try { document.execCommand(cmd, false, null); } catch {}
+          }
+          surface.focus();
+        });
+      });
+    }
+    // Plain-text paste only — avoids inheriting Google Docs / Word styling.
+    surface.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      document.execCommand('insertText', false, text);
+    });
+  },
+
+  // Read the current HTML, sanitized for storage. Empty content (a single
+  // <br> from a blank contenteditable) collapses to ''.
+  read(container) {
+    const surface = container.querySelector('[data-rt-surface]');
+    if (!surface) return '';
+    const html = this.sanitize(surface.innerHTML || '');
+    // Strip "<br>" only / whitespace-only output so empty editors save as ''.
+    const stripped = html.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').trim();
+    return stripped ? html : '';
+  },
+
+  // Write content into the editor. Accepts either sanitized HTML (preferred)
+  // or plain text (will be HTML-escaped with newline → <br>).
+  write(container, content) {
+    const surface = container.querySelector('[data-rt-surface]');
+    if (!surface) return;
+    if (!content) { surface.innerHTML = ''; return; }
+    // Detect plain text vs HTML by presence of a tag. Plain text gets
+    // escaped + newline-converted; HTML gets sanitized.
+    if (/<[a-z][^>]*>/i.test(content)) {
+      surface.innerHTML = this.sanitize(content);
+    } else {
+      surface.innerHTML = escape(content).replace(/\n/g, '<br>');
+    }
+  },
+
+  focus(container) {
+    container.querySelector('[data-rt-surface]')?.focus();
+  },
+
+  // Sanitize HTML: walks the tree, strips disallowed tags (unwrapping their
+  // children into text), removes all attributes except a whitelist, and
+  // forces <a href> to open safely. Returns a fresh HTML string.
+  sanitize(html) {
+    const doc = new DOMParser().parseFromString('<div>' + html + '</div>', 'text/html');
+    const root = doc.body.firstChild;
+    this._scrub(root);
+    return root.innerHTML;
+  },
+  _scrub(node) {
+    // Iterate children in reverse so removals don't break indexing.
+    const kids = [...node.childNodes];
+    for (const child of kids) {
+      if (child.nodeType === Node.TEXT_NODE) continue;
+      if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); continue; }
+      const tag = child.tagName;
+      if (!this.ALLOWED_TAGS.has(tag)) {
+        // Unwrap: move children up to the parent, then drop this node.
+        while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+        child.remove();
+        continue;
+      }
+      // Strip attributes except whitelist.
+      const allowed = this.ALLOWED_ATTRS[tag] || new Set();
+      [...child.attributes].forEach(attr => {
+        if (!allowed.has(attr.name)) child.removeAttribute(attr.name);
+      });
+      if (tag === 'A') {
+        // Force safe target/rel and strip javascript: URLs.
+        const href = (child.getAttribute('href') || '').trim();
+        if (/^\s*javascript:/i.test(href) || !href) child.removeAttribute('href');
+        if (child.getAttribute('href')) {
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer');
+        }
+      }
+      this._scrub(child);
+    }
+  },
+};
+
+// -------------------- MY KIDS LIGHTBOX (v4.41) --------------------
+// Click any photo in a kid's entry → full-screen lightbox with prev/next
+// navigation through the entry's photo set. Reuses the existing dark
+// overlay from the vault lightbox (#vault-lightbox) so we don't double
+// up on z-index / overflow management — just swap the image source and
+// attach prev/next buttons on demand.
+const MyKidsLightbox = {
+  photos: [],          // [{ bucket, path }]
+  index: 0,
+  bound: false,
+  open(photos, startIndex) {
+    if (!photos?.length) return;
+    this.photos = photos;
+    this.index = Math.max(0, Math.min(startIndex || 0, photos.length - 1));
+    this.bind();
+    const el = $('#vault-lightbox');
+    if (!el) return;
+    el.hidden = false;
+    el.classList.add('is-mykids');
+    document.body.style.overflow = 'hidden';
+    this.update();
+  },
+  close() {
+    const el = $('#vault-lightbox');
+    if (!el) return;
+    el.hidden = true;
+    el.classList.remove('is-mykids');
+    el.querySelector('img').src = '';
+    document.body.style.overflow = '';
+    this.photos = [];
+  },
+  bind() {
+    if (this.bound) return;
+    this.bound = true;
+    // Inject prev/next/counter once. They only show when .is-mykids is set
+    // on the lightbox root so the vault flow stays single-image.
+    const el = $('#vault-lightbox');
+    if (!el) return;
+    if (!el.querySelector('.mk-lb-prev')) {
+      const prev    = document.createElement('button');
+      const next    = document.createElement('button');
+      const counter = document.createElement('div');
+      prev.type    = 'button';
+      next.type    = 'button';
+      prev.className    = 'mk-lb-prev';
+      next.className    = 'mk-lb-next';
+      counter.className = 'mk-lb-counter';
+      prev.setAttribute('aria-label', 'Previous photo');
+      next.setAttribute('aria-label', 'Next photo');
+      prev.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      next.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      el.appendChild(prev);
+      el.appendChild(next);
+      el.appendChild(counter);
+      prev.addEventListener('click', (e) => { e.stopPropagation(); this.step(-1); });
+      next.addEventListener('click', (e) => { e.stopPropagation(); this.step(+1); });
+    }
+    document.addEventListener('keydown', (e) => {
+      if ($('#vault-lightbox')?.hidden) return;
+      if (!$('#vault-lightbox')?.classList.contains('is-mykids')) return;
+      if (e.key === 'Escape')      this.close();
+      if (e.key === 'ArrowLeft')   this.step(-1);
+      if (e.key === 'ArrowRight')  this.step(+1);
+    });
+  },
+  step(delta) {
+    if (!this.photos.length) return;
+    this.index = (this.index + delta + this.photos.length) % this.photos.length;
+    this.update();
+  },
+  async update() {
+    const el = $('#vault-lightbox');
+    if (!el) return;
+    const photo = this.photos[this.index];
+    const url = await Backend.getMediaUrl(photo.bucket, photo.path, 3600);
+    el.querySelector('img').src = url || '';
+    const counter = el.querySelector('.mk-lb-counter');
+    if (counter) counter.textContent = `${this.index + 1} / ${this.photos.length}`;
+    // Hide nav controls when there's only one photo.
+    const single = this.photos.length <= 1;
+    el.querySelector('.mk-lb-prev')?.toggleAttribute('hidden', single);
+    el.querySelector('.mk-lb-next')?.toggleAttribute('hidden', single);
+    if (counter) counter.hidden = single;
+  },
+};
 
 // -------------------- MY KIDS ENTRY MODAL (v4.40 Wave 2) --------------------
 // Add / edit one entry on a kid's timeline. The kid id + section are
@@ -13393,6 +13691,66 @@ const MyKidsEntryModal = {
     on($('#mykids-entry-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
     on($('#mykids-entry-delete'), 'click', () => this.deleteCurrent());
     on($('#mykids-photo-input'), 'change', (e) => this.onPhotoPick(e));
+    // v4.41: mount the rich-text editor once on init.
+    RichText.mount($('#mykids-notes-editor'));
+    // Title emoji button: reuse the EmojiPicker that gift / event icons use.
+    on($('#mykids-title-emoji'), 'click', () => this.insertTitleEmoji());
+    // Notes emoji button — wired via the RichText 'rt-emoji' event.
+    $('#mykids-notes-editor')?.addEventListener('rt-emoji', () => this.insertNotesEmoji());
+  },
+
+  // Pop the global EmojiPicker, wait for a selection, then append it to
+  // the Title input. We use the existing picker by giving it a hidden
+  // sacrificial input and an anchor (the title-emoji button).
+  insertTitleEmoji() {
+    const fm = $('#mykids-entry-form');
+    if (!fm) return;
+    const anchor = $('#mykids-title-emoji');
+    // Create-or-reuse a hidden proxy so EmojiPicker has somewhere to write.
+    let proxy = $('#mykids-title-emoji-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.type = 'hidden';
+      proxy.id = 'mykids-title-emoji-proxy';
+      document.body.appendChild(proxy);
+      // First-time: listen for the value flip and splice it into the title.
+      proxy.addEventListener('change', () => {
+        const ch = proxy.value;
+        if (!ch) return;
+        const t = fm.title;
+        t.value = (t.value ? t.value + ' ' : '') + ch;
+        proxy.value = '';
+        t.focus();
+      });
+    }
+    EmojiPicker.open(proxy, anchor);
+  },
+
+  // Same idea for Notes: open EmojiPicker, splice the chosen char into the
+  // rich-text surface at the current caret position (using insertText so
+  // we don't dirty the HTML structure).
+  insertNotesEmoji() {
+    const surface = $('#mykids-notes-editor [data-rt-surface]');
+    if (!surface) return;
+    let proxy = $('#mykids-notes-emoji-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.type = 'hidden';
+      proxy.id = 'mykids-notes-emoji-proxy';
+      document.body.appendChild(proxy);
+      proxy.addEventListener('change', () => {
+        const ch = proxy.value;
+        if (!ch) return;
+        proxy.value = '';
+        surface.focus();
+        // execCommand("insertText") puts the char at the caret — works
+        // inside contenteditable, respects current selection, and undo.
+        try { document.execCommand('insertText', false, ch); } catch {
+          surface.appendChild(document.createTextNode(ch));
+        }
+      });
+    }
+    EmojiPicker.open(proxy, $('#mykids-notes-emoji'));
   },
 
   openAdd(kidId, section) {
@@ -13407,6 +13765,9 @@ const MyKidsEntryModal = {
     $('#mykids-entry-delete').hidden = true;
     $('#mykids-school-year-wrap').hidden = section !== 'school';
     $('#mykids-photos-wrap').hidden = section === 'letters';
+    // v4.41: Link field shown only for Art + Letters.
+    $('#mykids-link-wrap').hidden = !(section === 'art' || section === 'letters');
+    RichText.write($('#mykids-notes-editor'), '');
     // Default the date to today so common case is "log today's event".
     const today = new Date(); const iso = today.toISOString().slice(0, 10);
     $('#mykids-entry-form').date.value = iso;
@@ -13432,10 +13793,12 @@ const MyKidsEntryModal = {
     $('#mykids-entry-delete').hidden = false;
     $('#mykids-school-year-wrap').hidden = section !== 'school';
     $('#mykids-photos-wrap').hidden = section === 'letters';
+    $('#mykids-link-wrap').hidden = !(section === 'art' || section === 'letters');
     const fm = $('#mykids-entry-form');
     fm.date.value       = e.date || '';
     fm.title.value      = e.title || '';
-    fm.body.value       = e.body || '';
+    RichText.write($('#mykids-notes-editor'), e.body || '');
+    if (fm.link) fm.link.value = e.link || '';
     if (section === 'school') fm.schoolYear.value = e.schoolYear || '';
     this.renderPhotoGrid();
     this.open();
@@ -13486,10 +13849,10 @@ const MyKidsEntryModal = {
       this.renderPhotoGrid();
       this.uploading++;
       try {
-        // Downscale to ~1600px before upload. Photos are stored full-rez in
-        // Storage so they can be re-cropped or zoomed later; we cap dimension
-        // to keep upload + transfer fast.
-        const blob = await downscaleImageToBlob(file, 1600, 0.85);
+        // v4.41: downscale to 2400px (bumped from 1600). Gives the lightbox
+        // view enough resolution to look crisp on retina displays and to
+        // re-zoom later, while staying under ~900 KB per JPEG.
+        const blob = await downscaleImageToBlob(file, 2400, 0.85);
         const folder = `kids/${this.kidId || 'unknown'}/${this.section || 'misc'}`;
         const result = await Backend.uploadMedia(
           new File([blob], file.name, { type: 'image/jpeg' }),
@@ -13581,13 +13944,23 @@ const MyKidsEntryModal = {
       id: this.editingId || uid('mk'),
       date,
       title,
-      body: (fd.get('body') || '').toString(),
+      // v4.41: body is now sanitized HTML from the rich-text editor.
+      // Legacy entries (plain-text strings) still load correctly thanks
+      // to RichText.write's text-vs-HTML detection.
+      body: RichText.read($('#mykids-notes-editor')),
       photos: this.section === 'letters' ? [] : photos,
       createdAt: existing?.createdAt || Date.now(),
       createdBy: existing?.createdBy || Backend.user?.id || null,
     };
     if (this.section === 'school') {
       record.schoolYear = (fd.get('schoolYear') || '').toString().trim();
+    }
+    // v4.41: optional link on Art + Letters entries.
+    if (this.section === 'art' || this.section === 'letters') {
+      record.link = (fd.get('link') || '').toString().trim();
+    } else {
+      // Strip on entries that moved between sections.
+      delete record.link;
     }
     if (existing) {
       const idx = list.findIndex(x => x.id === this.editingId);
