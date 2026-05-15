@@ -443,6 +443,7 @@
           </div>
           <div class="page-head-actions">
             <button class="btn btn-ghost btn-sm" id="btn-mykids-back" hidden>← All kids</button>
+            <button class="btn btn-secondary btn-sm" id="btn-mykids-manage" data-admin-only>Manage kids</button>
           </div>
         </div>
 
@@ -453,7 +454,11 @@
           <div id="mykids-empty" class="tree-empty" hidden>
             <div class="tree-empty-card">
               <h3>No kids yet</h3>
-              <p>Anyone in the family tree with a birthday making them under 18 appears here automatically. Add a kid from the Members page to get started.</p>
+              <p>Click <strong>Pick my kids</strong> below to choose which family members appear here.</p>
+              <button class="btn btn-primary" id="btn-mykids-pick" data-admin-only>Pick my kids</button>
+              <p class="muted small" style="margin-top:12px;">
+                Tip: if you set parent links in the Family Tree (each kid has you and your spouse as parents), they'll auto-appear here too — no picker needed.
+              </p>
             </div>
           </div>
         </section>
@@ -482,6 +487,33 @@
         </section>
       </div>
     </main>
+
+    <!-- ===== MY KIDS PICKER MODAL (v4.42) =====
+         Lets the admin pick exactly which family members appear on the
+         My Kids roster. Selected ids land in state.myKidsRoster, which
+         overrides the auto-walk-from-parentIds logic. -->
+    <div id="mykids-picker-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mykids-picker-title">
+        <header class="modal-head">
+          <h3 id="mykids-picker-title">Pick my kids</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="mykids-picker-form" class="modal-body">
+          <p class="muted small" style="margin: 0 0 12px;">
+            Check every family member whose growing-up archive should appear on the My Kids page. Cousins, nephews, and other relatives stay off the page unless you check them here.
+          </p>
+          <input id="mykids-picker-search" class="input" type="search" placeholder="Search by name…" autocomplete="off" />
+          <div id="mykids-picker-list" class="mykids-picker-list"></div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save kids</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ===== ENTRY EDITOR MODAL (Wave 2) =====
          Used for adding / editing one entry across all four sections.

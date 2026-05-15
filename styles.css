@@ -4770,3 +4770,52 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   #vault-lightbox.is-mykids .mk-lb-next { right: 8px; }
   .rt-btn { padding: 4px 8px; }
 }
+
+/* ============================================================
+   v4.42  MY KIDS — PICKER MODAL
+   "Manage kids" picker: scrollable list of members with checkboxes.
+   ============================================================ */
+.mykids-picker-list {
+  margin-top: 10px;
+  max-height: 380px;
+  overflow-y: auto;
+  border: 1px solid var(--ink-200);
+  border-radius: 10px;
+  background: #fff;
+}
+.mykids-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ink-200);
+  cursor: pointer;
+  transition: background-color .12s ease-out;
+}
+.mykids-picker-row:last-child { border-bottom: 0; }
+.mykids-picker-row:hover { background: var(--paper-soft, #f1ece1); }
+.mykids-picker-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.mykids-picker-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: var(--paper-soft, #f1ece1);
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+}
+.mykids-picker-info { min-width: 0; flex: 1; }
+.mykids-picker-name { font-weight: 500; }
+
+#mykids-picker-search { margin-bottom: 4px; }
+
+/* Empty state on the My Kids page — the "Pick my kids" button stays
+   centered and the tip line gets a max-width so it stays readable. */
+#mykids-empty .tree-empty-card { text-align: center; }
+#mykids-empty .tree-empty-card p { max-width: 42ch; margin-left: auto; margin-right: auto; }
+#mykids-empty .btn { margin-top: 6px; }

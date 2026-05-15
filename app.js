@@ -830,6 +830,11 @@ const Store = {
       // small. The kid roster auto-derives from members whose age < 18
       // (computed at render time) — no per-kid flag in this map.
       myKids: {},
+      // v4.42: manual override for the My Kids roster. When this list is
+      // non-empty it replaces the auto-walk-from-parentIds logic — admins
+      // pick exactly which family members appear on My Kids. Empty list =
+      // fall back to the parent-link auto-walk.
+      myKidsRoster: [],
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -1040,6 +1045,9 @@ const Store = {
     if (!this.state.myKids || typeof this.state.myKids !== 'object') {
       this.state.myKids = {};
     }
+    // v4.42: manual roster override list. Backfill as empty array on
+    // archives saved before the picker shipped.
+    if (!Array.isArray(this.state.myKidsRoster)) this.state.myKidsRoster = [];
     for (const kidId of Object.keys(this.state.myKids)) {
       const k = this.state.myKids[kidId];
       if (!k || typeof k !== 'object') { delete this.state.myKids[kidId]; continue; }
@@ -9825,6 +9833,17 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.42',
+    date: '2026-05-15',
+    title: 'My Kids — manual picker for when parent links aren\'t set up',
+    changes: [
+      'New "Pick my kids" picker on the My Kids page. The empty state now offers a clear primary action (a button) instead of pointing at the wrong page. Clicking it opens a checklist of every member — pick the ones whose growing-up archive should appear here.',
+      'Selected ids are saved to state.myKidsRoster. The roster resolver checks that array first; if it\'s non-empty it overrides the parent-link auto-walk. Empty array falls back to the auto-walk (so users who properly link kids in Family Tree don\'t need to touch the picker).',
+      'New "Manage kids" button in the My Kids page header (admin only) — lets you change the picks later from anywhere on the page.',
+      'Picker has live name search, member photos + age + group meta, deceased members filtered out automatically.',
+    ],
+  },
+  {
     version: '4.41',
     date: '2026-05-15',
     title: 'My Kids polish — nuclear-family roster + rich text + lightbox',
@@ -13181,12 +13200,15 @@ const MyKidsView = {
   signedUrlCache: new Map(),      // `${bucket}|${path}` → { url, expiresAt }
 
   init() {
-    on($('#btn-mykids-back'), 'click', () => this.openRoster());
-    on($('#btn-mykids-add'),  'click', () => MyKidsEntryModal.openAdd(this.selectedKidId, this.activeTab));
+    on($('#btn-mykids-back'),   'click', () => this.openRoster());
+    on($('#btn-mykids-add'),    'click', () => MyKidsEntryModal.openAdd(this.selectedKidId, this.activeTab));
+    on($('#btn-mykids-pick'),   'click', () => MyKidsPickerModal.open());
+    on($('#btn-mykids-manage'), 'click', () => MyKidsPickerModal.open());
     $$('.mykids-tab').forEach(btn => {
       on(btn, 'click', () => this.setTab(btn.dataset.mykidsTab));
     });
     MyKidsEntryModal.init();
+    MyKidsPickerModal.init();
   },
 
   // True when the current viewer is allowed to use the page at all. Admins
@@ -13212,27 +13234,32 @@ const MyKidsView = {
     });
   },
 
-  // v4.41: roster is the *current admin's* nuclear-family kids — every
-  // member whose parentIds includes the admin AND the admin's spouse.
-  // Walks the family tree rather than auto-including every minor in the
-  // archive, so cousins / nieces / nephews don't surface on the page.
-  // Falls back gracefully when admin info is missing (bootstrap admin
-  // with no member record, or admin with no spouse) by returning members
-  // who have the admin alone as a parent.
+  // v4.41/v4.42: roster resolution order:
+  //   1. If `state.myKidsRoster` has any ids, treat that as a manual
+  //      override — show exactly those members. Lets admins pick their
+  //      kids directly when the Family Tree parent-link graph isn't set
+  //      up (the most common state on a fresh archive).
+  //   2. Otherwise auto-walk: include members whose parentIds contain
+  //      the current admin and the admin's spouse. Falls back to "admin
+  //      alone as parent" when no spouse is on file.
   rosterMembers() {
+    const overrideIds = Array.isArray(Store.state.myKidsRoster) ? Store.state.myKidsRoster : [];
+    if (overrideIds.length) {
+      return overrideIds
+        .map(id => Store.byId(id))
+        .filter(Boolean)
+        .filter(m => !m.dateOfDeath)
+        .sort((a, b) => (b.birthday || '').localeCompare(a.birthday || ''));
+    }
     const me = Auth.current;
     if (!me || me === 'admin-bootstrap' || typeof me !== 'object') return [];
     const myId = me.id;
     const spouseId = me.spouseId || null;
     return Store.membersList()
       .filter(m => {
-        if (m.dateOfDeath) return false;            // skip deceased
+        if (m.dateOfDeath) return false;
         const parents = Array.isArray(m.parentIds) ? m.parentIds : [];
         if (!parents.includes(myId)) return false;
-        // When the admin has a current spouse, require the child to have
-        // both as parents — that's the strict nuclear-family rule. When
-        // there's no spouse on record, fall back to "any kid that has me
-        // as a parent" so single-admin families still work.
         if (spouseId) return parents.includes(spouseId);
         return true;
       })
@@ -13252,11 +13279,13 @@ const MyKidsView = {
     const detail  = $('#mykids-detail');
     const roster  = $('#mykids-roster');
     const back    = $('#btn-mykids-back');
+    const manage  = $('#btn-mykids-manage');
     if (!detail || !roster) return;
     const showDetail = !!this.selectedKidId && Store.byId(this.selectedKidId);
     detail.hidden = !showDetail;
     roster.hidden = !!showDetail;
-    if (back) back.hidden = !showDetail || !Auth.isAdmin();
+    if (back)   back.hidden   = !showDetail || !Auth.isAdmin();
+    if (manage) manage.hidden = showDetail || !Auth.isAdmin();
     if (showDetail) {
       this.renderDetail();
     } else {
@@ -13583,6 +13612,95 @@ const RichText = {
       }
       this._scrub(child);
     }
+  },
+};
+
+// -------------------- MY KIDS PICKER MODAL (v4.42) --------------------
+// Pops a checkbox list of all members so the admin can pick exactly which
+// ones appear on the My Kids roster. Selected ids land in
+// state.myKidsRoster — which the roster resolver checks first before
+// falling back to the parent-link auto-walk. Solves the common case of
+// "I added my kids as members but never wired up parent links."
+const MyKidsPickerModal = {
+  searchQuery: '',
+  workingIds: new Set(),
+
+  init() {
+    const el = $('#mykids-picker-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#mykids-picker-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#mykids-picker-search'), 'input', (e) => {
+      this.searchQuery = (e.target.value || '').trim().toLowerCase();
+      this.renderList();
+    });
+  },
+
+  open() {
+    if (!Auth.isAdmin()) return;
+    this.workingIds = new Set(Store.state.myKidsRoster || []);
+    this.searchQuery = '';
+    $('#mykids-picker-search').value = '';
+    this.renderList();
+    const el = $('#mykids-picker-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+    setTimeout(() => $('#mykids-picker-search')?.focus(), 50);
+  },
+  close() {
+    const el = $('#mykids-picker-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+  },
+
+  renderList() {
+    const list = $('#mykids-picker-list'); if (!list) return;
+    const q = this.searchQuery;
+    const members = sortMembers(Store.membersList())
+      .filter(m => !m.dateOfDeath)
+      .filter(m => {
+        if (!q) return true;
+        return `${m.firstName} ${m.middleName || ''} ${m.lastName} ${m.displayName || ''}`
+          .toLowerCase().includes(q);
+      });
+    if (!members.length) {
+      list.innerHTML = `<p class="muted small" style="padding:18px; text-align:center;">No members match "${escape(q)}".</p>`;
+      return;
+    }
+    list.innerHTML = members.map(m => {
+      const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+      const checked = this.workingIds.has(m.id) ? 'checked' : '';
+      const age = ageLabel(m.birthday);
+      const meta = [age, m.group].filter(Boolean).join(' · ');
+      return `
+        <label class="mykids-picker-row">
+          <input type="checkbox" data-mk-pick="${m.id}" ${checked} />
+          <div class="mykids-picker-avatar is-${m.gender || 'female'}" ${bg}></div>
+          <div class="mykids-picker-info">
+            <div class="mykids-picker-name">${escape(displayName(m))}</div>
+            ${meta ? `<div class="muted small">${escape(meta)}</div>` : ''}
+          </div>
+        </label>`;
+    }).join('');
+    list.querySelectorAll('[data-mk-pick]').forEach(cb => {
+      on(cb, 'change', () => {
+        const id = cb.dataset.mkPick;
+        if (cb.checked) this.workingIds.add(id);
+        else this.workingIds.delete(id);
+      });
+    });
+  },
+
+  save() {
+    if (!Auth.isAdmin()) return;
+    Store.state.myKidsRoster = [...this.workingIds];
+    Store.save();
+    toast(this.workingIds.size
+      ? `Saved — ${this.workingIds.size} kid${this.workingIds.size === 1 ? '' : 's'} on My Kids.`
+      : 'Cleared — falling back to auto-walk from parent links.');
+    this.close();
+    MyKidsView.openRoster();
+    MyKidsView.render();
   },
 };
 
