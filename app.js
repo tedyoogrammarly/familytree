@@ -835,6 +835,12 @@ const Store = {
       // pick exactly which family members appear on My Kids. Empty list =
       // fall back to the parent-link auto-walk.
       myKidsRoster: [],
+      // v4.44: Family Recipes. Admin-only CRUD; everyone authenticated
+      // can view. Each recipe carries a single optional "from" reference
+      // (member id or friend household person ref like 'f:fid' / 's:fid'
+      // / 'k:fid:kid_id'), plus a free-text fallback for non-people
+      // attribution ("from a Korean cookbook").
+      recipes: [],
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -1048,6 +1054,17 @@ const Store = {
     // v4.42: manual roster override list. Backfill as empty array on
     // archives saved before the picker shipped.
     if (!Array.isArray(this.state.myKidsRoster)) this.state.myKidsRoster = [];
+
+    // v4.44: family recipes list. Each recipe has a fixed shape so the
+    // grid / detail render can assume the fields exist.
+    if (!Array.isArray(this.state.recipes)) this.state.recipes = [];
+    for (const r of this.state.recipes) {
+      if (!r.id) r.id = uid('rcp');
+      ['name','category','ingredients','instructions','notes','link',
+       'fromRef','fromText'].forEach(k => { if (r[k] === undefined) r[k] = ''; });
+      if (r.photo !== null && (typeof r.photo !== 'object' || Array.isArray(r.photo))) r.photo = null;
+      if (r.createdAt === undefined) r.createdAt = Date.now();
+    }
     for (const kidId of Object.keys(this.state.myKids)) {
       const k = this.state.myKids[kidId];
       if (!k || typeof k !== 'object') { delete this.state.myKids[kidId]; continue; }
@@ -3310,6 +3327,8 @@ const Views = {
     // their own page only (handled inside MyKidsView when selecting a kid).
     // Non-admin, non-kid users are bounced to Tree.
     if (name === 'mykids' && !Auth.isAdmin() && !MyKidsView.canViewerAccess()) name = 'tree';
+    // v4.44: Recipes is family-wide (any authenticated user can view). No
+    // role gating needed beyond the implicit "must be signed in".
     this.current = name;
     // Synchronous visibility flip — cheap and gives the click immediate
     // visual feedback (active nav-tab + new view shown).
@@ -3318,6 +3337,7 @@ const Views = {
     $('#view-tree').hidden         = name !== 'tree';
     $('#view-myfamily').hidden     = name !== 'myfamily';
     $('#view-mykids').hidden       = name !== 'mykids';
+    $('#view-recipes').hidden      = name !== 'recipes';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3346,6 +3366,7 @@ const Views = {
       if (name === 'gifts')     GiftsView.render();
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'mykids')    MyKidsView.render();
+      if (name === 'recipes')   RecipesView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9184,6 +9205,7 @@ async function init() {
   StorageView.init();
   DashboardView.init();
   MyKidsView.init();
+  RecipesView.init();
   PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
@@ -9832,6 +9854,20 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.44',
+    date: '2026-05-15',
+    title: 'Family Recipes (Wave 3a of family-portal expansion)',
+    changes: [
+      'New "Recipes" top-level nav tab. Admin-only CRUD; everyone authenticated can view — the family cookbook is meant to be read by everyone who can sign in.',
+      'Recipe shape: name (required), category (free-form with auto-suggested datalist of previously used values), optional "from" attribution (single tag, picks from any family member OR any friend household person — primary, spouse, or kid — same picker shape the events page uses), optional free-text "from" override ("Korean cookbook"), single cropped photo, ingredients (one per line), instructions (rich text), notes (rich text), optional external link.',
+      'Grid view: responsive recipe cards (auto-fill 220px). Cards show photo + name + category chip + "from" attribution.',
+      'Detail view: hero photo (click → opens in lightbox), two-column ingredients + instructions, notes section below. Admin sees Edit / Delete in the header.',
+      'Search box on the grid filters by name, category, attribution, and notes content.',
+      'Photo flow: square crop via CropModal (same as members), uploaded to family-photos bucket (Wave 1 storage), signed URLs cached in-session for grid + detail render.',
+      'CPU/memory: zero new SQL or realtime channels. Recipes live in the JSONB archive as a flat list — only the photo reference (32-ish bytes per record) lives in the row. Actual photo binaries are in Storage.',
+    ],
+  },
   {
     version: '4.43',
     date: '2026-05-15',
@@ -14133,5 +14169,518 @@ function downscaleImageToBlob(file, maxDim = 1600, quality = 0.85) {
     reader.readAsDataURL(file);
   });
 }
+
+// -------------------- RECIPES VIEW (v4.44 — Wave 3a) --------------------
+// Family cookbook. Admin-only CRUD; any authenticated user can view.
+// Each recipe optionally references one "from" person (member id, or a
+// friend household person via the m: / f: / s: / k: ref shape used by the
+// events picker) plus an optional free-text attribution. Photos live in
+// the family-photos Supabase Storage bucket from Wave 1 — the recipe row
+// only carries { bucket, path }, so the archive JSONB row stays small.
+const RecipesView = {
+  selectedRecipeId: null,   // null = show grid; recipe id = show detail
+  searchQuery: '',
+  signedUrlCache: new Map(),
+
+  init() {
+    on($('#btn-recipe-add'),         'click', () => RecipeModal.openAdd());
+    on($('#btn-recipe-add-first'),   'click', () => RecipeModal.openAdd());
+    on($('#btn-recipes-back'),       'click', () => this.openGrid());
+    const search = $('#recipes-search');
+    if (search) {
+      on(search, 'input', () => {
+        this.searchQuery = (search.value || '').trim().toLowerCase();
+        this.render();
+      });
+    }
+    RecipeModal.init();
+  },
+
+  list() {
+    return Array.isArray(Store.state.recipes) ? Store.state.recipes : [];
+  },
+
+  filtered() {
+    const q = this.searchQuery;
+    let list = this.list();
+    if (q) {
+      list = list.filter(r => {
+        const hay = [
+          r.name, r.category, r.fromText,
+          this.formatFromRef(r.fromRef),
+          (r.notes || '').replace(/<[^>]+>/g, ''),
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    // Sort: alphabetical by name (case-insensitive). Most cookbooks index
+    // that way; an as-modified sort hides older recipes too aggressively.
+    return list.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+  },
+
+  // Resolve a fromRef string to a renderable person object. Returns null
+  // for non-people sources (use fromText for those). The ref shape mirrors
+  // the events picker: m:<memberId> / f:<friendId> / s:<friendId> / k:<friendId>:<kidId>.
+  resolveFromRef(ref) {
+    if (!ref || typeof ref !== 'string') return null;
+    if (ref.startsWith('m:')) return Store.byId(ref.slice(2));
+    if (ref.startsWith('f:')) return Store.state.friends?.[ref.slice(2)] || null;
+    if (ref.startsWith('s:')) {
+      const f = Store.state.friends?.[ref.slice(2)];
+      return f?.spouse || null;
+    }
+    if (ref.startsWith('k:')) {
+      const parts = ref.split(':');
+      const f = Store.state.friends?.[parts[1]];
+      return (f?.kids || []).find(k => k.id === parts[2]) || null;
+    }
+    return null;
+  },
+  formatFromRef(ref) {
+    const p = this.resolveFromRef(ref);
+    return p ? displayName(p) : '';
+  },
+
+  render() {
+    const isDetail = !!this.selectedRecipeId && this.list().some(r => r.id === this.selectedRecipeId);
+    $('#recipes-grid-panel').hidden  = isDetail;
+    $('#recipe-detail-panel').hidden = !isDetail;
+    $('#btn-recipes-back').hidden = !isDetail;
+    $('#btn-recipe-add').hidden   = isDetail || !Auth.isAdmin();
+    if (isDetail) this.renderDetail();
+    else          this.renderGrid();
+  },
+
+  renderGrid() {
+    const grid  = $('#recipes-grid');
+    const empty = $('#recipes-empty');
+    if (!grid || !empty) return;
+    const list = this.filtered();
+    const title = $('#recipes-grid-title');
+    if (title) {
+      title.textContent = this.searchQuery
+        ? `Matches for "${this.searchQuery}" (${list.length})`
+        : `All recipes (${list.length})`;
+    }
+    if (!list.length && !this.searchQuery) {
+      grid.innerHTML = '';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    grid.innerHTML = list.map(r => this.cardHTML(r)).join('') ||
+      `<p class="muted" style="padding:24px; text-align:center;">No recipes matching "${escape(this.searchQuery)}".</p>`;
+    grid.querySelectorAll('[data-recipe]').forEach(card => {
+      on(card, 'click', () => this.openRecipe(card.dataset.recipe));
+    });
+    // Resolve photo signed URLs lazily.
+    grid.querySelectorAll('[data-recipe-photo]').forEach(el => this.resolvePhotoSrc(el));
+  },
+
+  cardHTML(r) {
+    const fromPerson = this.resolveFromRef(r.fromRef);
+    const fromLabel = fromPerson ? displayName(fromPerson) : (r.fromText || '');
+    return `
+      <button type="button" class="recipe-card" data-recipe="${escape(r.id)}">
+        <div class="recipe-card-photo" data-recipe-photo data-bucket="${escape(r.photo?.bucket || '')}" data-path="${escape(r.photo?.path || '')}">
+          ${!r.photo?.path ? '<span class="recipe-card-no-photo" aria-hidden="true">🍽️</span>' : ''}
+        </div>
+        <div class="recipe-card-body">
+          <div class="recipe-card-name">${escape(r.name || 'Untitled')}</div>
+          <div class="recipe-card-meta muted small">
+            ${r.category ? `<span class="recipe-card-cat">${escape(r.category)}</span>` : ''}
+            ${fromLabel ? `<span class="recipe-card-from">from ${escape(fromLabel)}</span>` : ''}
+          </div>
+        </div>
+      </button>`;
+  },
+
+  renderDetail() {
+    const r = this.list().find(x => x.id === this.selectedRecipeId);
+    if (!r) { this.openGrid(); return; }
+    const host = $('#recipe-detail');
+    if (!host) return;
+    const fromPerson = this.resolveFromRef(r.fromRef);
+    const fromLabel  = fromPerson ? displayName(fromPerson) : (r.fromText || '');
+    const ingredientsList = (r.ingredients || '')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => `<li>${escape(line)}</li>`)
+      .join('');
+    const instructionsHTML = r.instructions
+      ? (/<[a-z][^>]*>/i.test(r.instructions)
+          ? RichText.sanitize(r.instructions)
+          : escape(r.instructions).replace(/\n/g, '<br>'))
+      : '';
+    const notesHTML = r.notes
+      ? (/<[a-z][^>]*>/i.test(r.notes)
+          ? RichText.sanitize(r.notes)
+          : escape(r.notes).replace(/\n/g, '<br>'))
+      : '';
+    const adminActions = Auth.isAdmin() ? `
+      <div class="recipe-detail-actions">
+        <button class="btn btn-ghost btn-sm"        type="button" id="btn-recipe-edit">Edit</button>
+        <button class="btn btn-danger-ghost btn-sm" type="button" id="btn-recipe-delete">Delete</button>
+      </div>` : '';
+    host.innerHTML = `
+      <div class="recipe-detail">
+        ${r.photo?.path
+          ? `<div class="recipe-detail-photo" data-recipe-photo data-bucket="${escape(r.photo.bucket)}" data-path="${escape(r.photo.path)}"></div>`
+          : ''}
+        <header class="recipe-detail-head">
+          <div>
+            <h3 class="recipe-detail-name">${escape(r.name || 'Untitled')}</h3>
+            <div class="recipe-detail-meta muted small">
+              ${r.category ? `<span class="recipe-card-cat">${escape(r.category)}</span>` : ''}
+              ${fromLabel ? `<span>from <strong>${escape(fromLabel)}</strong></span>` : ''}
+            </div>
+          </div>
+          ${adminActions}
+        </header>
+        ${r.link ? `<a href="${escape(r.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip">🔗 Open link</a>` : ''}
+        <div class="recipe-detail-grid">
+          ${ingredientsList ? `
+            <section>
+              <h4>Ingredients</h4>
+              <ul class="recipe-ingredients">${ingredientsList}</ul>
+            </section>` : ''}
+          ${instructionsHTML ? `
+            <section>
+              <h4>Instructions</h4>
+              <div class="recipe-instructions rich">${instructionsHTML}</div>
+            </section>` : ''}
+        </div>
+        ${notesHTML ? `
+          <section class="recipe-notes">
+            <h4>Notes</h4>
+            <div class="rich">${notesHTML}</div>
+          </section>` : ''}
+      </div>`;
+    if (r.photo?.path) {
+      host.querySelectorAll('[data-recipe-photo]').forEach(el => this.resolvePhotoSrc(el));
+      // Clicking the hero photo opens it in the lightbox.
+      host.querySelector('.recipe-detail-photo')?.addEventListener('click', () => {
+        MyKidsLightbox.open([r.photo], 0);
+      });
+    }
+    if (Auth.isAdmin()) {
+      on($('#btn-recipe-edit'),   'click', () => RecipeModal.openEdit(r.id));
+      on($('#btn-recipe-delete'), 'click', () => this.deleteRecipe(r.id));
+    }
+  },
+
+  openRecipe(id) { this.selectedRecipeId = id; this.render(); },
+  openGrid()     { this.selectedRecipeId = null; this.render(); },
+
+  // Same signed-URL cache pattern as MyKidsView. 50-minute TTL so flipping
+  // between grid and detail doesn't re-hit Supabase for every render.
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket;
+    const path   = el.dataset.path;
+    if (!bucket || !path) return;
+    const key = `${bucket}|${path}`;
+    const cached = this.signedUrlCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      el.style.backgroundImage = `url('${cached.url}')`;
+      return;
+    }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${url}')`;
+  },
+
+  async deleteRecipe(id) {
+    if (!Auth.isAdmin()) return;
+    const r = this.list().find(x => x.id === id); if (!r) return;
+    if (!confirm(`Delete "${r.name}"? The photo is also removed from storage.`)) return;
+    if (r.photo?.bucket && r.photo.path) {
+      await Backend.deleteMedia(r.photo.bucket, r.photo.path);
+    }
+    Store.state.recipes = this.list().filter(x => x.id !== id);
+    Store.save();
+    toast('Recipe deleted.');
+    this.openGrid();
+  },
+};
+
+// -------------------- RECIPE MODAL (Wave 3a) --------------------
+const RecipeModal = {
+  editingId: null,
+  tempPhoto: null,     // { bucket, path } once uploaded; null otherwise
+  _clearPhoto: false,
+  uploading: 0,
+
+  init() {
+    const el = $('#recipe-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#recipe-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#recipe-delete'), 'click', () => this.deleteCurrent());
+    on($('#recipe-photo-input'), 'change', (e) => this.onPhotoPick(e));
+    on($('#recipe-photo-clear'), 'click', () => this.clearPhoto());
+    RichText.mount($('#recipe-instructions-editor'));
+    RichText.mount($('#recipe-notes-editor'));
+    // Wire emoji buttons (similar to MyKids modal — proxy input + EmojiPicker).
+    this.bindRichTextEmoji('#recipe-instructions-editor', '#recipe-instructions-emoji', 'recipe-instr-emoji-proxy');
+    this.bindRichTextEmoji('#recipe-notes-editor',         '#recipe-notes-emoji-btn',    'recipe-notes-emoji-proxy');
+  },
+
+  bindRichTextEmoji(editorSel, btnSel, proxyId) {
+    const editor = $(editorSel);
+    if (!editor) return;
+    editor.addEventListener('rt-emoji', () => {
+      const surface = editor.querySelector('[data-rt-surface]');
+      if (!surface) return;
+      let proxy = document.getElementById(proxyId);
+      if (!proxy) {
+        proxy = document.createElement('input');
+        proxy.type = 'hidden';
+        proxy.id = proxyId;
+        document.body.appendChild(proxy);
+        proxy.addEventListener('change', () => {
+          const ch = proxy.value;
+          if (!ch) return;
+          proxy.value = '';
+          surface.focus();
+          try { document.execCommand('insertText', false, ch); }
+          catch { surface.appendChild(document.createTextNode(ch)); }
+        });
+      }
+      EmojiPicker.open(proxy, $(btnSel));
+    });
+  },
+
+  // Build the from-ref <select> options once per open. The list is the
+  // same set the events picker uses, minus the optgroup separation — a
+  // single-select <select> with optgroups works well here too.
+  populateFromRefSelect(currentRef) {
+    const sel = $('#recipe-from-ref'); if (!sel) return;
+    const memberOpts = sortMembers(Store.membersList())
+      .filter(m => !m.dateOfDeath)
+      .map(m => `<option value="m:${m.id}">${escape(displayName(m))}</option>`);
+    const friendOpts = [];
+    sortFriends(Object.values(Store.state.friends || {})).forEach(f => {
+      friendOpts.push(`<option value="f:${f.id}">${escape(displayName(f))}</option>`);
+      if (f.spouse) friendOpts.push(`<option value="s:${f.id}">${escape(displayName(f.spouse))} (spouse of ${escape(displayName(f))})</option>`);
+      (f.kids || []).forEach(k => {
+        friendOpts.push(`<option value="k:${f.id}:${k.id}">${escape(displayName(k))} (child of ${escape(displayName(f))})</option>`);
+      });
+    });
+    sel.innerHTML = `
+      <option value="">— None —</option>
+      ${memberOpts.length ? `<optgroup label="Family">${memberOpts.join('')}</optgroup>` : ''}
+      ${friendOpts.length ? `<optgroup label="Friends">${friendOpts.join('')}</optgroup>` : ''}
+    `;
+    sel.value = currentRef || '';
+  },
+
+  // Populate the <datalist> with already-used categories so quick-pick
+  // is one click. Dedupes case-insensitively, sorts alphabetically.
+  populateCategoryDatalist() {
+    const datalist = $('#recipe-categories'); if (!datalist) return;
+    const seen = new Map();
+    for (const r of (Store.state.recipes || [])) {
+      const c = (r.category || '').trim();
+      if (!c) continue;
+      const key = c.toLowerCase();
+      if (!seen.has(key)) seen.set(key, c);
+    }
+    const cats = [...seen.values()].sort((a, b) => a.localeCompare(b));
+    datalist.innerHTML = cats.map(c => `<option value="${escape(c)}"></option>`).join('');
+  },
+
+  openAdd() {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.tempPhoto = null;
+    this._clearPhoto = false;
+    this.reset();
+    this.populateFromRefSelect('');
+    this.populateCategoryDatalist();
+    $('#recipe-modal-title').textContent = 'Add recipe';
+    $('#recipe-submit').textContent = 'Save recipe';
+    $('#recipe-delete').hidden = true;
+    RichText.write($('#recipe-instructions-editor'), '');
+    RichText.write($('#recipe-notes-editor'), '');
+    this.renderPhotoPreview(null);
+    this.open();
+    setTimeout(() => $('#recipe-form').name.focus(), 50);
+  },
+
+  openEdit(id) {
+    if (!Auth.isAdmin()) return;
+    const r = (Store.state.recipes || []).find(x => x.id === id); if (!r) return;
+    this.editingId = id;
+    this.tempPhoto = null;
+    this._clearPhoto = false;
+    this.reset();
+    this.populateFromRefSelect(r.fromRef || '');
+    this.populateCategoryDatalist();
+    $('#recipe-modal-title').textContent = `Edit ${r.name || 'recipe'}`;
+    $('#recipe-submit').textContent = 'Save changes';
+    $('#recipe-delete').hidden = false;
+    const fm = $('#recipe-form');
+    fm.name.value         = r.name || '';
+    fm.category.value     = r.category || '';
+    fm.link.value         = r.link || '';
+    fm.fromText.value     = r.fromText || '';
+    fm.ingredients.value  = r.ingredients || '';
+    RichText.write($('#recipe-instructions-editor'), r.instructions || '');
+    RichText.write($('#recipe-notes-editor'), r.notes || '');
+    this.renderPhotoPreview(r.photo || null);
+    this.open();
+  },
+
+  reset() {
+    $('#recipe-form').reset();
+    $('#recipe-error').hidden = true;
+  },
+  open() {
+    const el = $('#recipe-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+  },
+  close() {
+    const el = $('#recipe-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.tempPhoto = null;
+    this._clearPhoto = false;
+  },
+
+  // Show either the most recent in-flight photo or the persisted one. If
+  // the user clicked Clear, render the empty placeholder instead.
+  async renderPhotoPreview(existing) {
+    const el = $('#recipe-photo-preview');
+    if (!el) return;
+    const ref = this._clearPhoto ? null : (this.tempPhoto || existing || null);
+    if (!ref) {
+      el.style.backgroundImage = '';
+      el.innerHTML = '<span class="recipe-photo-placeholder">🍽️</span>';
+      return;
+    }
+    const url = await Backend.getMediaUrl(ref.bucket, ref.path, 3600);
+    if (url) {
+      el.style.backgroundImage = `url('${url}')`;
+      el.innerHTML = '';
+    }
+  },
+
+  async onPhotoPick(e) {
+    const file = e.target.files?.[0]; if (!file) return;
+    e.target.value = '';
+    this.uploading++;
+    try {
+      // 1) Crop square via existing CropModal, 2) downscale to 2400, 3) upload.
+      const dataUrl = await readFileAsDataURL(file);
+      const cropped = await CropModal.open(dataUrl, { size: 800 });
+      if (!cropped) return;
+      // CropModal returns a data URL of a fixed square JPEG (~800px). For
+      // recipes we keep it as-is — the square photo looks good in both
+      // the grid card and the detail header without needing extra resize.
+      const blob = await (await fetch(cropped)).blob();
+      const result = await Backend.uploadMedia(
+        new File([blob], `recipe-${Date.now()}.jpg`, { type: 'image/jpeg' }),
+        { bucket: 'family-photos', folder: 'recipes', maxBytes: 10 * 1024 * 1024 }
+      );
+      if (!result.ok) throw new Error(result.reason);
+      // If we're replacing an existing in-flight upload, clean it up.
+      if (this.tempPhoto?.bucket) await Backend.deleteMedia(this.tempPhoto.bucket, this.tempPhoto.path);
+      this.tempPhoto = { bucket: result.bucket, path: result.path };
+      this._clearPhoto = false;
+      this.renderPhotoPreview(null);
+    } catch (err) {
+      toast(`Photo upload failed: ${err.message || err}`, 'warn');
+    } finally {
+      this.uploading--;
+    }
+  },
+
+  async clearPhoto() {
+    if (this.tempPhoto?.bucket) {
+      // Wipe the just-uploaded but-never-saved photo from storage.
+      await Backend.deleteMedia(this.tempPhoto.bucket, this.tempPhoto.path);
+    }
+    this.tempPhoto = null;
+    this._clearPhoto = true;
+    this.renderPhotoPreview(null);
+  },
+
+  async save() {
+    if (!Auth.isAdmin()) return;
+    if (this.uploading > 0) {
+      $('#recipe-error').textContent = 'Wait for the photo to finish uploading.';
+      $('#recipe-error').hidden = false;
+      return;
+    }
+    const fm = $('#recipe-form');
+    const fd = new FormData(fm);
+    const name = (fd.get('name') || '').toString().trim();
+    if (!name) {
+      $('#recipe-error').textContent = 'Recipe name is required.';
+      $('#recipe-error').hidden = false;
+      return;
+    }
+    const existing = this.editingId
+      ? (Store.state.recipes || []).find(r => r.id === this.editingId)
+      : null;
+
+    // Photo resolution: explicit clear → null. Brand new upload → use it
+    // (and delete the previous one if we were editing). Otherwise inherit
+    // the existing record's photo unchanged.
+    let photo = null;
+    if (this._clearPhoto) {
+      if (existing?.photo?.bucket) await Backend.deleteMedia(existing.photo.bucket, existing.photo.path);
+      photo = null;
+    } else if (this.tempPhoto) {
+      if (existing?.photo?.bucket && existing.photo.path !== this.tempPhoto.path) {
+        await Backend.deleteMedia(existing.photo.bucket, existing.photo.path);
+      }
+      photo = this.tempPhoto;
+    } else {
+      photo = existing?.photo || null;
+    }
+
+    const record = {
+      ...(existing || {}),
+      id: this.editingId || uid('rcp'),
+      name,
+      category:     (fd.get('category')     || '').toString().trim(),
+      fromRef:      (fd.get('fromRef')      || '').toString().trim(),
+      fromText:     (fd.get('fromText')     || '').toString().trim(),
+      link:         (fd.get('link')         || '').toString().trim(),
+      ingredients:  (fd.get('ingredients')  || '').toString(),
+      instructions: RichText.read($('#recipe-instructions-editor')),
+      notes:        RichText.read($('#recipe-notes-editor')),
+      photo,
+      createdAt:    existing?.createdAt || Date.now(),
+      createdBy:    existing?.createdBy || Backend.user?.id || null,
+    };
+
+    if (!Array.isArray(Store.state.recipes)) Store.state.recipes = [];
+    if (existing) {
+      const idx = Store.state.recipes.findIndex(r => r.id === this.editingId);
+      Store.state.recipes[idx] = record;
+    } else {
+      Store.state.recipes.push(record);
+    }
+    Store.save();
+    toast(this.editingId ? 'Recipe saved.' : 'Recipe added.');
+    const newId = record.id;
+    this.close();
+    RecipesView.openRecipe(newId);
+  },
+
+  async deleteCurrent() {
+    if (!this.editingId) return;
+    const id = this.editingId;
+    this.close();
+    RecipesView.deleteRecipe(id);
+  },
+};
 
 document.addEventListener('DOMContentLoaded', init);

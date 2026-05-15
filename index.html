@@ -91,6 +91,7 @@
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
           <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
+          <button class="nav-tab" data-view="recipes" role="tab">Recipes</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -487,6 +488,148 @@
         </section>
       </div>
     </main>
+
+    <!-- ===== RECIPES VIEW (v4.44 — Wave 3a) =====
+         Admin-edit, anyone-authenticated-view family recipe book. Grid
+         of recipe cards on the index; click a card to see the full
+         recipe. Photo + ingredients + instructions + notes + optional
+         link + optional "from this person" attribution.
+         Photos live in the family-photos bucket (Wave 1 storage). -->
+    <main id="view-recipes" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="recipes"></span>Recipes</h2>
+            <p id="recipes-page-sub">The family cookbook — bulgogi, pho, banchan, anything worth keeping.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-recipes-back" hidden>← All recipes</button>
+            <button class="btn btn-primary btn-sm" id="btn-recipe-add" data-admin-only hidden>+ Add recipe</button>
+          </div>
+        </div>
+
+        <!-- Grid: shown when no recipe is selected -->
+        <section id="recipes-grid-panel" class="panel" hidden>
+          <header class="panel-head">
+            <h3 id="recipes-grid-title">All recipes</h3>
+            <div class="panel-head-tools">
+              <input id="recipes-search" class="input" type="search" placeholder="Search by name, category, or person…" autocomplete="off" />
+            </div>
+          </header>
+          <div id="recipes-grid" class="recipes-grid"></div>
+          <div id="recipes-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No recipes yet</h3>
+              <p>Save the dishes that show up at every holiday — they'll live here for the kids to read someday.</p>
+              <button class="btn btn-primary" id="btn-recipe-add-first" data-admin-only>+ Add your first recipe</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Detail: shown when a recipe is selected -->
+        <section id="recipe-detail-panel" class="panel" hidden>
+          <div id="recipe-detail"></div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== RECIPE MODAL (add / edit) =====
+         Photo (single) → CropModal pipeline. Instructions + Notes are
+         rich-text. "From" is a single-select that lists members + every
+         friend household person, plus a free-text fallback for non-people
+         sources ("Korean cookbook"). -->
+    <div id="recipe-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="recipe-modal-title">
+        <header class="modal-head">
+          <h3 id="recipe-modal-title">Add recipe</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="recipe-form" class="modal-body">
+          <label class="field"><span>Recipe name *</span><input name="name" required placeholder="e.g. Mom's bulgogi" /></label>
+          <div class="grid-2">
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🥢</span>Category <span class="muted small">(optional)</span></span>
+              <input name="category" placeholder="Korean · Vietnamese · Dessert · Soup …" list="recipe-categories" autocomplete="off" />
+              <datalist id="recipe-categories"></datalist>
+            </label>
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🔗</span>Link <span class="muted small">(optional)</span></span>
+              <input name="link" type="url" placeholder="https://…" />
+            </label>
+          </div>
+          <div class="field">
+            <span><span class="kv-emoji" aria-hidden="true">👤</span>From <span class="muted small">(pick a person)</span></span>
+            <select name="fromRef" id="recipe-from-ref" class="input">
+              <option value="">— None —</option>
+            </select>
+          </div>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">✍️</span>Or describe in text <span class="muted small">(used when no person fits — e.g. "Korean cookbook")</span></span>
+            <input name="fromText" placeholder="e.g. Grandma Park" />
+          </label>
+          <div class="field">
+            <span>Photo <span class="muted small">(one)</span></span>
+            <div class="photo-row">
+              <div class="photo-preview recipe-photo-preview" id="recipe-photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="recipe-photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="recipe-photo-clear">Clear photo</button>
+              </div>
+            </div>
+          </div>
+          <label class="field">
+            <span>Ingredients <span class="muted small">(one per line)</span></span>
+            <textarea name="ingredients" rows="6" placeholder="1 lb ribeye, thinly sliced
+2 tbsp soy sauce
+1 tbsp brown sugar"></textarea>
+          </label>
+          <div class="field">
+            <span>Instructions *</span>
+            <div class="rich-text-editor" id="recipe-instructions-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Instructions formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="recipe-instructions-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="Step-by-step cooking instructions."></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Notes <span class="muted small">(optional — tips, substitutions, who this is best for)</span></span>
+            <div class="rich-text-editor" id="recipe-notes-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Notes formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="recipe-notes-emoji-btn" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="Substitutions, who this is best for, tips."></div>
+            </div>
+          </div>
+          <p class="form-error" id="recipe-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="recipe-submit">Save recipe</button>
+            <button class="btn btn-danger-ghost" type="button" id="recipe-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ===== MY KIDS PICKER MODAL (v4.42) =====
          Lets the admin pick exactly which family members appear on the
