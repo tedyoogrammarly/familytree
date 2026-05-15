@@ -1073,11 +1073,21 @@ const Store = {
 
     // v4.45: memories feed. Defensive backfill so render code can assume
     // the shape — photos array, tags array, body string.
+    // v4.46: reactions + comments arrays added.
     if (!Array.isArray(this.state.memories)) this.state.memories = [];
     for (const m of this.state.memories) {
       if (!m.id) m.id = uid('mem');
-      if (!Array.isArray(m.photos)) m.photos = [];
-      if (!Array.isArray(m.tags))   m.tags = [];
+      if (!Array.isArray(m.photos))    m.photos    = [];
+      if (!Array.isArray(m.tags))      m.tags      = [];
+      if (!Array.isArray(m.reactions)) m.reactions = []; // [{ emoji, userId, createdAt }]
+      if (!Array.isArray(m.comments))  m.comments  = []; // [{ id, body, authorId, authorName, createdAt }]
+      m.comments.forEach(c => {
+        if (!c.id) c.id = uid('cmt');
+        if (c.body       === undefined) c.body = '';
+        if (c.authorId   === undefined) c.authorId = null;
+        if (c.authorName === undefined) c.authorName = '';
+        if (c.createdAt  === undefined) c.createdAt = Date.now();
+      });
       if (m.body      === undefined) m.body = '';
       if (m.date      === undefined) m.date = '';
       if (m.createdAt === undefined) m.createdAt = Date.now();
@@ -8825,6 +8835,24 @@ function formatDate(iso) {
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
+// Human-friendly relative time stamp for memory comments and reactions
+// ("just now", "5m ago", "Mar 12"). Falls back to a full date for
+// anything older than ~7 days so old comments stay readable.
+function relativeTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const diffMs = Date.now() - d.getTime();
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60)            return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60)            return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24)             return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7)             return `${day}d ago`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
 // `asOf` lets the caller freeze the age clock — used to stop counting at the
 // date of death so we never show "82 years old" for someone who passed at 75.
 function ageParts(iso, asOf) {
@@ -9874,6 +9902,20 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.46',
+    date: '2026-05-15',
+    title: 'Recipes + Memories polish — categories, bigger photos, reactions, comments',
+    changes: [
+      'Recipes detail: hero photo shrunk from 480px → 320px max so it doesn\'t dominate the page. Click-to-lightbox still works for the full-size view.',
+      'Recipes grid: new category tab strip above the search box. "All" tab is always first; each unique category in your saved recipes becomes its own tab with a count chip. Click a tab → grid filters down. Modal Category field stays a free-text input (with datalist auto-suggest) so adding a new category is just typing a new word.',
+      'Memories feed: photo tiles bumped from 110px → 180px min so each photo carries more weight (and reads more like a scrapbook, less like a thumb grid).',
+      'Memories: emoji reactions on every post. 7 quick-pick chips (❤️ 😂 😮 😢 🎉 👍 🔥) plus a "+" button that opens the full emoji picker for one-off reactions. Tap a quick-pick or chip to react; tap the same emoji again to remove your reaction. Reactions roll up into per-emoji count chips above the picker.',
+      'Memories: comments on every post. Plain-text composer at the bottom of each post. Comment header shows author display name + a relative timestamp ("5m ago", "2d ago", date for older). Author can delete their own comment; admin can delete any. Replies are intentionally NOT included — kept simple.',
+      'Reactions + comments permission: Family + Admin roles can engage; User-role members see the counts + read comments but can\'t add. Matches the design decision to keep the wall family-curated.',
+      'CPU/memory: zero new SQL or realtime channels. Reactions are { emoji, userId, createdAt } objects; comments are { id, body, authorId, authorName, createdAt }. Both arrays live on each memory record inside the existing JSONB blob — negligible row-size impact.',
+    ],
+  },
   {
     version: '4.45',
     date: '2026-05-15',
@@ -14213,6 +14255,7 @@ function downscaleImageToBlob(file, maxDim = 1600, quality = 0.85) {
 const RecipesView = {
   selectedRecipeId: null,   // null = show grid; recipe id = show detail
   searchQuery: '',
+  activeCategory: '',       // v4.46: '' = All; otherwise exact match against r.category
   signedUrlCache: new Map(),
 
   init() {
@@ -14229,6 +14272,19 @@ const RecipesView = {
     RecipeModal.init();
   },
 
+  // Distinct category list, sorted alphabetically, dedup case-insensitively.
+  // Used to build the filter tab strip above the grid.
+  categories() {
+    const seen = new Map();
+    for (const r of this.list()) {
+      const c = (r.category || '').trim();
+      if (!c) continue;
+      const key = c.toLowerCase();
+      if (!seen.has(key)) seen.set(key, c);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  },
+
   list() {
     return Array.isArray(Store.state.recipes) ? Store.state.recipes : [];
   },
@@ -14236,6 +14292,11 @@ const RecipesView = {
   filtered() {
     const q = this.searchQuery;
     let list = this.list();
+    // v4.46: category filter via the tab strip. '' = All.
+    if (this.activeCategory) {
+      const targetKey = this.activeCategory.toLowerCase();
+      list = list.filter(r => (r.category || '').trim().toLowerCase() === targetKey);
+    }
     if (q) {
       list = list.filter(r => {
         const hay = [
@@ -14288,26 +14349,58 @@ const RecipesView = {
     const grid  = $('#recipes-grid');
     const empty = $('#recipes-empty');
     if (!grid || !empty) return;
+
+    // v4.46: category filter tabs. "All" is always present + every unique
+    // category becomes its own tab. If the previously selected category
+    // has since been removed (last recipe of that category deleted), fall
+    // back to "All" so we don't show an empty filter result silently.
+    this.renderCategoryTabs();
+
     const list = this.filtered();
     const title = $('#recipes-grid-title');
     if (title) {
+      const catSuffix = this.activeCategory ? ` · ${this.activeCategory}` : '';
       title.textContent = this.searchQuery
-        ? `Matches for "${this.searchQuery}" (${list.length})`
-        : `All recipes (${list.length})`;
+        ? `Matches for "${this.searchQuery}" (${list.length})${catSuffix}`
+        : (this.activeCategory ? `${this.activeCategory} (${list.length})` : `All recipes (${list.length})`);
     }
-    if (!list.length && !this.searchQuery) {
+    const totalUnfiltered = this.list().length;
+    if (!totalUnfiltered) {
       grid.innerHTML = '';
       empty.hidden = false;
       return;
     }
     empty.hidden = true;
     grid.innerHTML = list.map(r => this.cardHTML(r)).join('') ||
-      `<p class="muted" style="padding:24px; text-align:center;">No recipes matching "${escape(this.searchQuery)}".</p>`;
+      `<p class="muted" style="padding:24px; text-align:center;">No recipes ${this.searchQuery ? `matching "${escape(this.searchQuery)}"` : `in ${escape(this.activeCategory)}`}.</p>`;
     grid.querySelectorAll('[data-recipe]').forEach(card => {
       on(card, 'click', () => this.openRecipe(card.dataset.recipe));
     });
     // Resolve photo signed URLs lazily.
     grid.querySelectorAll('[data-recipe-photo]').forEach(el => this.resolvePhotoSrc(el));
+  },
+
+  renderCategoryTabs() {
+    const host = $('#recipes-category-tabs'); if (!host) return;
+    const cats = this.categories();
+    // Drop the active filter back to All if its category vanished.
+    if (this.activeCategory && !cats.some(c => c.toLowerCase() === this.activeCategory.toLowerCase())) {
+      this.activeCategory = '';
+    }
+    const tabs = [
+      `<button type="button" class="recipes-cat-tab ${this.activeCategory === '' ? 'is-active' : ''}" data-cat="">All <span class="recipes-cat-count">${this.list().length}</span></button>`,
+      ...cats.map(c => {
+        const count = this.list().filter(r => (r.category || '').toLowerCase() === c.toLowerCase()).length;
+        return `<button type="button" class="recipes-cat-tab ${this.activeCategory.toLowerCase() === c.toLowerCase() ? 'is-active' : ''}" data-cat="${escape(c)}">${escape(c)} <span class="recipes-cat-count">${count}</span></button>`;
+      }),
+    ];
+    host.innerHTML = tabs.join('');
+    host.querySelectorAll('[data-cat]').forEach(btn => {
+      on(btn, 'click', () => {
+        this.activeCategory = btn.dataset.cat;
+        this.render();
+      });
+    });
   },
 
   cardHTML(r) {
@@ -14804,6 +14897,139 @@ const MemoriesView = {
         }
       });
     });
+    // v4.46: reactions + comments wiring.
+    feed.querySelectorAll('[data-react]').forEach(btn => {
+      on(btn, 'click', () => this.toggleReaction(btn.dataset.memId, btn.dataset.react));
+    });
+    feed.querySelectorAll('[data-react-more]').forEach(btn => {
+      on(btn, 'click', () => this.openReactionPicker(btn));
+    });
+    feed.querySelectorAll('[data-comment-submit]').forEach(form => {
+      on(form, 'submit', (e) => { e.preventDefault(); this.addComment(form.dataset.commentSubmit); });
+    });
+    feed.querySelectorAll('[data-comment-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deleteComment(btn.dataset.memId, btn.dataset.commentDelete));
+    });
+  },
+
+  // ---------- Permission helpers (v4.46) ----------
+  // Per design decision: Family + Admin can react and comment; User role
+  // can view but not engage. Bootstrap admin (no member record) still
+  // passes because isAdmin() handles that case.
+  canEngage() {
+    return Auth.isAdmin() || Auth.isFamily();
+  },
+  currentUserId() {
+    return Backend.user?.id || null;
+  },
+  currentAuthorName() {
+    // Prefer the in-app member display name; fall back to auth email.
+    const me = Auth.current;
+    if (me && me !== 'admin-bootstrap' && typeof me === 'object') return displayName(me);
+    return Backend.user?.email || 'Admin';
+  },
+
+  // ---------- Reactions (v4.46) ----------
+  // 7 quick-pick emojis below each post + a "more" button that opens the
+  // shared EmojiPicker. Each entry in `reactions` is { emoji, userId,
+  // createdAt }. Clicking the same emoji again removes your own reaction.
+  QUICK_REACTIONS: ['❤️', '😂', '😮', '😢', '🎉', '👍', '🔥'],
+
+  reactionsRolledUp(m) {
+    const out = new Map();
+    for (const r of (m.reactions || [])) {
+      if (!r || !r.emoji) continue;
+      if (!out.has(r.emoji)) out.set(r.emoji, []);
+      out.get(r.emoji).push(r);
+    }
+    return out;
+  },
+
+  myReactionEmojis(m) {
+    const me = this.currentUserId();
+    if (!me) return new Set();
+    return new Set((m.reactions || []).filter(r => r.userId === me).map(r => r.emoji));
+  },
+
+  toggleReaction(memId, emoji) {
+    if (!this.canEngage()) {
+      toast('Sign in with a Family or Admin role to react.', 'warn');
+      return;
+    }
+    const m = this.list().find(x => x.id === memId); if (!m) return;
+    const me = this.currentUserId();
+    if (!me) return;
+    if (!Array.isArray(m.reactions)) m.reactions = [];
+    const existingIdx = m.reactions.findIndex(r => r.userId === me && r.emoji === emoji);
+    if (existingIdx >= 0) {
+      m.reactions.splice(existingIdx, 1);
+    } else {
+      m.reactions.push({ emoji, userId: me, createdAt: Date.now() });
+    }
+    Store.save();
+    this.render();
+  },
+
+  // Open the shared EmojiPicker. Picked emoji goes through toggleReaction
+  // for the same add/remove semantics. The "more" button on the post is
+  // marked data-emoji-trigger so the picker's outside-click handler
+  // doesn't close it instantly.
+  openReactionPicker(btn) {
+    if (!this.canEngage()) {
+      toast('Sign in with a Family or Admin role to react.', 'warn');
+      return;
+    }
+    const memId = btn.dataset.memId;
+    let proxy = $('#memory-reaction-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.type = 'hidden';
+      proxy.id = 'memory-reaction-proxy';
+      proxy.dataset.memId = memId;
+      document.body.appendChild(proxy);
+      proxy.addEventListener('change', () => {
+        const ch = proxy.value;
+        if (!ch) return;
+        proxy.value = '';
+        this.toggleReaction(proxy.dataset.memId, ch);
+      });
+    }
+    proxy.dataset.memId = memId;
+    EmojiPicker.open(proxy, btn);
+  },
+
+  // ---------- Comments (v4.46) ----------
+  addComment(memId) {
+    if (!this.canEngage()) return;
+    const form = document.querySelector(`form[data-comment-submit="${memId}"]`);
+    if (!form) return;
+    const textarea = form.querySelector('textarea');
+    const body = (textarea.value || '').trim();
+    if (!body) return;
+    const m = this.list().find(x => x.id === memId); if (!m) return;
+    if (!Array.isArray(m.comments)) m.comments = [];
+    m.comments.push({
+      id: uid('cmt'),
+      body,
+      authorId:   this.currentUserId(),
+      authorName: this.currentAuthorName(),
+      createdAt:  Date.now(),
+    });
+    Store.save();
+    textarea.value = '';
+    this.render();
+  },
+
+  deleteComment(memId, commentId) {
+    const m = this.list().find(x => x.id === memId); if (!m) return;
+    const c = (m.comments || []).find(x => x.id === commentId); if (!c) return;
+    const me = this.currentUserId();
+    const isOwn = c.authorId && me && c.authorId === me;
+    if (!isOwn && !Auth.isAdmin()) return;
+    if (!confirm('Delete this comment?')) return;
+    m.comments = m.comments.filter(x => x.id !== commentId);
+    Store.save();
+    this.render();
   },
 
   postHTML(m) {
@@ -14826,6 +15052,10 @@ const MemoriesView = {
         <button class="btn btn-ghost btn-sm"        type="button" data-mem-edit="${escape(m.id)}">Edit</button>
         <button class="btn btn-danger-ghost btn-sm" type="button" data-mem-delete="${escape(m.id)}">Delete</button>
       </div>` : '';
+    // v4.46: reactions row.
+    const reactionsHTML = this.reactionsHTML(m);
+    // v4.46: comments section.
+    const commentsHTML = this.commentsHTML(m);
     return `
       <article class="memory-post" data-id="${escape(m.id)}">
         <header class="memory-head">
@@ -14835,7 +15065,65 @@ const MemoriesView = {
         ${bodyHTML}
         ${tagsHTML}
         ${photos ? `<div class="memory-photos">${photos}</div>` : ''}
+        ${reactionsHTML}
+        ${commentsHTML}
       </article>`;
+  },
+
+  // Render the reaction chip row. Each emoji that has at least one
+  // reaction shows a chip with the count; the chip is "is-mine" when the
+  // current user is among the reactors. Below the chips, the 7 quick-
+  // picks live in a compact row + a "more" button opens the full picker.
+  reactionsHTML(m) {
+    if (!this.canEngage() && !(m.reactions || []).length) return '';
+    const rolled = this.reactionsRolledUp(m);
+    const mine = this.myReactionEmojis(m);
+    const chips = [...rolled.entries()]
+      .sort((a, z) => z[1].length - a[1].length)
+      .map(([emoji, list]) => `
+        <button type="button" class="memory-reaction-chip ${mine.has(emoji) ? 'is-mine' : ''} ${this.canEngage() ? '' : 'is-readonly'}" data-react="${escape(emoji)}" data-mem-id="${escape(m.id)}" ${this.canEngage() ? '' : 'disabled'} title="${list.length} reaction${list.length === 1 ? '' : 's'}">
+          <span class="memory-reaction-emoji">${emoji}</span>
+          <span class="memory-reaction-count">${list.length}</span>
+        </button>`).join('');
+    const quickPicks = this.canEngage() ? `
+      <div class="memory-react-picks">
+        ${this.QUICK_REACTIONS.map(e => `
+          <button type="button" class="memory-react-pick ${mine.has(e) ? 'is-mine' : ''}" data-react="${escape(e)}" data-mem-id="${escape(m.id)}" title="React with ${e}">${e}</button>
+        `).join('')}
+        <button type="button" class="memory-react-more" data-react-more data-mem-id="${escape(m.id)}" data-emoji-trigger title="More emojis">＋</button>
+      </div>` : '';
+    return `
+      <div class="memory-reactions">
+        ${chips ? `<div class="memory-reaction-chips">${chips}</div>` : ''}
+        ${quickPicks}
+      </div>`;
+  },
+
+  commentsHTML(m) {
+    const comments = (m.comments || []).slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const me = this.currentUserId();
+    const canDelete = (c) => (c.authorId && me && c.authorId === me) || Auth.isAdmin();
+    const items = comments.map(c => `
+      <li class="memory-comment">
+        <div class="memory-comment-head">
+          <strong class="memory-comment-author">${escape(c.authorName || 'Someone')}</strong>
+          <time class="memory-comment-date muted small">${relativeTime(c.createdAt)}</time>
+          ${canDelete(c) ? `<button type="button" class="memory-comment-x" data-comment-delete="${escape(c.id)}" data-mem-id="${escape(m.id)}" aria-label="Delete comment">×</button>` : ''}
+        </div>
+        <div class="memory-comment-body">${escape(c.body).replace(/\n/g, '<br>')}</div>
+      </li>`).join('');
+    const composer = this.canEngage()
+      ? `<form class="memory-comment-add" data-comment-submit="${escape(m.id)}">
+          <textarea rows="2" placeholder="Write a comment…" maxlength="2000"></textarea>
+          <button type="submit" class="btn btn-secondary btn-sm">Post</button>
+        </form>`
+      : '';
+    if (!items && !composer) return '';
+    return `
+      <section class="memory-comments">
+        ${items ? `<ul class="memory-comment-list">${items}</ul>` : ''}
+        ${composer}
+      </section>`;
   },
 
   async resolvePhotoSrc(el) {
