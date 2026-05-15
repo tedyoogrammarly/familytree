@@ -94,6 +94,7 @@
           <button class="nav-tab" data-view="recipes" role="tab">Recipes</button>
           <button class="nav-tab" data-view="memories" role="tab">Memories</button>
           <button class="nav-tab" data-view="timecapsule" role="tab">Time Capsule</button>
+          <button class="nav-tab" data-view="stories" role="tab">Stories</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -831,6 +832,133 @@
             <button class="btn btn-ghost" type="button" data-close>Cancel</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- ===== STORIES VIEW (v4.48 — Wave 4b) =====
+         Voice + video stories. Admin uploads/records/embeds; everyone
+         authenticated plays. Each story is either an uploaded media file
+         (stored in family-audio or family-video Storage bucket) or an
+         embedded URL (YouTube/Vimeo recognized; everything else opens as
+         a "Watch link" chip to avoid iframe XSS surface). -->
+    <main id="view-stories" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="stories"></span>Stories</h2>
+            <p>Family stories worth keeping — Grandma's recipes told out loud, kids saying "happy birthday," old vacation clips.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-story-add" data-admin-only>+ New story</button>
+          </div>
+        </div>
+
+        <section class="panel">
+          <header class="panel-head">
+            <h3 id="stories-list-title">All stories</h3>
+            <div class="panel-head-tools">
+              <input id="stories-search" class="input" type="search" placeholder="Search by title or tagged person…" autocomplete="off" />
+            </div>
+          </header>
+          <div id="stories-grid" class="stories-grid"></div>
+          <div id="stories-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No stories yet</h3>
+              <p>Record an audio story right from your browser, upload a video, or paste a YouTube/Vimeo link. Each story can be tagged with who's in it.</p>
+              <button class="btn btn-primary" id="btn-story-add-first" data-admin-only>+ Add the first story</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== STORY MODAL (v4.48) ===== -->
+    <div id="story-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="story-modal-title">
+        <header class="modal-head">
+          <h3 id="story-modal-title">New story</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="story-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" required placeholder="e.g. Grandma on how she met Grandpa" /></label>
+          <label class="field"><span>Description <span class="muted small">(optional)</span></span><textarea name="description" rows="3" placeholder="Where this was recorded, what it's about, anything worth remembering."></textarea></label>
+          <!-- Source mode pills: Record audio · Upload audio · Upload video · Embed URL -->
+          <div class="field">
+            <span>Source *</span>
+            <div class="story-source-pills" role="tablist" aria-label="Story source">
+              <button type="button" class="story-pill is-active" data-source="record-audio" role="tab">🎤 Record audio</button>
+              <button type="button" class="story-pill" data-source="upload-audio" role="tab">📁 Upload audio</button>
+              <button type="button" class="story-pill" data-source="upload-video" role="tab">🎬 Upload video</button>
+              <button type="button" class="story-pill" data-source="embed-url"    role="tab">🔗 Embed link</button>
+            </div>
+          </div>
+
+          <!-- Record-audio panel: MediaRecorder. -->
+          <div class="story-source-panel" data-panel="record-audio">
+            <div class="story-recorder">
+              <button type="button" class="btn btn-primary" id="story-rec-toggle">Start recording</button>
+              <span class="story-rec-status" id="story-rec-status">Click to start. 5-minute max.</span>
+            </div>
+            <audio id="story-rec-preview" controls preload="metadata" hidden></audio>
+            <p class="muted small" style="margin-top:6px;">Microphone permission is required the first time.</p>
+          </div>
+
+          <!-- Upload-audio panel -->
+          <div class="story-source-panel" data-panel="upload-audio" hidden>
+            <input type="file" id="story-audio-input" accept="audio/*" />
+            <audio id="story-audio-preview" controls preload="metadata" hidden></audio>
+          </div>
+
+          <!-- Upload-video panel -->
+          <div class="story-source-panel" data-panel="upload-video" hidden>
+            <input type="file" id="story-video-input" accept="video/*" />
+            <video id="story-video-preview" controls preload="metadata" hidden style="max-width:100%; border-radius:10px; margin-top:8px;"></video>
+            <p class="muted small" style="margin-top:6px;">Max 100&nbsp;MB per clip.</p>
+          </div>
+
+          <!-- Embed URL panel -->
+          <div class="story-source-panel" data-panel="embed-url" hidden>
+            <input id="story-embed-url" type="url" class="input" placeholder="https://youtube.com/… · https://vimeo.com/…" />
+            <p class="muted small" id="story-embed-status" style="margin-top:6px;"></p>
+          </div>
+
+          <p class="muted small" id="story-upload-status" style="margin: 6px 0 0;"></p>
+
+          <label class="field" style="margin-top:14px;">
+            <span><span class="kv-emoji" aria-hidden="true">📅</span>Date recorded <span class="muted small">(optional)</span></span>
+            <input name="recordedDate" type="date" />
+          </label>
+          <div class="field">
+            <span>Tag people <span class="muted small">(optional)</span></span>
+            <div id="story-tag-chips" class="memory-tag-chips" aria-live="polite"></div>
+            <select id="story-tag-picker" class="input">
+              <option value="">+ Add person to tag…</option>
+            </select>
+          </div>
+          <p class="form-error" id="story-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="story-submit">Save story</button>
+            <button class="btn btn-danger-ghost" type="button" id="story-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== STORY PLAYER MODAL (v4.48) ===== -->
+    <div id="story-player-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="story-player-title">
+        <header class="modal-head">
+          <h3 id="story-player-title">Story</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div id="story-player-body" class="modal-body"></div>
       </div>
     </div>
 

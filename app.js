@@ -852,6 +852,15 @@ const Store = {
       // Recipient sees a sealed-envelope card for locked capsules
       // addressed to them; the body is hidden until unlock or override.
       timeCapsules: [],
+      // v4.48: Voice / Video Stories. Admin-only authorship; everyone
+      // authenticated views. Each story has a `kind` (audio | video) and
+      // a `source` (upload | embed). Upload-source stories carry a
+      // { bucket, path, mimeType } media ref into the family-audio /
+      // family-video Storage buckets. Embed-source stories carry a raw
+      // URL plus a detected `embedKind` (youtube | vimeo | generic).
+      // Optional tag list of people (m:/f:/s:/k:) so a story can be
+      // surfaced on Family Tree cards later.
+      stories: [],
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -1075,6 +1084,19 @@ const Store = {
        'fromRef','fromText'].forEach(k => { if (r[k] === undefined) r[k] = ''; });
       if (r.photo !== null && (typeof r.photo !== 'object' || Array.isArray(r.photo))) r.photo = null;
       if (r.createdAt === undefined) r.createdAt = Date.now();
+    }
+
+    // v4.48: voice / video stories. Backfill so render code can assume
+    // the shape.
+    if (!Array.isArray(this.state.stories)) this.state.stories = [];
+    for (const s of this.state.stories) {
+      if (!s.id) s.id = uid('sto');
+      ['title','description','kind','source','embedUrl','embedKind','embedId','recordedDate']
+        .forEach(k => { if (s[k] === undefined) s[k] = ''; });
+      if (s.media !== null && (typeof s.media !== 'object' || Array.isArray(s.media))) s.media = null;
+      if (!Array.isArray(s.tags)) s.tags = [];
+      if (s.durationSec === undefined) s.durationSec = 0;
+      if (s.createdAt   === undefined) s.createdAt = Date.now();
     }
 
     // v4.47: time capsules. Each entry has a fixed shape so render +
@@ -3386,6 +3408,7 @@ const Views = {
     $('#view-recipes').hidden      = name !== 'recipes';
     $('#view-memories').hidden     = name !== 'memories';
     $('#view-timecapsule').hidden  = name !== 'timecapsule';
+    $('#view-stories').hidden      = name !== 'stories';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3417,6 +3440,7 @@ const Views = {
       if (name === 'recipes')   RecipesView.render();
       if (name === 'memories')  MemoriesView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
+      if (name === 'stories')   StoriesView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9276,6 +9300,7 @@ async function init() {
   RecipesView.init();
   MemoriesView.init();
   TimeCapsuleView.init();
+  StoriesView.init();
   PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
@@ -9924,6 +9949,21 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.48',
+    date: '2026-05-15',
+    title: 'Voice / Video Stories (Wave 4b of family-portal expansion)',
+    changes: [
+      'New "Stories" top-level nav tab. Admin authors stories; everyone authenticated plays.',
+      'Four source modes in the editor (pills switch between them): 🎤 Record audio in-browser via MediaRecorder, 📁 Upload audio, 🎬 Upload video, 🔗 Embed link (YouTube/Vimeo auto-detected).',
+      'Recording: 5-minute cap (auto-stops at 5:00). Microphone permission requested the first time. Recorded blob preview lets you re-listen before saving. Upload bucket: family-audio.',
+      'Upload audio cap: 20 MB. Upload video cap: 100 MB. Bucket caps from Wave 1.',
+      'Embed URLs: YouTube short links (youtu.be), full watch URLs, embed URLs, and Shorts all parse to the same YouTube embed iframe. Vimeo too. Generic URLs render as a "▶ Watch on external site" button — we don\'t iframe arbitrary domains (XSS surface).',
+      'Each story has: title, optional description, optional recorded date, multi-tag of people (members + friend household persons), kind (audio/video), source (upload/embed), durationSec (auto-captured from MediaRecorder + file metadata).',
+      'Card grid: thumbnail + kind emoji + duration badge + title + tags. Click → opens player modal with the inline player (audio/video element for uploads, iframe for embeds, external link for generic).',
+      'CPU/memory: zero new SQL or realtime channels. Media binaries stay in Storage; the JSONB row only carries { bucket, path, mimeType } refs or { embedUrl, embedKind, embedId } embed metadata. Both shapes are small.',
+    ],
+  },
   {
     version: '4.47',
     date: '2026-05-15',
@@ -15911,6 +15951,655 @@ const TimeCapsuleModal = {
     const id = this.editingId;
     this.close();
     TimeCapsuleView.deleteCapsule(id);
+  },
+};
+
+// -------------------- STORIES (v4.48 — Wave 4b) --------------------
+// Voice + video stories. Admin uploads (audio/video), records audio in-
+// browser via MediaRecorder, or pastes a YouTube/Vimeo embed URL. All
+// authenticated users can play. Uploads land in family-audio /
+// family-video Storage buckets (Wave 1); the JSONB archive only carries
+// the { bucket, path } ref so the row stays small. Embed URLs are
+// stored as-is plus a detected `embedKind`.
+
+const StoriesView = {
+  searchQuery: '',
+  signedUrlCache: new Map(),
+
+  init() {
+    on($('#btn-story-add'),       'click', () => StoryModal.openAdd());
+    on($('#btn-story-add-first'), 'click', () => StoryModal.openAdd());
+    const search = $('#stories-search');
+    if (search) {
+      on(search, 'input', () => {
+        this.searchQuery = (search.value || '').trim().toLowerCase();
+        this.render();
+      });
+    }
+    StoryModal.init();
+    // Player modal close affordances.
+    const player = $('#story-player-modal');
+    if (player && !player.dataset.bound) {
+      player.dataset.bound = '1';
+      on(player, 'click', (e) => { if (e.target.closest('[data-close]')) this.closePlayer(); });
+    }
+  },
+
+  list() {
+    return Array.isArray(Store.state.stories) ? Store.state.stories : [];
+  },
+
+  filtered() {
+    const q = this.searchQuery;
+    let list = this.list();
+    if (q) {
+      list = list.filter(s => {
+        const hay = [
+          s.title, s.description,
+          (s.tags || []).map(t => resolvePersonRefLabel(t)).join(' '),
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    return list.slice().sort((a, z) => (z.createdAt || 0) - (a.createdAt || 0));
+  },
+
+  render() {
+    const grid  = $('#stories-grid');
+    const empty = $('#stories-empty');
+    if (!grid || !empty) return;
+    const list = this.filtered();
+    const title = $('#stories-list-title');
+    if (title) {
+      title.textContent = this.searchQuery
+        ? `Matches for "${this.searchQuery}" (${list.length})`
+        : `All stories (${list.length})`;
+    }
+    if (!this.list().length) { grid.innerHTML = ''; empty.hidden = false; return; }
+    empty.hidden = true;
+    grid.innerHTML = list.map(s => this.cardHTML(s)).join('') ||
+      `<p class="muted" style="padding:24px; text-align:center;">No stories matching "${escape(this.searchQuery)}".</p>`;
+    grid.querySelectorAll('[data-story-card]').forEach(card => {
+      on(card, 'click', () => this.openPlayer(card.dataset.storyCard));
+    });
+  },
+
+  cardHTML(s) {
+    const kindLabel = s.kind === 'video' ? '🎬 Video' : '🎤 Audio';
+    const sourceLabel = s.source === 'embed' ? '🔗 Embed' : 'Uploaded';
+    const tags = (s.tags || []).slice(0, 3)
+      .map(t => resolvePersonRefLabel(t))
+      .filter(Boolean);
+    const tagsHTML = tags.length
+      ? `<div class="story-card-tags">${tags.map(label => `<span class="memory-tag">${escape(label)}</span>`).join('')}${(s.tags || []).length > 3 ? ` <span class="muted small">+${(s.tags || []).length - 3}</span>` : ''}</div>`
+      : '';
+    const duration = s.durationSec ? this.formatDuration(s.durationSec) : '';
+    return `
+      <button type="button" class="story-card" data-story-card="${escape(s.id)}">
+        <div class="story-card-thumb is-${escape(s.kind || 'audio')}">
+          <span class="story-card-kind-emoji" aria-hidden="true">${s.kind === 'video' ? '🎬' : '🎤'}</span>
+          ${duration ? `<span class="story-card-duration">${duration}</span>` : ''}
+        </div>
+        <div class="story-card-body">
+          <div class="story-card-title">${escape(s.title || 'Untitled')}</div>
+          <div class="story-card-meta muted small">${kindLabel} · ${sourceLabel}${s.recordedDate ? ` · ${escape(formatDate(s.recordedDate))}` : ''}</div>
+          ${tagsHTML}
+        </div>
+      </button>`;
+  },
+
+  formatDuration(seconds) {
+    const s = Math.max(0, Math.round(seconds));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
+  },
+
+  // Open the dedicated player modal. Renders the right element based on
+  // story type: <audio> for uploaded audio, <video> for uploaded video,
+  // iframe for YouTube/Vimeo, plain link chip for generic URLs (we don't
+  // iframe arbitrary URLs — XSS surface).
+  async openPlayer(id) {
+    const s = this.list().find(x => x.id === id); if (!s) return;
+    const modal = $('#story-player-modal');
+    const body  = $('#story-player-body');
+    $('#story-player-title').textContent = s.title || 'Story';
+
+    const descHTML = s.description ? `<p class="story-player-desc">${escape(s.description).replace(/\n/g, '<br>')}</p>` : '';
+    const tagsHTML = (s.tags || []).length
+      ? `<div class="memory-tags">${(s.tags || []).map(t => `<span class="memory-tag">${escape(resolvePersonRefLabel(t))}</span>`).join('')}</div>`
+      : '';
+    const adminControls = Auth.isAdmin() ? `
+      <div class="story-player-actions">
+        <button class="btn btn-ghost btn-sm"        type="button" data-story-edit="${escape(s.id)}">Edit</button>
+        <button class="btn btn-danger-ghost btn-sm" type="button" data-story-delete="${escape(s.id)}">Delete</button>
+      </div>` : '';
+
+    // Build the player element.
+    let playerHTML = '';
+    if (s.source === 'upload' && s.media?.bucket && s.media?.path) {
+      const url = await Backend.getMediaUrl(s.media.bucket, s.media.path, 3600);
+      if (!url) playerHTML = '<p class="muted">Media unavailable. Try again in a moment.</p>';
+      else if (s.kind === 'video') {
+        playerHTML = `<video controls preload="metadata" class="story-player-video" src="${escape(url)}"></video>`;
+      } else {
+        playerHTML = `<audio controls preload="metadata" class="story-player-audio" src="${escape(url)}"></audio>`;
+      }
+    } else if (s.source === 'embed') {
+      const embed = parseEmbedUrl(s.embedUrl || '');
+      if (embed.kind === 'youtube') {
+        playerHTML = `<iframe class="story-player-iframe" src="https://www.youtube.com/embed/${escape(embed.id)}" title="${escape(s.title || 'Video')}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+      } else if (embed.kind === 'vimeo') {
+        playerHTML = `<iframe class="story-player-iframe" src="https://player.vimeo.com/video/${escape(embed.id)}" title="${escape(s.title || 'Video')}" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
+      } else {
+        // Generic URL — we don't iframe arbitrary domains (clickjacking /
+        // XSS risk). Render as a Watch link chip instead.
+        playerHTML = `<a href="${escape(s.embedUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">▶ Watch on external site</a>`;
+      }
+    }
+
+    body.innerHTML = `
+      ${playerHTML}
+      ${descHTML}
+      ${tagsHTML}
+      ${adminControls}
+    `;
+    modal.setAttribute('aria-hidden', 'false');
+    modal.classList.add('is-open');
+
+    body.querySelectorAll('[data-story-edit]').forEach(btn => {
+      on(btn, 'click', () => { this.closePlayer(); StoryModal.openEdit(btn.dataset.storyEdit); });
+    });
+    body.querySelectorAll('[data-story-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deleteStory(btn.dataset.storyDelete));
+    });
+  },
+
+  closePlayer() {
+    const modal = $('#story-player-modal');
+    if (!modal) return;
+    modal.setAttribute('aria-hidden', 'true');
+    modal.classList.remove('is-open');
+    // Stop any playing media when closing.
+    const body = $('#story-player-body');
+    body?.querySelectorAll('audio, video').forEach(el => { try { el.pause(); } catch {} });
+    if (body) body.innerHTML = '';
+  },
+
+  async deleteStory(id) {
+    if (!Auth.isAdmin()) return;
+    const s = this.list().find(x => x.id === id); if (!s) return;
+    if (!confirm(`Delete "${s.title}"? The media file is also removed from storage.`)) return;
+    if (s.media?.bucket && s.media.path) {
+      await Backend.deleteMedia(s.media.bucket, s.media.path);
+    }
+    Store.state.stories = this.list().filter(x => x.id !== id);
+    Store.save();
+    toast('Story deleted.');
+    this.closePlayer();
+    this.render();
+  },
+};
+
+// Detect what kind of embed URL we're looking at. Returns
+// { kind: 'youtube'|'vimeo'|'generic', id }. YouTube IDs come from
+// youtu.be/<id>, youtube.com/watch?v=<id>, or youtube.com/embed/<id>.
+// Vimeo: vimeo.com/<digits>. Anything else is generic — we won't iframe
+// those.
+function parseEmbedUrl(raw) {
+  const url = (raw || '').trim();
+  if (!url) return { kind: 'generic', id: '' };
+  // YouTube short URL: https://youtu.be/<id>
+  let m = url.match(/youtu\.be\/([a-zA-Z0-9_-]{6,})/);
+  if (m) return { kind: 'youtube', id: m[1] };
+  // YouTube watch: https://www.youtube.com/watch?v=<id>
+  m = url.match(/youtube\.com\/watch\?[^#]*?v=([a-zA-Z0-9_-]{6,})/);
+  if (m) return { kind: 'youtube', id: m[1] };
+  // YouTube embed: https://www.youtube.com/embed/<id>
+  m = url.match(/youtube\.com\/embed\/([a-zA-Z0-9_-]{6,})/);
+  if (m) return { kind: 'youtube', id: m[1] };
+  // YouTube Shorts: https://www.youtube.com/shorts/<id>
+  m = url.match(/youtube\.com\/shorts\/([a-zA-Z0-9_-]{6,})/);
+  if (m) return { kind: 'youtube', id: m[1] };
+  // Vimeo: https://vimeo.com/<id>
+  m = url.match(/vimeo\.com\/(\d+)/);
+  if (m) return { kind: 'vimeo', id: m[1] };
+  return { kind: 'generic', id: '' };
+}
+
+// -------------------- STORY MODAL (v4.48) --------------------
+const StoryModal = {
+  editingId: null,
+  sourceMode: 'record-audio',     // one of: 'record-audio' | 'upload-audio' | 'upload-video' | 'embed-url'
+
+  // Recorder state: chunks accumulate while recording, blob is the final
+  // audio when stop is called.
+  recorder: null,
+  recorderStream: null,
+  recorderChunks: [],
+  recorderTimer: null,
+  recorderStart: 0,
+  recordedBlob: null,
+  recordedDuration: 0,
+
+  // Pending upload from picker (audio or video). Set when the user picks
+  // a file; consumed on save.
+  pendingFile: null,
+  pendingFileKind: '',   // 'audio' | 'video'
+  pendingFileDuration: 0,
+
+  // Saved media ref (after upload succeeds). The previous one gets
+  // deleted from Storage if a new upload replaces it during the same
+  // editor session.
+  uploadedMedia: null,   // { bucket, path, mimeType }
+  workingTags: [],
+  uploading: 0,
+
+  // 5-minute max per audio clip + 100MB hard limit on video (matches the
+  // Storage bucket file_size_limit from Wave 1).
+  MAX_AUDIO_SEC: 5 * 60,
+  MAX_VIDEO_BYTES: 100 * 1024 * 1024,
+  MAX_AUDIO_BYTES: 20 * 1024 * 1024,
+
+  init() {
+    const el = $('#story-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#story-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#story-delete'), 'click', () => this.deleteCurrent());
+
+    // Source pill switching
+    $$('.story-pill').forEach(pill => {
+      on(pill, 'click', () => this.switchSource(pill.dataset.source));
+    });
+
+    // Recorder
+    on($('#story-rec-toggle'), 'click', () => this.toggleRecording());
+
+    // File pickers
+    on($('#story-audio-input'), 'change', (e) => this.onFilePick(e, 'audio'));
+    on($('#story-video-input'), 'change', (e) => this.onFilePick(e, 'video'));
+
+    // Embed URL live detection
+    on($('#story-embed-url'), 'input', () => this.updateEmbedStatus());
+
+    // Tag picker
+    on($('#story-tag-picker'), 'change', (e) => this.onTagPick(e));
+  },
+
+  switchSource(mode) {
+    if (mode === this.sourceMode) return;
+    // If we're switching away from a mode with pending media, that media
+    // becomes obsolete. We don't auto-delete it because the user might
+    // switch back — but it's worth clearing the preview so the new mode
+    // starts fresh.
+    this.sourceMode = mode;
+    $$('.story-pill').forEach(p => p.classList.toggle('is-active', p.dataset.source === mode));
+    document.querySelectorAll('.story-source-panel').forEach(p => {
+      p.hidden = p.dataset.panel !== mode;
+    });
+    // Reset feedback line on each switch.
+    $('#story-upload-status').textContent = '';
+  },
+
+  // ---------- Recorder ----------
+  async toggleRecording() {
+    if (this.recorder && this.recorder.state === 'recording') {
+      this.stopRecording();
+    } else {
+      await this.startRecording();
+    }
+  },
+
+  async startRecording() {
+    try {
+      this.recorderStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      toast('Microphone permission denied or unavailable.', 'warn');
+      return;
+    }
+    this.recorderChunks = [];
+    this.recordedBlob = null;
+    this.recordedDuration = 0;
+    // The browser picks an appropriate audio mimeType. webm/opus is most
+    // common on Chromium; Safari may produce mp4/aac.
+    this.recorder = new MediaRecorder(this.recorderStream);
+    this.recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) this.recorderChunks.push(e.data);
+    };
+    this.recorder.onstop = () => {
+      const mimeType = this.recorder.mimeType || 'audio/webm';
+      this.recordedBlob = new Blob(this.recorderChunks, { type: mimeType });
+      this.recordedDuration = Math.round((Date.now() - this.recorderStart) / 1000);
+      // Release the mic.
+      this.recorderStream?.getTracks().forEach(t => t.stop());
+      this.recorderStream = null;
+      // Preview the recording.
+      const preview = $('#story-rec-preview');
+      if (preview) {
+        preview.src = URL.createObjectURL(this.recordedBlob);
+        preview.hidden = false;
+      }
+      $('#story-rec-toggle').textContent = 'Start recording';
+      $('#story-rec-status').textContent = `Recorded ${StoriesView.formatDuration(this.recordedDuration)}. Save to upload.`;
+      clearInterval(this.recorderTimer);
+      this.recorderTimer = null;
+    };
+    this.recorderStart = Date.now();
+    this.recorder.start();
+    $('#story-rec-toggle').textContent = 'Stop recording';
+    $('#story-rec-status').textContent = 'Recording… 0:00';
+    // Tick status + auto-stop at the 5-minute cap.
+    this.recorderTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this.recorderStart) / 1000);
+      $('#story-rec-status').textContent = `Recording… ${StoriesView.formatDuration(elapsed)}`;
+      if (elapsed >= this.MAX_AUDIO_SEC) this.stopRecording();
+    }, 500);
+  },
+
+  stopRecording() {
+    try { this.recorder?.stop(); } catch {}
+  },
+
+  // ---------- File pickers ----------
+  onFilePick(e, kind) {
+    const file = e.target.files?.[0]; if (!file) {
+      this.pendingFile = null; this.pendingFileKind = ''; return;
+    }
+    if (kind === 'video' && file.size > this.MAX_VIDEO_BYTES) {
+      toast(`Video too large: ${(file.size / 1024 / 1024).toFixed(1)} MB. Max is ${this.MAX_VIDEO_BYTES / 1024 / 1024} MB.`, 'warn');
+      e.target.value = '';
+      return;
+    }
+    if (kind === 'audio' && file.size > this.MAX_AUDIO_BYTES) {
+      toast(`Audio too large: ${(file.size / 1024 / 1024).toFixed(1)} MB. Max is ${this.MAX_AUDIO_BYTES / 1024 / 1024} MB.`, 'warn');
+      e.target.value = '';
+      return;
+    }
+    this.pendingFile = file;
+    this.pendingFileKind = kind;
+    // Read duration from the preview element. Useful for the card UI's
+    // duration badge.
+    const previewId = kind === 'audio' ? '#story-audio-preview' : '#story-video-preview';
+    const preview = $(previewId);
+    if (preview) {
+      preview.src = URL.createObjectURL(file);
+      preview.hidden = false;
+      preview.onloadedmetadata = () => {
+        this.pendingFileDuration = Math.round(preview.duration || 0);
+      };
+    }
+  },
+
+  // ---------- Embed ----------
+  updateEmbedStatus() {
+    const url = ($('#story-embed-url').value || '').trim();
+    const status = $('#story-embed-status');
+    if (!url) { status.textContent = ''; return; }
+    const parsed = parseEmbedUrl(url);
+    if (parsed.kind === 'youtube') status.textContent = `Detected: YouTube (id ${parsed.id})`;
+    else if (parsed.kind === 'vimeo')   status.textContent = `Detected: Vimeo (id ${parsed.id})`;
+    else status.textContent = 'Generic link — will open in a new tab when clicked (not embedded inline for security).';
+  },
+
+  // ---------- Tags ----------
+  populateTagPicker() {
+    const sel = $('#story-tag-picker'); if (!sel) return;
+    const taken = new Set(this.workingTags);
+    const memberOpts = sortMembers(Store.membersList())
+      .filter(m => !m.dateOfDeath && !taken.has('m:' + m.id))
+      .map(m => `<option value="m:${m.id}">${escape(displayName(m))}</option>`);
+    const friendOpts = [];
+    sortFriends(Object.values(Store.state.friends || {})).forEach(f => {
+      if (!taken.has('f:' + f.id)) friendOpts.push(`<option value="f:${f.id}">${escape(displayName(f))}</option>`);
+      if (f.spouse && !taken.has('s:' + f.id)) friendOpts.push(`<option value="s:${f.id}">${escape(displayName(f.spouse))} (spouse of ${escape(displayName(f))})</option>`);
+      (f.kids || []).forEach(k => {
+        if (!taken.has(`k:${f.id}:${k.id}`)) friendOpts.push(`<option value="k:${f.id}:${k.id}">${escape(displayName(k))} (child of ${escape(displayName(f))})</option>`);
+      });
+    });
+    sel.innerHTML = `
+      <option value="">+ Add person to tag…</option>
+      ${memberOpts.length ? `<optgroup label="Family">${memberOpts.join('')}</optgroup>` : ''}
+      ${friendOpts.length ? `<optgroup label="Friends">${friendOpts.join('')}</optgroup>` : ''}
+    `;
+    sel.value = '';
+  },
+
+  renderTagChips() {
+    const host = $('#story-tag-chips'); if (!host) return;
+    host.innerHTML = this.workingTags.map(ref => {
+      const label = resolvePersonRefLabel(ref) || '(unknown)';
+      return `<span class="memory-tag-chip"><span>${escape(label)}</span><button type="button" class="memory-tag-x" data-remove-tag="${escape(ref)}" aria-label="Remove tag">×</button></span>`;
+    }).join('') || '<span class="muted small">Nobody tagged yet.</span>';
+    host.querySelectorAll('[data-remove-tag]').forEach(btn => {
+      on(btn, 'click', () => {
+        this.workingTags = this.workingTags.filter(t => t !== btn.dataset.removeTag);
+        this.renderTagChips();
+        this.populateTagPicker();
+      });
+    });
+  },
+
+  onTagPick(e) {
+    const v = e.target.value; if (!v) return;
+    if (!this.workingTags.includes(v)) this.workingTags.push(v);
+    this.renderTagChips();
+    this.populateTagPicker();
+  },
+
+  // ---------- Open / Close ----------
+  openAdd() {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.reset();
+    this.workingTags = [];
+    this.populateTagPicker();
+    this.renderTagChips();
+    $('#story-modal-title').textContent = 'New story';
+    $('#story-submit').textContent = 'Save story';
+    $('#story-delete').hidden = true;
+    this.switchSource('record-audio');
+    this.open();
+    setTimeout(() => $('#story-form').title.focus(), 50);
+  },
+
+  openEdit(id) {
+    if (!Auth.isAdmin()) return;
+    const s = (Store.state.stories || []).find(x => x.id === id); if (!s) return;
+    this.editingId = id;
+    this.reset();
+    this.workingTags = (s.tags || []).slice();
+    this.uploadedMedia = s.media || null;
+    $('#story-modal-title').textContent = `Edit story`;
+    $('#story-submit').textContent = 'Save changes';
+    $('#story-delete').hidden = false;
+    const fm = $('#story-form');
+    fm.title.value        = s.title || '';
+    fm.description.value  = s.description || '';
+    fm.recordedDate.value = s.recordedDate || '';
+    this.populateTagPicker();
+    this.renderTagChips();
+    // Match source mode to what's already on the record. For edits with
+    // an existing upload, default to the matching upload panel so the
+    // admin can replace it; embed-URL edits land on the embed panel.
+    if (s.source === 'embed') {
+      this.switchSource('embed-url');
+      $('#story-embed-url').value = s.embedUrl || '';
+      this.updateEmbedStatus();
+    } else {
+      this.switchSource(s.kind === 'video' ? 'upload-video' : 'upload-audio');
+      $('#story-upload-status').textContent = 'Existing file kept unless you pick or record a new one.';
+    }
+    this.open();
+  },
+
+  reset() {
+    $('#story-form').reset();
+    $('#story-error').hidden = true;
+    $('#story-upload-status').textContent = '';
+    $('#story-embed-status').textContent = '';
+    this.pendingFile = null;
+    this.pendingFileKind = '';
+    this.pendingFileDuration = 0;
+    this.recordedBlob = null;
+    this.recordedDuration = 0;
+    this.uploadedMedia = null;
+    // Reset preview elements.
+    ['#story-rec-preview', '#story-audio-preview', '#story-video-preview'].forEach(sel => {
+      const el = $(sel);
+      if (el) { try { el.pause(); } catch {} el.removeAttribute('src'); el.load?.(); el.hidden = true; }
+    });
+    $('#story-rec-toggle').textContent = 'Start recording';
+    $('#story-rec-status').textContent = 'Click to start. 5-minute max.';
+  },
+
+  open() {
+    const el = $('#story-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+  },
+  close() {
+    // Best-effort release of recorder/stream if user closed mid-record.
+    try { if (this.recorder?.state === 'recording') this.recorder.stop(); } catch {}
+    this.recorderStream?.getTracks().forEach(t => t.stop());
+    this.recorderStream = null;
+    clearInterval(this.recorderTimer);
+    this.recorderTimer = null;
+    const el = $('#story-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.workingTags = [];
+  },
+
+  // ---------- Save ----------
+  async save() {
+    if (!Auth.isAdmin()) return;
+    const fm = $('#story-form');
+    const fd = new FormData(fm);
+    const title = (fd.get('title') || '').toString().trim();
+    if (!title) { this.error('Title is required.'); return; }
+
+    const description  = (fd.get('description')  || '').toString().trim();
+    const recordedDate = (fd.get('recordedDate') || '').toString().trim();
+    const existing = this.editingId
+      ? (Store.state.stories || []).find(s => s.id === this.editingId)
+      : null;
+
+    // Source-specific media resolution.
+    let kind     = '';
+    let source   = '';
+    let media    = existing?.media || null;
+    let embedUrl = '';
+    let embedKind = '';
+    let embedId  = '';
+    let durationSec = existing?.durationSec || 0;
+
+    try {
+      if (this.sourceMode === 'record-audio') {
+        if (this.recordedBlob) {
+          this.uploading++;
+          $('#story-upload-status').textContent = 'Uploading recording…';
+          const file = new File([this.recordedBlob], `recording-${Date.now()}.webm`, { type: this.recordedBlob.type });
+          const result = await Backend.uploadMedia(file, {
+            bucket: 'family-audio', folder: 'stories', maxBytes: this.MAX_AUDIO_BYTES,
+          });
+          this.uploading--;
+          if (!result.ok) throw new Error(result.reason);
+          // Replace existing upload — clean up the previous one in Storage.
+          if (existing?.media?.bucket) await Backend.deleteMedia(existing.media.bucket, existing.media.path);
+          media = { bucket: result.bucket, path: result.path, mimeType: result.contentType || 'audio/webm' };
+          durationSec = this.recordedDuration;
+        } else if (!existing?.media) {
+          this.error('Record audio first, or pick a different source.');
+          return;
+        }
+        kind = 'audio'; source = 'upload';
+      } else if (this.sourceMode === 'upload-audio' || this.sourceMode === 'upload-video') {
+        const isVideo = this.sourceMode === 'upload-video';
+        const bucket  = isVideo ? 'family-video' : 'family-audio';
+        if (this.pendingFile) {
+          this.uploading++;
+          $('#story-upload-status').textContent = `Uploading ${isVideo ? 'video' : 'audio'}…`;
+          const result = await Backend.uploadMedia(this.pendingFile, {
+            bucket, folder: 'stories',
+            maxBytes: isVideo ? this.MAX_VIDEO_BYTES : this.MAX_AUDIO_BYTES,
+          });
+          this.uploading--;
+          if (!result.ok) throw new Error(result.reason);
+          if (existing?.media?.bucket) await Backend.deleteMedia(existing.media.bucket, existing.media.path);
+          media = { bucket: result.bucket, path: result.path, mimeType: result.contentType || (isVideo ? 'video/mp4' : 'audio/mp3') };
+          if (this.pendingFileDuration) durationSec = this.pendingFileDuration;
+        } else if (!existing?.media) {
+          this.error(`Pick ${isVideo ? 'a video' : 'an audio'} file first, or pick a different source.`);
+          return;
+        }
+        kind = isVideo ? 'video' : 'audio';
+        source = 'upload';
+      } else if (this.sourceMode === 'embed-url') {
+        const url = ($('#story-embed-url').value || '').trim();
+        if (!url) { this.error('Paste a video URL, or pick a different source.'); return; }
+        const parsed = parseEmbedUrl(url);
+        // Clean up any previous upload if we're flipping from upload → embed.
+        if (existing?.media?.bucket) await Backend.deleteMedia(existing.media.bucket, existing.media.path);
+        media = null;
+        embedUrl  = url;
+        embedKind = parsed.kind;
+        embedId   = parsed.id;
+        kind = 'video';     // embed paths are video-shaped (YouTube/Vimeo)
+        source = 'embed';
+        durationSec = 0;    // unknown for external embeds
+      }
+    } catch (err) {
+      this.uploading = Math.max(0, this.uploading - 1);
+      $('#story-upload-status').textContent = '';
+      this.error(`Upload failed: ${err.message || err}`);
+      return;
+    }
+
+    $('#story-upload-status').textContent = '';
+
+    const record = {
+      ...(existing || {}),
+      id: this.editingId || uid('sto'),
+      title,
+      description,
+      kind,
+      source,
+      media,
+      embedUrl,
+      embedKind,
+      embedId,
+      durationSec,
+      tags: this.workingTags.slice(),
+      recordedDate,
+      createdAt: existing?.createdAt || Date.now(),
+      createdBy: existing?.createdBy || Backend.user?.id || null,
+    };
+
+    if (!Array.isArray(Store.state.stories)) Store.state.stories = [];
+    if (existing) {
+      const idx = Store.state.stories.findIndex(s => s.id === this.editingId);
+      Store.state.stories[idx] = record;
+    } else {
+      Store.state.stories.push(record);
+    }
+    Store.save();
+    toast(this.editingId ? 'Story saved.' : 'Story added.');
+    this.close();
+    StoriesView.render();
+  },
+
+  error(msg) {
+    $('#story-error').textContent = msg;
+    $('#story-error').hidden = false;
+  },
+
+  async deleteCurrent() {
+    if (!this.editingId) return;
+    const id = this.editingId;
+    this.close();
+    StoriesView.deleteStory(id);
   },
 };
 

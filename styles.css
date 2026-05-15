@@ -5423,3 +5423,142 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .tcp-envelope { padding: 14px 14px 18px; }
   .tcp-card-head { flex-direction: column; }
 }
+
+/* ============================================================
+   v4.48  STORIES (Wave 4b)
+   Card grid → click → player modal. Source pills in the editor
+   switch between Record/Upload-audio/Upload-video/Embed-URL.
+   ============================================================ */
+.stories-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+  padding: 18px;
+}
+.story-card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  border-radius: 14px;
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+  transition: transform .15s var(--ease-out), box-shadow .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+.story-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(99, 102, 241, 0.32);
+  box-shadow: 0 10px 24px -14px rgba(19, 24, 38, 0.22);
+}
+.story-card-thumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, #2b3a55, #4a5a82);
+  color: rgba(255, 255, 255, 0.92);
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.story-card-thumb.is-video {
+  background: linear-gradient(135deg, #6b3a55, #a04a82);
+}
+.story-card-kind-emoji { font-size: 44px; line-height: 1; }
+.story-card-duration {
+  position: absolute;
+  right: 8px; bottom: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  font-variant-numeric: tabular-nums;
+}
+.story-card-body { padding: 12px 14px 14px; }
+.story-card-title { font-weight: 600; font-size: 15px; line-height: 1.3; margin-bottom: 4px; }
+.story-card-meta { margin-bottom: 6px; }
+.story-card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* Source pills in the editor modal */
+.story-source-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  background: var(--paper-soft, #f1ece1);
+  border-radius: 10px;
+}
+.story-pill {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-700);
+  cursor: pointer;
+  transition: background-color .12s ease-out, color .12s ease-out;
+  white-space: nowrap;
+}
+.story-pill:hover { color: var(--ink-900); }
+.story-pill.is-active {
+  background: #fff;
+  color: var(--brand-900);
+  box-shadow: var(--shadow-soft);
+}
+
+.story-source-panel {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px dashed var(--ink-200);
+  border-radius: 10px;
+}
+.story-source-panel input[type="file"] { display: block; }
+.story-source-panel audio,
+.story-source-panel video { display: block; width: 100%; margin-top: 8px; border-radius: 8px; }
+
+.story-recorder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.story-rec-status {
+  font-size: 13px;
+  color: var(--ink-500);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Player modal */
+.story-player-audio { width: 100%; }
+.story-player-video {
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
+  border-radius: 10px;
+}
+.story-player-iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 10px;
+}
+.story-player-desc {
+  margin-top: 14px;
+  line-height: 1.55;
+  color: var(--ink-900);
+  white-space: pre-wrap;
+}
+.story-player-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .stories-grid { grid-template-columns: 1fr; padding: 12px; }
+  .story-source-pills { flex-wrap: wrap; }
+  .story-pill { min-width: 130px; }
+}
