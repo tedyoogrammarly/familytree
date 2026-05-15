@@ -47,7 +47,12 @@
         </label>
         <label class="field">
           <span>Password</span>
-          <input name="password" type="password" autocomplete="current-password" required minlength="6" />
+          <!-- v4.38: minlength="6" removed. Safari/iOS treats minlength on
+               a password field as a strong hint that the form is a SIGN-UP,
+               not a sign-in, and offers the "Use Suggested Password" prompt
+               on top of the existing autofill. autocomplete="current-password"
+               alone is the right signal for "fill from password manager." -->
+          <input name="password" type="password" autocomplete="current-password" required />
         </label>
         <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
         <button class="btn btn-primary btn-lg" type="submit" id="btn-login-submit">Sign in</button>
@@ -494,7 +499,8 @@
                         <th>Birthday</th>
                         <th title="Whether this member has a Supabase login linked">Login</th>
                         <th title="Date this member last accessed the site">Last activity</th>
-                        <th></th>
+                        <th title="When checked, this person is hidden from the &quot;+ Add member&quot; picker on events." style="width:60px; text-align:center;">Event</th>
+                        <th style="width:120px;"></th>
                       </tr>
                     </thead>
                     <tbody id="admin-rows"></tbody>

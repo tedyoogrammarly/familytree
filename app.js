@@ -4144,34 +4144,51 @@ const AdminView = {
           <td>${m.birthday ? formatDate(m.birthday) : '—'}</td>
           <td>${loginCell}</td>
           <td>${lastSeenCell}</td>
+          <td style="text-align:center;">
+            <label class="event-toggle" title="When checked, this person is hidden from the &quot;+ Add member&quot; picker on events.">
+              <input type="checkbox" data-action="toggle-event-exclude" ${m.excludeFromEventsList ? 'checked' : ''} aria-label="Hide ${escape(displayName(m))} from events picker" />
+            </label>
+          </td>
           <td style="text-align:right; white-space:nowrap;">
-            <button class="btn btn-ghost btn-sm" data-action="edit">Edit</button>
             <button class="btn btn-ghost btn-sm" data-action="reset">Reset PW</button>
             <button class="btn btn-danger-ghost btn-sm" data-action="delete">Delete</button>
           </td>
         </tr>`;
     }).join('');
-    $('#admin-rows').innerHTML = rows || `<tr><td colspan="7" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
+    $('#admin-rows').innerHTML = rows || `<tr><td colspan="8" class="muted" style="padding:24px; text-align:center;">No members ${this.filterGroup ? `in “${escape(this.filterGroup)}”` : 'yet'}.</td></tr>`;
 
-    $('#admin-rows').querySelectorAll('button[data-action]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+    $('#admin-rows').querySelectorAll('button[data-action], input[data-action]').forEach(btn => {
+      const handler = async (e) => {
         e.stopPropagation();
         const tr = btn.closest('tr');
         const id = tr.dataset.id;
         const m = Store.byId(id);
         const action = btn.dataset.action;
-        if (action === 'edit')          { Drawer.open(id); setTimeout(() => Drawer.startEdit(), 50); }
-        else if (action === 'reset')    { await this.resetPassword(m); }
-        else if (action === 'delete')   { this.deleteMember(m); }
+        if (action === 'reset')                { await this.resetPassword(m); }
+        else if (action === 'delete')          { this.deleteMember(m); }
         else if (action === 'copy-email') {
           try { await navigator.clipboard.writeText(btn.dataset.email); toast('Email copied.'); }
           catch { toast('Copy failed.', 'warn'); }
         }
-      });
+        else if (action === 'toggle-event-exclude') {
+          // v4.38: inline toggle for the events-list visibility flag. Same
+          // semantics as the checkbox inside the member drawer — checked
+          // means "hide from the + Add member picker on events".
+          m.excludeFromEventsList = !!btn.checked;
+          Store.save();
+        }
+      };
+      // Checkboxes fire 'change', buttons fire 'click'.
+      btn.addEventListener(btn.tagName === 'INPUT' ? 'change' : 'click', handler);
     });
     $('#admin-rows').querySelectorAll('tr').forEach(tr => {
       tr.addEventListener('click', (e) => {
+        // v4.38: bail on buttons (Reset PW / Delete), the inline events
+        // toggle (input + label wrapper), and the email-copy chip so a
+        // click inside any of those doesn't accidentally open the drawer.
         if (e.target.closest('button')) return;
+        if (e.target.closest('input')) return;
+        if (e.target.closest('label')) return;
         if (tr.dataset.id) Drawer.open(tr.dataset.id);
       });
     });
@@ -8388,9 +8405,54 @@ async function onSignedIn() {
   if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
     TreeFilters.refreshGroupOptions();
   }
+  // v4.38: backfill member_accounts.is_admin for any member whose in-app
+  // role is 'admin' but whose DB account flag is still false. The
+  // Members → Last Activity column reads from a SECURITY DEFINER RPC
+  // (member_last_seen) gated on the DB is_admin flag, so without this
+  // sync an admin-role member sees an empty column.
+  // Only runs when the *currently logged-in* user is already a DB admin
+  // (RLS gates the UPDATE on member_accounts to is_admin = true).
+  if (Backend.account?.is_admin) {
+    syncAdminFlagsFromState().catch(e => console.warn('admin-flag sync:', e.message || e));
+  }
   Backend.onRemoteChange = applyRemoteState;
   Backend.subscribeArchive();
   enterApp();
+}
+
+// Walk the in-memory state looking for members with role='admin' whose
+// linked Supabase account still has is_admin = false, then push an update
+// to flip the flag. Safe to re-run — UPDATE is idempotent. Errors per-row
+// are logged and skipped so one bad row doesn't block the rest.
+async function syncAdminFlagsFromState() {
+  if (!Backend.client) return;
+  const adminMemberIds = Store.membersList()
+    .filter(m => m.role === 'admin')
+    .map(m => m.id);
+  if (!adminMemberIds.length) return;
+  // Pull the current is_admin flag for each linked account in one query.
+  const { data, error } = await Backend.client
+    .from('member_accounts')
+    .select('user_id, member_id, is_admin')
+    .in('member_id', adminMemberIds);
+  if (error) { console.warn('syncAdminFlagsFromState read:', error.message); return; }
+  const needsPromotion = (data || []).filter(r => r.is_admin !== true);
+  if (!needsPromotion.length) return;
+  // One UPDATE per account. These are admin-only writes (RLS), and we
+  // already gated entry on Backend.account.is_admin so the policy passes.
+  for (const r of needsPromotion) {
+    const { error: upErr } = await Backend.client
+      .from('member_accounts')
+      .update({ is_admin: true })
+      .eq('user_id', r.user_id);
+    if (upErr) console.warn(`promote ${r.member_id}:`, upErr.message);
+  }
+  // Force the Members table to re-pull last-activity now that the
+  // promoted users may unlock the RPC for themselves on their next visit.
+  if (typeof AdminView !== 'undefined') {
+    AdminView.lastSeenById = null;
+    if (Views?.current === 'admin') AdminView.render();
+  }
 }
 
 // -------------------- TREE TOOLBAR --------------------
@@ -9671,6 +9733,18 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.38',
+    date: '2026-05-15',
+    title: 'Login autofill fix + Members Event toggle + Friends address & photo crop',
+    changes: [
+      'Login: removed minlength="6" hint from the password field. Safari/iOS read minlength on a password input as a strong "this is a sign-up" signal and was offering "Use Suggested Password" on top of the real autofill. autocomplete="current-password" alone is the right signal for "fill from password manager."',
+      'Members table: Edit column removed — clicking the row already opens the editor. Added a new "Event" column with an inline checkbox that toggles the "Do not show in events list" flag without opening the profile.',
+      'Members → Last activity: app-side admin role is now auto-synced with the DB-side member_accounts.is_admin flag. The Last Activity column reads from a SECURITY DEFINER RPC gated on the DB flag, so promoting someone to admin in the UI now also gives them visibility into the column. Runs on every sign-in (bootstrap admin only) so existing admin-role members get backfilled automatically.',
+      'Friends → Address column: street prints on the first line, "City, ST 90210" on the second so the address stops getting mashed into a single squished cell.',
+      'Friends modal: photos for the primary friend, spouse, and every kid now route through the same square crop dialog that family members use (480px output, dedupes the visual language across the app).',
+    ],
+  },
   {
     version: '4.37',
     date: '2026-05-14',
@@ -11607,6 +11681,18 @@ const VaultView = {
 };
 
 // Read an image File, draw it onto a canvas downscaled to `maxDim` (longest
+// v4.38: read a File into a data URL. Tiny shim around FileReader so callers
+// (CropModal handoff in particular) don't need to spell out the Promise
+// wrapper themselves. Resolves with the data URL; rejects on read error.
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error('Could not read file'));
+    r.onload  = () => resolve(r.result);
+    r.readAsDataURL(file);
+  });
+}
+
 // edge), and return a JPEG data URL. Used by the vault to store insurance
 // card photos inline in the archive blob without bloating it with 5MB
 // originals.
@@ -12128,13 +12214,18 @@ const FriendsTabView = {
            <svg viewBox="0 0 16 16" width="14" height="14"><path d="M5 4l5 4-5 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
          </button>`
       : '';
+    // v4.38: address now renders on two lines — street on the first, then
+    // "City, ST 90210" on the second. Use the raw split-field address so we
+    // don't have to round-trip through a single-line string just to split it
+    // again. The full postal string is still used for the copy-to-clipboard
+    // payload so admins can paste a complete address into mail/labels apps.
     const fullAddress = formatPostalAddress(f).replace(/\n/g, ', ');
     const primaryRow = `
       <tr data-friend-row="${f.id}" class="friend-row ${hasRoster ? 'has-roster' : ''}">
         <td class="friend-expand-cell">${toggle}</td>
         <td>${nameCellHTML(f, 'primary')}</td>
         <td>${emailCellHTML(f.email, { copy: true })}</td>
-        <td>${addressCellHTML(fullAddress, { copy: true })}</td>
+        <td>${addressCellHTML({ street: f.address, city: f.city, state: f.state, zip: f.zip, copy: fullAddress })}</td>
         <td style="white-space:nowrap;">${escape(f.phone || '—')}</td>
         <td style="white-space:nowrap;">${f.birthday ? formatDate(f.birthday) : '—'}</td>
         <td>${escape(f.group || '—')}</td>
@@ -12271,13 +12362,36 @@ function emailCellHTML(email, opts = {}) {
   return `<span class="admin-email-cell"><code>${escape(email)}</code><button class="admin-email-copy" type="button" data-action="copy-email" data-email="${escape(email)}" title="Copy email"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
 }
 
-// One-line address cell with optional copy-to-clipboard button.
-function addressCellHTML(address, opts = {}) {
-  if (!address) return '<span class="muted">—</span>';
-  if (opts.copy) {
-    return `<span class="admin-email-cell"><span title="${escape(address)}">${escape(address)}</span><button class="admin-email-copy" type="button" data-copy="${escape(address)}" data-copy-label="Address copied" title="Copy address"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
+// v4.38: address cell can now render the split-field shape on two lines
+// (street top / "City, ST Zip" below). Pass either a plain string (legacy
+// one-line caller) or an object { street, city, state, zip, copy }. The
+// `copy` payload is what lands on the clipboard if a copy button is rendered.
+function addressCellHTML(input, opts = {}) {
+  // Legacy: single string. Keep one-line rendering.
+  if (typeof input === 'string') {
+    const address = input;
+    if (!address) return '<span class="muted">—</span>';
+    if (opts.copy) {
+      return `<span class="admin-email-cell"><span title="${escape(address)}">${escape(address)}</span><button class="admin-email-copy" type="button" data-copy="${escape(address)}" data-copy-label="Address copied" title="Copy address"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span>`;
+    }
+    return escape(address);
   }
-  return escape(address);
+  // Object: split-field rendering — street on top, City/State/Zip below.
+  const street = (input.street || '').trim();
+  const city   = (input.city   || '').trim();
+  const state  = (input.state  || '').trim();
+  const zip    = (input.zip    || '').trim();
+  const cityLine = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  if (!street && !cityLine) return '<span class="muted">—</span>';
+  const copyText = input.copy || [street, cityLine].filter(Boolean).join(', ');
+  const lines = [
+    street    ? `<div>${escape(street)}</div>`   : '',
+    cityLine  ? `<div>${escape(cityLine)}</div>` : '',
+  ].join('');
+  return `<span class="admin-email-cell address-multiline" title="${escape(copyText)}">
+    <span class="address-lines">${lines}</span>
+    <button class="admin-email-copy" type="button" data-copy="${escape(copyText)}" data-copy-label="Address copied" title="Copy address"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+  </span>`;
 }
 
 function plan529CellHTML(url) {
@@ -12669,12 +12783,14 @@ const FriendModal = {
         const i = Number(input.dataset.kidPhotoInput);
         const file = e.target.files?.[0]; if (!file) return;
         try {
-          // Kid photos use the same downscale target as friend primaries
-          // (720px @ 0.84) so the archive doesn't bloat with full-res baby
-          // pics. See PhotoCompressor.TARGETS.friend.
+          // v4.38: route through the same square CropModal members use so
+          // every face on the card grid lines up identically. 480px output
+          // matches the canonical photo size in the rest of the app.
           this.captureKidsFromDOM();
-          const data = await downscaleImageFile(file, 720, 0.84);
-          this.kidsDraft[i].photo = data;
+          const dataUrl = await readFileAsDataURL(file);
+          const cropped = await CropModal.open(dataUrl, { size: 480 });
+          if (!cropped) return; // user cancelled the crop dialog
+          this.kidsDraft[i].photo = cropped;
           this.renderKidPhoto(i);
         } catch (err) {
           toast('Could not load image: ' + err.message, 'warn');
@@ -12717,7 +12833,10 @@ const FriendModal = {
   async onSpousePhotoUpload(e) {
     const file = e.target.files?.[0]; if (!file) return;
     try {
-      this.spouseTempPhoto = await downscaleImageFile(file, 720, 0.84);
+      const dataUrl = await readFileAsDataURL(file);
+      const cropped = await CropModal.open(dataUrl, { size: 480 });
+      if (!cropped) return; // cancelled
+      this.spouseTempPhoto = cropped;
       this._clearSpousePhoto = false;
       this.renderSpousePhoto();
     } catch (err) {
@@ -12795,7 +12914,10 @@ const FriendModal = {
   async onPhotoUpload(e) {
     const file = e.target.files?.[0]; if (!file) return;
     try {
-      this.tempPhoto = await downscaleImageFile(file, 800, 0.88);
+      const dataUrl = await readFileAsDataURL(file);
+      const cropped = await CropModal.open(dataUrl, { size: 480 });
+      if (!cropped) return; // cancelled
+      this.tempPhoto = cropped;
       this.renderPhoto({ gender: $('#friend-form').gender.value });
     } catch (err) {
       toast('Could not load image: ' + err.message, 'warn');
