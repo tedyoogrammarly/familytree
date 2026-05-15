@@ -4888,8 +4888,10 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 /* Recipe detail layout */
 .recipe-detail { padding: 18px 18px 26px; }
 .recipe-detail-photo {
+  /* v4.46: shrunk from 480px → 320px max so the photo doesn't dominate
+     the detail page. Click-to-lightbox still works for full-size view. */
   width: 100%;
-  max-width: 480px;
+  max-width: 320px;
   aspect-ratio: 4 / 3;
   background-color: var(--paper-soft, #f1ece1);
   background-size: cover;
@@ -5058,10 +5060,13 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   border-radius: 99px;
 }
 .memory-photos {
+  /* v4.46: bumped min from 110 → 180 so each photo gets more presence
+     in the feed. Bigger tiles also feel less Instagram-grid, more
+     scrapbook. */
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
 }
 
 /* Composer modal — tag chips inline above the picker. */
@@ -5097,5 +5102,205 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 
 @media (max-width: 760px) {
   .memories-feed { padding: 10px 12px 18px; }
-  .memory-photos { grid-template-columns: repeat(3, 1fr); }
+  .memory-photos { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ============================================================
+   v4.46  RECIPES — CATEGORY FILTER TABS
+   Horizontal pill row under the panel head. Scrolls horizontally on
+   mobile if there are many categories.
+   ============================================================ */
+.recipes-category-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 18px 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.recipes-category-tabs::-webkit-scrollbar { display: none; }
+.recipes-cat-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-700);
+  cursor: pointer;
+  transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+  white-space: nowrap;
+}
+.recipes-cat-tab:hover {
+  border-color: rgba(99, 102, 241, 0.32);
+  color: var(--brand-900);
+}
+.recipes-cat-tab.is-active {
+  background: var(--brand-900, #0044cc);
+  border-color: var(--brand-900, #0044cc);
+  color: #fff;
+}
+.recipes-cat-count {
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.08);
+  color: inherit;
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-variant-numeric: tabular-nums;
+}
+.recipes-cat-tab.is-active .recipes-cat-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ============================================================
+   v4.46  MEMORIES — REACTIONS + COMMENTS
+   Reaction quick-picks + rolled-up chips per post; threaded comment
+   list with author + relative timestamp.
+   ============================================================ */
+
+.memory-reactions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ink-200);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.memory-reaction-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.memory-reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--paper-soft, #f1ece1);
+  border: 1px solid transparent;
+  border-radius: 99px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color .12s, border-color .12s;
+  font-variant-numeric: tabular-nums;
+}
+.memory-reaction-chip:hover { background: #eee; }
+.memory-reaction-chip.is-mine {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.45);
+  color: var(--brand-900);
+}
+.memory-reaction-chip.is-readonly { cursor: default; opacity: 0.85; }
+.memory-reaction-chip[disabled] { cursor: not-allowed; }
+.memory-reaction-emoji { font-size: 14px; line-height: 1; }
+.memory-reaction-count { font-size: 12px; font-weight: 600; }
+
+.memory-react-picks {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid var(--ink-200);
+  border-radius: 99px;
+  background: #fff;
+}
+.memory-react-pick,
+.memory-react-more {
+  border: 0;
+  background: transparent;
+  padding: 3px 6px;
+  border-radius: 99px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color .1s ease-out, transform .1s ease-out;
+}
+.memory-react-pick:hover,
+.memory-react-more:hover {
+  background: var(--paper-soft, #f1ece1);
+  transform: scale(1.15);
+}
+.memory-react-pick.is-mine {
+  background: rgba(99, 102, 241, 0.12);
+}
+.memory-react-more {
+  font-size: 14px;
+  color: var(--ink-500);
+  padding: 4px 9px;
+}
+
+/* Comments */
+.memory-comments {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ink-200);
+}
+.memory-comment-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.memory-comment {
+  background: var(--paper-soft, #f1ece1);
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+.memory-comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.memory-comment-author { font-size: 13px; }
+.memory-comment-date { margin-left: auto; }
+.memory-comment-x {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--ink-500);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 50%;
+}
+.memory-comment-x:hover { background: #e44; color: #fff; }
+.memory-comment-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-900);
+  white-space: pre-wrap;
+}
+.memory-comment-add {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.memory-comment-add textarea {
+  flex: 1;
+  min-height: 56px;
+  resize: vertical;
+  padding: 8px 12px;
+  border: 1px solid var(--ink-200);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  background: #fff;
+}
+.memory-comment-add textarea:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+@media (max-width: 760px) {
+  .recipes-category-tabs { padding: 4px 12px 12px; flex-wrap: nowrap; overflow-x: auto; }
+  .memory-react-picks { flex-wrap: wrap; }
+  .memory-comment-add { flex-direction: column; align-items: stretch; }
 }

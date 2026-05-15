@@ -517,6 +517,10 @@
               <input id="recipes-search" class="input" type="search" placeholder="Search by name, category, or person…" autocomplete="off" />
             </div>
           </header>
+          <!-- v4.46: category filter tab strip. Auto-built from the unique
+               categories present on saved recipes; "All" is always first
+               and is the default selection. -->
+          <div id="recipes-category-tabs" class="recipes-category-tabs" role="tablist"></div>
           <div id="recipes-grid" class="recipes-grid"></div>
           <div id="recipes-empty" class="tree-empty" hidden>
             <div class="tree-empty-card">
