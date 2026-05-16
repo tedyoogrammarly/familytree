@@ -4550,8 +4550,11 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .mykids-entry-photos {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
+  /* v4.55: bumped from 110px → 220px so the photos read more like a
+     scrapbook than a thumb strip. Mobile breakpoint at the bottom of
+     this section keeps three-up on narrow screens. */
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
 }
 .mykids-entry-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
@@ -4611,7 +4614,9 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .mykids-tabs { margin: 0 12px; }
   .mykids-tab-actions { padding: 8px 12px 0; }
   .mykids-entries { padding: 10px 12px 18px; }
-  .mykids-entry-photos { grid-template-columns: repeat(3, 1fr); }
+  /* On phones we keep two-up so each photo still reads big, but auto-fill
+     still expands when there's only one photo. */
+  .mykids-entry-photos { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ============================================================
