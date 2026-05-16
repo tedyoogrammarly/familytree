@@ -1352,9 +1352,11 @@ const Auth = {
   isFamily() {
     return !!this.current && this.current !== 'admin-bootstrap' && this.current.role === 'family';
   },
-  // True if the viewer should see ages on tree cards (sensitive info that
-  // we don't expose to plain Users).
-  canViewAge() { return this.isAdmin() || this.isFamily(); },
+  // v4.54: ages on tree cards are visible to every authenticated viewer
+  // — User role included. The 529 chip on the card still uses a
+  // tighter admin-or-family check (inlined at its render site) since
+  // that's financial info, not a birthday.
+  canViewAge() { return !!this.current; },
   // The Drawer's bottom-action buttons (Edit, Link, Mark divorced, Reset
   // password, Remove) are all hidden from Family. Even on their own card —
   // the rule is "view only, no editing" for this role.
@@ -2767,12 +2769,14 @@ function nodeHTML(m) {
   // 529 plan chip on the tree card. Surfaced to Admin and Family so they
   // can jump straight to the plan portal without opening the drawer. URL is
   // escaped + opens in a new tab; the chip's click stops bubbling so it
-  // doesn't double as a "open drawer" click. Same canViewAge() gate — the
-  // two roles that get the rest of the sensitive node detail.
+  // doesn't double as a "open drawer" click. Gate inlined (admin OR
+  // family) because canViewAge() now also covers User role for the age
+  // chip, but the 529 plan is financial info and should stay restricted.
   const plan529Href = m.plan529 && /^https?:\/\//i.test(m.plan529)
     ? m.plan529
     : (m.plan529 ? `https://${m.plan529}` : '');
-  const plan529HTML = (Auth.canViewAge() && plan529Href) ? `
+  const canSee529 = Auth.isAdmin() || Auth.isFamily();
+  const plan529HTML = (canSee529 && plan529Href) ? `
     <a class="node-529" href="${escape(plan529Href)}" target="_blank" rel="noopener" title="Open 529 plan in a new tab" data-stop-node-click>
       <span class="node-529-icon" aria-hidden="true">🎓</span>
       <span class="node-529-text">529 plan</span>
