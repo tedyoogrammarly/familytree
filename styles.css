@@ -5654,3 +5654,156 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .document-row { flex-direction: column; align-items: stretch; }
   .document-actions { justify-content: flex-start; }
 }
+
+/* ============================================================
+   v4.50  FAMILY NEWSLETTER (Wave 6)
+   Date-bounded digest compiler. Print-friendly layout with a
+   no-print toolbar; uses window.print() + the OS Save-as-PDF
+   destination so no extra dependencies are needed.
+   ============================================================ */
+
+.newsletter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 18px 18px;
+  align-items: flex-end;
+}
+.newsletter-controls .field { margin: 0; }
+.newsletter-controls .field input { min-width: 160px; }
+.newsletter-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+  justify-content: flex-end;
+}
+.newsletter-preview-panel { padding-bottom: 8px; }
+.newsletter-preview {
+  padding: 26px 32px 32px;
+  background: #fff;
+  font-family: var(--font-display, Georgia), serif;
+  color: var(--ink-900);
+  line-height: 1.55;
+}
+.newsletter-head {
+  border-bottom: 2px solid var(--ink-900);
+  padding-bottom: 14px;
+  margin-bottom: 22px;
+}
+.newsletter-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+.newsletter-range { margin: 0; font-size: 14px; }
+
+.newsletter-section {
+  margin-bottom: 22px;
+  page-break-inside: avoid;
+}
+.newsletter-section h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+  margin: 0 0 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--ink-200);
+}
+.newsletter-upcoming-list,
+.newsletter-list-plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+.newsletter-upcoming-list li,
+.newsletter-list-plain li {
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+.newsletter-upcoming-list li:last-child,
+.newsletter-list-plain li:last-child { border-bottom: 0; }
+
+.newsletter-card {
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border-left: 3px solid var(--ink-200);
+  page-break-inside: avoid;
+}
+.newsletter-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.newsletter-card-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+.newsletter-tag {
+  background: rgba(99, 102, 241, 0.10);
+  color: var(--brand-900);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 99px;
+}
+.newsletter-card-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.newsletter-body {
+  font-size: 14px;
+  line-height: 1.55;
+  margin-top: 4px;
+}
+.newsletter-body.rich ul, .newsletter-body.rich ol { margin: 4px 0 4px 22px; padding: 0; }
+.newsletter-body.rich a { color: var(--brand-900); text-decoration: underline; }
+.newsletter-photos {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px;
+}
+.newsletter-photo {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background-color: var(--paper-soft, #f1ece1);
+  background-size: cover;
+  background-position: center;
+  border-radius: 4px;
+}
+
+.newsletter-foot {
+  margin-top: 30px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ink-200);
+  text-align: center;
+}
+
+/* Print rules — hide the chrome and let the preview fill the page. */
+@media print {
+  body * { visibility: hidden; }
+  #view-newsletter, #view-newsletter * { visibility: visible; }
+  #view-newsletter {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    padding: 0;
+    margin: 0;
+  }
+  .no-print { display: none !important; }
+  .topbar, .nav, .toast { display: none !important; }
+  .newsletter-preview-panel { box-shadow: none; border: 0; border-radius: 0; }
+  .newsletter-preview { padding: 0; }
+  .newsletter-card { border-left-width: 2px; }
+  @page { margin: 0.6in; }
+}
+
+@media (max-width: 760px) {
+  .newsletter-controls { padding: 12px; flex-direction: column; align-items: stretch; }
+  .newsletter-controls .field input { min-width: 0; }
+  .newsletter-buttons { justify-content: stretch; }
+  .newsletter-buttons .btn { flex: 1; }
+  .newsletter-preview { padding: 16px 18px; }
+  .newsletter-photos { grid-template-columns: repeat(3, 1fr); }
+}
