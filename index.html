@@ -95,6 +95,7 @@
           <button class="nav-tab" data-view="memories" role="tab">Memories</button>
           <button class="nav-tab" data-view="timecapsule" role="tab">Time Capsule</button>
           <button class="nav-tab" data-view="stories" role="tab">Stories</button>
+          <button class="nav-tab" data-view="newsletter" data-admin-only role="tab">Newsletter</button>
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
@@ -961,6 +962,58 @@
         <div id="story-player-body" class="modal-body"></div>
       </div>
     </div>
+
+    <!-- ===== NEWSLETTER VIEW (v4.50 — Wave 6) =====
+         Admin-only newsletter compiler. Pulls from all the family-portal
+         data sources (memories, my-kids entries, recipes, stories, time
+         capsules, upcoming birthdays/anniversaries), composes a single
+         HTML document. Three actions: print (which uses the OS Save as
+         PDF dialog on most platforms), copy plain-text, and copy the
+         family email list. No outbound email sending — admin sends it
+         themselves the way they normally would. -->
+    <main id="view-newsletter" class="view" hidden>
+      <div class="container">
+        <div class="page-head no-print">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="newsletter"></span>Newsletter</h2>
+            <p>Compile a quarterly digest from everything that landed in the archive. Pick a date range, refresh, then print to PDF or copy as an email body.</p>
+          </div>
+        </div>
+
+        <section class="panel no-print">
+          <header class="panel-head">
+            <h3>What's in the digest</h3>
+          </header>
+          <form class="newsletter-controls" id="newsletter-controls">
+            <label class="field">
+              <span>From</span>
+              <input id="newsletter-from" type="date" />
+            </label>
+            <label class="field">
+              <span>To</span>
+              <input id="newsletter-to" type="date" />
+            </label>
+            <label class="field">
+              <span>Greeting</span>
+              <input id="newsletter-greeting" placeholder="e.g. The Yoos · Q2 2026" />
+            </label>
+            <div class="newsletter-buttons">
+              <button class="btn btn-primary btn-sm" type="button" id="btn-newsletter-refresh">Refresh preview</button>
+              <button class="btn btn-secondary btn-sm" type="button" id="btn-newsletter-print">🖨️ Print / Save as PDF</button>
+              <button class="btn btn-ghost btn-sm" type="button" id="btn-newsletter-copy-text">📋 Copy as email</button>
+              <button class="btn btn-ghost btn-sm" type="button" id="btn-newsletter-copy-emails">📧 Copy family emails</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel newsletter-preview-panel">
+          <header class="panel-head no-print">
+            <h3>Preview</h3>
+          </header>
+          <article id="newsletter-preview" class="newsletter-preview"></article>
+        </section>
+      </div>
+    </main>
 
     <!-- ===== MY KIDS PICKER MODAL (v4.42) =====
          Lets the admin pick exactly which family members appear on the

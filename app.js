@@ -3460,6 +3460,7 @@ const Views = {
     $('#view-memories').hidden     = name !== 'memories';
     $('#view-timecapsule').hidden  = name !== 'timecapsule';
     $('#view-stories').hidden      = name !== 'stories';
+    $('#view-newsletter').hidden   = name !== 'newsletter';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3492,6 +3493,7 @@ const Views = {
       if (name === 'memories')  MemoriesView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
+      if (name === 'newsletter') NewsletterView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9352,6 +9354,7 @@ async function init() {
   MemoriesView.init();
   TimeCapsuleView.init();
   StoriesView.init();
+  NewsletterView.init();
   PageEmojis.init();
   bindLogin();
   bindTreeToolbar();
@@ -10000,6 +10003,18 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.50',
+    date: '2026-05-15',
+    title: 'Family Newsletter (Wave 6 — final wave of the family-portal expansion)',
+    changes: [
+      'New "Newsletter" admin-only top-level nav tab. Compiles a date-bounded HTML digest from every other family-portal data source: upcoming birthdays + anniversaries (next 30 days from the "to" date), recent My Kids entries, recent Memories Wall posts, new recipes, new stories, and time capsules that opened in the range.',
+      'Date range defaults to the last 90 days through today. Admin can edit From/To/Greeting on the fly and click Refresh preview.',
+      'Three output paths: 🖨️ Print / Save as PDF (uses window.print() — modern OS print dialogs include "Save as PDF" as a destination so zero extra deps), 📋 Copy as email (plain-text version on the clipboard ready to paste into Gmail/Apple Mail), 📧 Copy family emails (every member + friend email comma-joined for the To: line in one click).',
+      'Print-only CSS hides the toolbar/nav/chrome and lets the preview fill the page. Photos pre-resolve their signed URLs before render so the printed PDF actually includes the images.',
+      'CPU/memory: pure read-side work. Zero new SQL or realtime channels. The compiler iterates the in-memory archive once and renders inline.',
+    ],
+  },
   {
     version: '4.49',
     date: '2026-05-15',
@@ -17130,6 +17145,474 @@ const DocumentModal = {
     const id = this.editingId;
     this.close();
     DocumentsView.deleteDocument(id);
+  },
+};
+
+// -------------------- NEWSLETTER (v4.50 — Wave 6) --------------------
+// Admin-only. Compiles a date-bounded HTML digest from the rest of the
+// family-portal state (memories, my-kids entries, recipes, stories,
+// time capsules, upcoming birthdays + anniversaries). Three output paths:
+//   1. Print → uses the browser's print dialog, which on every modern
+//      OS includes a "Save as PDF" option. Zero extra dependencies.
+//   2. Copy as email → plain-text version on the clipboard, ready to
+//      paste into Gmail / Apple Mail / Outlook.
+//   3. Copy family emails → grabs every family member's email so admin
+//      can paste them into the To: line in one go.
+//
+// CPU/memory: this is pure read-side work. No SQL, no realtime. Photos
+// pre-resolve their signed URLs once on render so the printed PDF
+// actually includes the images (signed URLs expire in 1 hour, so the
+// admin should print within that window — which is realistic).
+const NewsletterView = {
+  fromIso: '',     // inclusive
+  toIso:   '',     // inclusive
+  greeting: 'The family · digest',
+  signedUrlCache: new Map(),
+
+  init() {
+    on($('#btn-newsletter-refresh'),      'click', () => this.refresh());
+    on($('#btn-newsletter-print'),        'click', () => this.printNewsletter());
+    on($('#btn-newsletter-copy-text'),    'click', () => this.copyAsText());
+    on($('#btn-newsletter-copy-emails'),  'click', () => this.copyFamilyEmails());
+    // Live re-render on date / greeting edits (debounced via input event).
+    on($('#newsletter-from'),     'change', () => this.refresh());
+    on($('#newsletter-to'),       'change', () => this.refresh());
+    on($('#newsletter-greeting'), 'input',  (e) => { this.greeting = e.target.value || 'The family · digest'; });
+  },
+
+  // Pick reasonable defaults (last 90 days through today) the first time
+  // the view renders. After that, keep whatever the admin set.
+  ensureDefaults() {
+    if (!this.toIso) {
+      const today = new Date();
+      this.toIso = today.toISOString().slice(0, 10);
+    }
+    if (!this.fromIso) {
+      const start = new Date();
+      start.setDate(start.getDate() - 90);
+      this.fromIso = start.toISOString().slice(0, 10);
+    }
+    if ($('#newsletter-from')) $('#newsletter-from').value = this.fromIso;
+    if ($('#newsletter-to'))   $('#newsletter-to').value   = this.toIso;
+    if ($('#newsletter-greeting') && !$('#newsletter-greeting').value) {
+      $('#newsletter-greeting').value = this.greeting;
+    }
+  },
+
+  refresh() {
+    this.fromIso  = $('#newsletter-from').value  || this.fromIso;
+    this.toIso    = $('#newsletter-to').value    || this.toIso;
+    this.greeting = $('#newsletter-greeting').value || 'The family · digest';
+    this.render();
+  },
+
+  render() {
+    if (!Auth.isAdmin()) {
+      const host = $('#newsletter-preview');
+      if (host) host.innerHTML = '<p class="muted" style="padding:24px; text-align:center;">Admin-only.</p>';
+      return;
+    }
+    this.ensureDefaults();
+    const data = this.compile();
+    const host = $('#newsletter-preview');
+    if (!host) return;
+    host.innerHTML = this.renderHTML(data);
+    // Resolve image signed URLs on the next tick so the preview shows
+    // the actual photos. Each section that includes photos uses the
+    // same data-newsletter-photo placeholder pattern.
+    host.querySelectorAll('[data-newsletter-photo]').forEach(el => this.resolvePhotoSrc(el));
+  },
+
+  // Compile: pull all sources, filter by date range, return a structured
+  // object the renderer turns into HTML. Anything date-bearing in the
+  // archive contributes here.
+  compile() {
+    const from = this.fromIso;
+    const to   = this.toIso;
+    const inRange = (iso) => !!iso && iso >= from && iso <= to;
+
+    // --- Memory posts (date field) ---
+    const memories = (Store.state.memories || [])
+      .filter(m => inRange(m.date))
+      .sort((a, z) => (z.date || '').localeCompare(a.date || ''));
+
+    // --- My Kids entries (date field per entry) ---
+    // Flatten across kids + sections; tag each with the kid + section
+    // so the renderer can group sensibly.
+    const myKids = [];
+    const myKidsMap = Store.state.myKids || {};
+    for (const kidId of Object.keys(myKidsMap)) {
+      const kid = Store.byId(kidId);
+      if (!kid) continue;
+      for (const section of ['milestones','school','art','letters']) {
+        for (const e of (myKidsMap[kidId][section] || [])) {
+          if (inRange(e.date)) myKids.push({ kid, section, entry: e });
+        }
+      }
+    }
+    myKids.sort((a, z) => (z.entry.date || '').localeCompare(a.entry.date || ''));
+
+    // --- Recipes added in range (createdAt) ---
+    const recipes = (Store.state.recipes || [])
+      .filter(r => {
+        const iso = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : '';
+        return inRange(iso);
+      })
+      .sort((a, z) => (z.createdAt || 0) - (a.createdAt || 0));
+
+    // --- Stories added in range (createdAt) ---
+    const stories = (Store.state.stories || [])
+      .filter(s => {
+        const iso = s.createdAt ? new Date(s.createdAt).toISOString().slice(0, 10) : '';
+        return inRange(iso);
+      })
+      .sort((a, z) => (z.createdAt || 0) - (a.createdAt || 0));
+
+    // --- Time capsules that became unlocked OR were revealed in range. ---
+    const today = new Date();
+    const todayIso = today.toISOString().slice(0, 10);
+    const capsules = (Store.state.timeCapsules || [])
+      .filter(c => {
+        // "unlocked during the window" — capsule's unlockDate falls in
+        // range AND today is at or past unlock (meaning the recipient
+        // can read it now).
+        return inRange(c.unlockDate) && c.unlockDate <= todayIso;
+      })
+      .sort((a, z) => (z.unlockDate || '').localeCompare(a.unlockDate || ''));
+
+    // --- Upcoming birthdays + anniversaries (next 30 days from "to"). ---
+    // The "to" date anchors "now" so the digest stays consistent if the
+    // admin compiles for a past quarter.
+    const upcoming = this.upcomingFromAnchor(this.toIso, 30);
+
+    return {
+      from, to,
+      greeting: this.greeting,
+      memories,
+      myKids,
+      recipes,
+      stories,
+      capsules,
+      upcoming,
+    };
+  },
+
+  // Compute upcoming birthdays + anniversaries from an anchor date,
+  // looking N days forward. Mirrors the dashboard's upcoming logic but
+  // anchored on a specific day instead of "today".
+  upcomingFromAnchor(anchorIso, daysAhead) {
+    const anchor = new Date(anchorIso + 'T00:00:00');
+    if (isNaN(anchor.getTime())) return [];
+    const list = [];
+    const add = (m, kind, monthDay, baseIso) => {
+      // Compute next occurrence ≥ anchor and ≤ anchor+daysAhead.
+      const [mo, da] = monthDay.split('-').map(n => parseInt(n, 10));
+      if (!mo || !da) return;
+      for (let yearOffset = 0; yearOffset <= 1; yearOffset++) {
+        const candidate = new Date(anchor.getFullYear() + yearOffset, mo - 1, da);
+        if (candidate < anchor) continue;
+        const diff = (candidate - anchor) / 86400000;
+        if (diff > daysAhead) return;
+        list.push({
+          member: m, kind, baseIso,
+          dateIso: candidate.toISOString().slice(0, 10),
+          age: kind === 'birthday' ? (candidate.getFullYear() - new Date(baseIso).getFullYear()) : null,
+          years: kind === 'anniversary' ? (candidate.getFullYear() - new Date(baseIso).getFullYear()) : null,
+        });
+        return;
+      }
+    };
+    for (const m of Store.membersList()) {
+      if (m.birthday && !m.dateOfDeath) {
+        add(m, 'birthday', m.birthday.slice(5), m.birthday);
+      }
+      if (m.anniversary && !m.dateOfDeath) {
+        add(m, 'anniversary', m.anniversary.slice(5), m.anniversary);
+      }
+    }
+    list.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+    return list;
+  },
+
+  renderHTML(data) {
+    const dateRange = `${formatDate(data.from)} – ${formatDate(data.to)}`;
+    const sections = [];
+
+    if (data.upcoming.length) {
+      sections.push(`
+        <section class="newsletter-section">
+          <h3>Coming up in the next 30 days</h3>
+          <ul class="newsletter-upcoming-list">
+            ${data.upcoming.map(u => {
+              const name = displayName(u.member);
+              const stamp = formatDate(u.dateIso);
+              if (u.kind === 'birthday') {
+                const ageText = (u.age && u.age > 0) ? ` turns ${u.age}` : '';
+                return `<li>🎂 <strong>${escape(name)}${escape(ageText)}</strong> · ${escape(stamp)}</li>`;
+              }
+              const spouse = u.member.spouseId ? Store.byId(u.member.spouseId) : null;
+              const couple = spouse ? `${name} &amp; ${displayName(spouse)}` : name;
+              const yearsText = (u.years && u.years > 0) ? ` · ${u.years} year${u.years === 1 ? '' : 's'}` : '';
+              return `<li>❤️ <strong>${escape(couple)} anniversary</strong>${escape(yearsText)} · ${escape(stamp)}</li>`;
+            }).join('')}
+          </ul>
+        </section>`);
+    }
+
+    if (data.myKids.length) {
+      sections.push(`
+        <section class="newsletter-section">
+          <h3>From the kids</h3>
+          ${data.myKids.map(({ kid, section, entry }) => {
+            const sectionLabel = { milestones: 'Milestone', school: 'School', art: 'Artwork', letters: 'Letter' }[section] || section;
+            const body = entry.body ? `<div class="newsletter-body rich">${RichText.sanitize(entry.body)}</div>` : '';
+            const photos = (entry.photos || []).slice(0, 3).map(p =>
+              `<div class="newsletter-photo" data-newsletter-photo data-bucket="${escape(p.bucket || '')}" data-path="${escape(p.path || '')}"></div>`
+            ).join('');
+            return `
+              <article class="newsletter-card">
+                <header class="newsletter-card-head">
+                  <span class="newsletter-tag">${sectionLabel}</span>
+                  <strong>${escape(displayName(kid))}</strong>
+                  <span class="muted small">${escape(entry.date ? formatDate(entry.date) : '')}</span>
+                </header>
+                <div class="newsletter-card-title">${escape(entry.title || '')}</div>
+                ${body}
+                ${photos ? `<div class="newsletter-photos">${photos}</div>` : ''}
+              </article>`;
+          }).join('')}
+        </section>`);
+    }
+
+    if (data.memories.length) {
+      sections.push(`
+        <section class="newsletter-section">
+          <h3>On the memory wall</h3>
+          ${data.memories.map(m => {
+            const body = m.body
+              ? (/<[a-z][^>]*>/i.test(m.body)
+                  ? `<div class="newsletter-body rich">${RichText.sanitize(m.body)}</div>`
+                  : `<div class="newsletter-body">${escape(m.body).replace(/\n/g, '<br>')}</div>`)
+              : '';
+            const photos = (m.photos || []).slice(0, 4).map(p =>
+              `<div class="newsletter-photo" data-newsletter-photo data-bucket="${escape(p.bucket || '')}" data-path="${escape(p.path || '')}"></div>`
+            ).join('');
+            const tagsHTML = (m.tags || []).length
+              ? `<div class="newsletter-card-tags">${(m.tags || []).map(t => {
+                  const label = resolvePersonRefLabel(t);
+                  return label ? `<span class="newsletter-tag">${escape(label)}</span>` : '';
+                }).join('')}</div>`
+              : '';
+            return `
+              <article class="newsletter-card">
+                <header class="newsletter-card-head">
+                  <span class="muted small">${escape(m.date ? formatDate(m.date) : '')}</span>
+                </header>
+                ${body}
+                ${tagsHTML}
+                ${photos ? `<div class="newsletter-photos">${photos}</div>` : ''}
+              </article>`;
+          }).join('')}
+        </section>`);
+    }
+
+    if (data.recipes.length) {
+      sections.push(`
+        <section class="newsletter-section">
+          <h3>New in the cookbook</h3>
+          <ul class="newsletter-list-plain">
+            ${data.recipes.map(r => {
+              const from = r.fromText || RecipesView.formatFromRef(r.fromRef);
+              const cat = r.category ? ` · ${escape(r.category)}` : '';
+              const fromBit = from ? ` · from <em>${escape(from)}</em>` : '';
+              return `<li><strong>${escape(r.name)}</strong>${cat}${fromBit}</li>`;
+            }).join('')}
+          </ul>
+        </section>`);
+    }
+
+    if (data.stories.length) {
+      sections.push(`
+        <section class="newsletter-section">
+          <h3>New stories</h3>
+          <ul class="newsletter-list-plain">
+            ${data.stories.map(s => {
+              const kindEmoji = s.kind === 'video' ? '🎬' : '🎤';
+              const tags = (s.tags || []).map(t => resolvePersonRefLabel(t)).filter(Boolean).join(', ');
+              return `<li>${kindEmoji} <strong>${escape(s.title)}</strong>${tags ? ` · with ${escape(tags)}` : ''}</li>`;
+            }).join('')}
+          </ul>
+        </section>`);
+    }
+
+    if (data.capsules.length) {
+      sections.push(`
+        <section class="newsletter-section">
+          <h3>Capsules opened</h3>
+          <ul class="newsletter-list-plain">
+            ${data.capsules.map(c => {
+              const to = resolvePersonRefLabel(c.recipientRef) || 'someone';
+              const titleBit = c.title ? `: <em>${escape(c.title)}</em>` : '';
+              return `<li>📨 <strong>${escape(to)}</strong>${titleBit} · ${escape(formatDate(c.unlockDate))}</li>`;
+            }).join('')}
+          </ul>
+        </section>`);
+    }
+
+    if (!sections.length) {
+      sections.push('<section class="newsletter-section"><p class="muted">Nothing landed in this date range yet.</p></section>');
+    }
+
+    return `
+      <header class="newsletter-head">
+        <h1 class="newsletter-title">${escape(data.greeting)}</h1>
+        <p class="newsletter-range muted">${escape(dateRange)}</p>
+      </header>
+      ${sections.join('')}
+      <footer class="newsletter-foot muted small">
+        Compiled from the family archive · ${escape(formatDate(new Date().toISOString().slice(0, 10)))}
+      </footer>`;
+  },
+
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket;
+    const path   = el.dataset.path;
+    if (!bucket || !path) return;
+    const key = `${bucket}|${path}`;
+    const now = Date.now();
+    const cached = this.signedUrlCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      el.style.backgroundImage = `url('${cached.url}')`;
+      return;
+    }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${url}')`;
+  },
+
+  // Trigger the browser's print dialog. Modern OS print dialogs include
+  // "Save as PDF" as a destination option, so admins get a PDF without
+  // an extra library. The view's `no-print` class hides controls in the
+  // printed output (see styles.css print media query).
+  printNewsletter() {
+    // Refresh first so any unsaved date / greeting edits land in the
+    // preview before the print dialog opens.
+    this.refresh();
+    // Defer slightly so the DOM update lands before window.print fires.
+    setTimeout(() => window.print(), 60);
+  },
+
+  // Plain-text version for "Copy as email." Photos and rich markup are
+  // omitted; only the words. Each section becomes a labeled block.
+  async copyAsText() {
+    const data = this.compile();
+    const stripHtml = (html) => (html || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<li[^>]*>/gi, '  • ')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .trim();
+    const lines = [];
+    lines.push(data.greeting);
+    lines.push(`${formatDate(data.from)} – ${formatDate(data.to)}`);
+    lines.push('');
+    if (data.upcoming.length) {
+      lines.push('COMING UP — NEXT 30 DAYS');
+      data.upcoming.forEach(u => {
+        const name = displayName(u.member);
+        if (u.kind === 'birthday') {
+          const ageText = (u.age && u.age > 0) ? ` turns ${u.age}` : '';
+          lines.push(`  • ${name}${ageText} — ${formatDate(u.dateIso)}`);
+        } else {
+          const spouse = u.member.spouseId ? Store.byId(u.member.spouseId) : null;
+          const couple = spouse ? `${name} & ${displayName(spouse)}` : name;
+          const years = (u.years && u.years > 0) ? ` (${u.years} years)` : '';
+          lines.push(`  • ${couple} anniversary${years} — ${formatDate(u.dateIso)}`);
+        }
+      });
+      lines.push('');
+    }
+    if (data.myKids.length) {
+      lines.push('FROM THE KIDS');
+      data.myKids.forEach(({ kid, section, entry }) => {
+        const label = { milestones: 'Milestone', school: 'School', art: 'Artwork', letters: 'Letter' }[section] || section;
+        lines.push(`  • [${label}] ${displayName(kid)} · ${formatDate(entry.date)} — ${entry.title || ''}`);
+        const body = stripHtml(entry.body);
+        if (body) lines.push(body.split('\n').map(l => '      ' + l).join('\n'));
+      });
+      lines.push('');
+    }
+    if (data.memories.length) {
+      lines.push('ON THE MEMORY WALL');
+      data.memories.forEach(m => {
+        lines.push(`  • ${formatDate(m.date)}`);
+        const body = stripHtml(m.body);
+        if (body) lines.push(body.split('\n').map(l => '      ' + l).join('\n'));
+      });
+      lines.push('');
+    }
+    if (data.recipes.length) {
+      lines.push('NEW IN THE COOKBOOK');
+      data.recipes.forEach(r => {
+        const from = r.fromText || RecipesView.formatFromRef(r.fromRef);
+        const cat = r.category ? ` · ${r.category}` : '';
+        const fromBit = from ? ` · from ${from}` : '';
+        lines.push(`  • ${r.name}${cat}${fromBit}`);
+      });
+      lines.push('');
+    }
+    if (data.stories.length) {
+      lines.push('NEW STORIES');
+      data.stories.forEach(s => {
+        const tags = (s.tags || []).map(t => resolvePersonRefLabel(t)).filter(Boolean).join(', ');
+        lines.push(`  • ${s.kind === 'video' ? '[video]' : '[audio]'} ${s.title}${tags ? ` · with ${tags}` : ''}`);
+      });
+      lines.push('');
+    }
+    if (data.capsules.length) {
+      lines.push('CAPSULES OPENED');
+      data.capsules.forEach(c => {
+        const to = resolvePersonRefLabel(c.recipientRef) || 'someone';
+        lines.push(`  • To ${to}${c.title ? `: ${c.title}` : ''} · ${formatDate(c.unlockDate)}`);
+      });
+      lines.push('');
+    }
+    lines.push(`Compiled from the family archive · ${formatDate(new Date().toISOString().slice(0, 10))}`);
+    const text = lines.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Newsletter copied — paste into your email.');
+    } catch {
+      toast('Copy failed.', 'warn');
+    }
+  },
+
+  // Pull every family member email + every friend household primary +
+  // spouse emails — anyone reachable. Skip blanks. Comma-separated for
+  // direct paste into an email To: field.
+  async copyFamilyEmails() {
+    const emails = new Set();
+    for (const m of Store.membersList()) {
+      const e = (m.email || '').trim();
+      if (e) emails.add(e);
+    }
+    for (const f of Object.values(Store.state.friends || {})) {
+      if (f.email) emails.add(f.email.trim());
+      if (f.spouse?.email) emails.add(f.spouse.email.trim());
+    }
+    const list = [...emails].sort();
+    if (!list.length) { toast('No emails on file yet.', 'warn'); return; }
+    try {
+      await navigator.clipboard.writeText(list.join(', '));
+      toast(`Copied ${list.length} email${list.length === 1 ? '' : 's'}.`);
+    } catch {
+      toast('Copy failed.', 'warn');
+    }
   },
 };
 
