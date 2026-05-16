@@ -122,52 +122,92 @@
     </header>
 
     <!-- ===== DASHBOARD VIEW (admin only) ===== -->
-    <!-- ===== DASHBOARD VIEW (v4.51) =====
-         The Dashboard now IS the family newsletter: a date-bounded
-         digest of memories, kids highlights, recipes, time capsules, and
-         upcoming birthdays/anniversaries. Top toolbar controls the date
-         range and exposes Print/Save-as-PDF and Copy actions; the body
-         is a fully-rendered preview that doubles as the printable
-         output. Replaces v4.50's standalone Newsletter page. -->
+    <!-- ===== DASHBOARD VIEW (v4.53) =====
+         Hybrid layout: the original day-to-day panels (clock + weather,
+         upcoming-60-days with filter chips, monthly gift totals, gift
+         tracker, grocery list) on top, followed by the live family
+         summary (memories, kids highlights, recipes, upcoming dates)
+         compiled from the last 90 days. The summary has no date
+         controls or print/copy actions — those moved out per user
+         request; the digest just renders. -->
     <main id="view-dashboard" class="view view-dashboard" hidden>
       <div class="container">
-        <div class="dash-hero no-print">
+        <div class="dash-hero">
           <div class="dash-hero-text">
             <p class="dash-eyebrow" id="dash-greeting">Good morning</p>
-            <h2><span class="page-emoji" data-page-emoji="dashboard"></span><span id="dash-title">Family newsletter</span></h2>
-            <p class="muted small" style="margin-top:4px;">Everything the family has been up to lately — pick a window, refresh, then print to PDF or copy as an email body.</p>
+            <h2><span class="page-emoji" data-page-emoji="dashboard"></span><span id="dash-title">Today at a glance</span></h2>
+          </div>
+          <div class="dash-clock" id="dash-clock">
+            <div class="dash-time" id="dash-time">—</div>
+            <div class="dash-date" id="dash-date">Las Vegas, NV</div>
+            <div class="dash-forecast" id="dash-forecast" aria-label="5-day forecast">
+              <div class="dash-forecast-loading muted small">loading forecast…</div>
+            </div>
           </div>
         </div>
 
-        <section class="panel no-print">
-          <header class="panel-head">
-            <h3>What's in this digest</h3>
-          </header>
-          <form class="newsletter-controls" id="newsletter-controls">
-            <label class="field">
-              <span>From</span>
-              <input id="newsletter-from" type="date" />
-            </label>
-            <label class="field">
-              <span>To</span>
-              <input id="newsletter-to" type="date" />
-            </label>
-            <label class="field">
-              <span>Greeting</span>
-              <input id="newsletter-greeting" placeholder="e.g. The Yoos · Q2 2026" />
-            </label>
-            <div class="newsletter-buttons">
-              <button class="btn btn-primary btn-sm" type="button" id="btn-newsletter-refresh">Refresh preview</button>
-              <button class="btn btn-secondary btn-sm" type="button" id="btn-newsletter-print">🖨️ Print / Save as PDF</button>
-              <button class="btn btn-ghost btn-sm" type="button" id="btn-newsletter-copy-text">📋 Copy as email</button>
-              <button class="btn btn-ghost btn-sm" type="button" id="btn-newsletter-copy-emails">📧 Copy family emails</button>
+        <div class="dash-grid">
+          <section class="panel dash-panel dash-upcoming">
+            <header class="dash-panel-head">
+              <h3>Upcoming · next 60 days</h3>
+              <div class="dash-filter-chips" id="dash-upcoming-filters">
+                <button type="button" class="dash-filter-chip is-active" data-kind="all">All</button>
+                <button type="button" class="dash-filter-chip" data-kind="birthday">Birthdays</button>
+                <button type="button" class="dash-filter-chip" data-kind="anniversary">Anniversaries</button>
+                <button type="button" class="dash-filter-chip" data-kind="event">Events</button>
+                <button type="button" class="dash-filter-chip" data-kind="holiday">Holidays</button>
+                <button type="button" class="dash-filter-chip" data-kind="reminder">Reminders</button>
+              </div>
+            </header>
+            <div id="dash-upcoming-list" class="dash-upcoming-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-month-totals">
+            <header class="dash-panel-head">
+              <h3 id="dash-month-title">This month's gifts</h3>
+              <span class="muted small">Logged so far</span>
+            </header>
+            <div class="dash-money-grid">
+              <div class="dash-money-cell received">
+                <span class="dash-money-label">Received</span>
+                <span class="dash-money-amount" id="dash-month-received">$0.00</span>
+              </div>
+              <div class="dash-money-cell given">
+                <span class="dash-money-label">Given</span>
+                <span class="dash-money-amount" id="dash-month-given">$0.00</span>
+              </div>
+              <div class="dash-money-cell net">
+                <span class="dash-money-label">Net</span>
+                <span class="dash-money-amount" id="dash-month-net">$0.00</span>
+              </div>
             </div>
-          </form>
-        </section>
+          </section>
+
+          <section class="panel dash-panel dash-gifts">
+            <header class="dash-panel-head">
+              <h3>Gift tracker</h3>
+              <button class="btn btn-secondary btn-sm" id="dash-add-gift">+ Log a gift</button>
+            </header>
+            <p class="muted small" style="margin: 0 0 10px;">Mark each gift as purchased and sent so nothing slips through.</p>
+            <div id="dash-gifts-list" class="dash-gifts-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-grocery">
+            <header class="dash-panel-head">
+              <h3>Grocery list</h3>
+              <span class="muted small">Shared with family · realtime</span>
+            </header>
+            <form id="dash-grocery-form" class="dash-grocery-add">
+              <input id="dash-grocery-input" type="text" placeholder="Add an item…" maxlength="80" autocomplete="off" />
+              <button type="submit" class="btn btn-primary btn-sm">Add</button>
+            </form>
+            <ul id="dash-grocery-list" class="dash-grocery-list"></ul>
+          </section>
+        </div>
 
         <section class="panel newsletter-preview-panel">
-          <header class="panel-head no-print">
-            <h3>Preview</h3>
+          <header class="panel-head">
+            <h3>Family summary · last 90 days</h3>
           </header>
           <article id="newsletter-preview" class="newsletter-preview"></article>
         </section>
