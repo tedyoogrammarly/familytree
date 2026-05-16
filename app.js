@@ -3460,7 +3460,6 @@ const Views = {
     $('#view-memories').hidden     = name !== 'memories';
     $('#view-timecapsule').hidden  = name !== 'timecapsule';
     $('#view-stories').hidden      = name !== 'stories';
-    $('#view-newsletter').hidden   = name !== 'newsletter';
     $('#view-admin').hidden        = name !== 'admin';
     $('#view-vault').hidden        = name !== 'vault';
     $('#view-history').hidden      = name !== 'history';
@@ -3493,7 +3492,6 @@ const Views = {
       if (name === 'memories')  MemoriesView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
-      if (name === 'newsletter') NewsletterView.render();
       if (name === 'tree')      Canvas.renderAll();
     }, 0);
   },
@@ -9584,64 +9582,17 @@ const RemindersModal = {
   },
 };
 
-// -------------------- DASHBOARD VIEW (admin only) --------------------
-// Landing page for admins. Pulls together:
-//   • Las Vegas clock + current weather (Open-Meteo, no API key required)
-//   • Upcoming birthdays / anniversaries / events / reminders in the next 30 days
-//   • Quick gift tracker — checkbox-style purchased/sent flags on existing gifts
-//   • Shared grocery list (realtime via the same Supabase channel as everything else)
+// -------------------- DASHBOARD VIEW (v4.51) --------------------
+// The Dashboard's UI is the Family Newsletter: a date-bounded digest of
+// memories, kids highlights, recipes, time capsules, and upcoming
+// dates. DashboardView is a thin orchestrator that paints the greeting
+// and then delegates compilation + rendering + actions to NewsletterView.
 const DashboardView = {
-  clockTimer: null,
-  weatherFetchedAt: 0,
-  weatherCache: null,
-  upcomingFilter: 'all',     // 'all' | 'birthday' | 'anniversary' | 'event' | 'holiday' | 'reminder'
-
-  init() {
-    on($('#dash-grocery-form'), 'submit', (e) => { e.preventDefault(); this.addGroceryItem(); });
-    on($('#dash-add-gift'), 'click', () => {
-      Views.show('gifts');
-      // Open the gift modal directly so it feels like a one-click action.
-      setTimeout(() => GiftsView.openModal && GiftsView.openModal(null, {}), 60);
-    });
-    on($('#dash-upcoming-filters'), 'click', (e) => {
-      const b = e.target.closest('.dash-filter-chip'); if (!b) return;
-      this.upcomingFilter = b.dataset.kind;
-      $$('#dash-upcoming-filters .dash-filter-chip').forEach(c => c.classList.toggle('is-active', c === b));
-      this.renderUpcoming();
-    });
-  },
-
-  render() {
-    this.renderClock();
-    if (!this.clockTimer) {
-      this.clockTimer = setInterval(() => this.renderClock(), 1000 * 30); // 30s is plenty for HH:MM display
-    }
-    this.refreshWeather();
-    this.renderUpcoming();
-    this.renderMonthTotals();
-    this.renderGifts();
-    this.renderGrocery();
-    this.renderGreeting();
-  },
-
-  renderMonthTotals() {
-    const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const monthName = now.toLocaleString(undefined, { month: 'long', year: 'numeric' });
-    $('#dash-month-title').textContent = `${monthName} gifts`;
-    let received = 0, given = 0;
-    (Store.state.gifts || []).forEach(g => {
-      if (!g.date || !g.date.startsWith(ym)) return;
-      const amt = Number(g.amount) || 0;
-      if (g.direction === 'received') received += amt;
-      else if (g.direction === 'given') given += amt;
-    });
-    const fmt = (n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    $('#dash-month-received').textContent = fmt(received);
-    $('#dash-month-given').textContent    = fmt(given);
-    const net = received - given;
-    $('#dash-month-net').textContent      = (net >= 0 ? '+' : '−') + fmt(Math.abs(net));
-  },
+  // NewsletterView.init() (called separately during app boot) wires the
+  // date controls + print/copy buttons — those elements now live in the
+  // dashboard view but the binding is the same. DashboardView.init is a
+  // no-op kept as a hook for any future dashboard-specific wiring.
+  init() {},
 
   renderGreeting() {
     const h = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', hour12: false });
@@ -9653,348 +9604,15 @@ const DashboardView = {
       else greeting = 'Good evening';
     }
     const name = (Auth.current && Auth.current !== 'admin-bootstrap') ? Auth.current.firstName : '';
-    $('#dash-greeting').textContent = name ? `${greeting}, ${name}` : greeting;
+    const el = $('#dash-greeting');
+    if (el) el.textContent = name ? `${greeting}, ${name}` : greeting;
   },
 
-  renderClock() {
-    const tz = 'America/Los_Angeles';
-    const now = new Date();
-    $('#dash-time').textContent = now.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-    $('#dash-date').textContent = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }) + ' · Las Vegas, NV';
-  },
-
-  // Open-Meteo: free, no API key. 5-day daily forecast for Las Vegas.
-  // Refreshes at most every 30 minutes — the API returns daily highs/lows
-  // which don't move minute-to-minute.
-  async refreshWeather() {
-    const FRESH_MS = 30 * 60 * 1000;
-    if (this.weatherCache && Date.now() - this.weatherFetchedAt < FRESH_MS) {
-      this.paintWeather(this.weatherCache);
-      return;
-    }
-    try {
-      const url = 'https://api.open-meteo.com/v1/forecast?latitude=36.1716&longitude=-115.1391&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=5';
-      const r = await fetch(url);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const j = await r.json();
-      const d = j.daily || {};
-      const days = (d.time || []).map((iso, i) => ({
-        iso,
-        high: d.temperature_2m_max?.[i],
-        low:  d.temperature_2m_min?.[i],
-        code: d.weather_code?.[i],
-      }));
-      this.weatherCache = { days };
-      this.weatherFetchedAt = Date.now();
-      this.paintWeather(this.weatherCache);
-    } catch (e) {
-      const el = $('#dash-forecast');
-      if (el) el.innerHTML = '<div class="dash-forecast-loading muted small">forecast unavailable</div>';
-    }
-  },
-
-  paintWeather({ days }) {
-    const el = $('#dash-forecast'); if (!el || !days?.length) return;
-    // WMO weather codes → emoji + label. Compact mapping for common cases.
-    const map = {
-      0:  ['☀', 'Clear sky'],
-      1:  ['🌤', 'Mainly clear'],
-      2:  ['⛅', 'Partly cloudy'],
-      3:  ['☁', 'Overcast'],
-      45: ['🌫', 'Fog'],
-      48: ['🌫', 'Rime fog'],
-      51: ['🌦', 'Light drizzle'],
-      53: ['🌦', 'Drizzle'],
-      55: ['🌧', 'Heavy drizzle'],
-      61: ['🌧', 'Light rain'],
-      63: ['🌧', 'Rain'],
-      65: ['🌧', 'Heavy rain'],
-      71: ['🌨', 'Light snow'],
-      73: ['🌨', 'Snow'],
-      75: ['❄', 'Heavy snow'],
-      80: ['🌦', 'Rain showers'],
-      81: ['🌧', 'Rain showers'],
-      82: ['⛈', 'Violent showers'],
-      95: ['⛈', 'Thunderstorm'],
-      96: ['⛈', 'Thunder + hail'],
-      99: ['⛈', 'Heavy thunder'],
-    };
-    el.innerHTML = days.slice(0, 5).map((day, i) => {
-      const [icon, desc] = map[day.code] || ['🌡', ''];
-      // Parse the iso date in local time (noon avoids DST edge cases).
-      const date  = new Date(day.iso + 'T12:00:00');
-      const label = i === 0 ? 'Today'
-                  : date.toLocaleDateString('en-US', { weekday: 'short' });
-      const hi = day.high != null ? `${Math.round(day.high)}°` : '—';
-      const lo = day.low  != null ? `${Math.round(day.low)}°`  : '—';
-      return `<div class="dash-forecast-day" title="${escape(desc)}">
-        <div class="dash-forecast-label">${escape(label)}</div>
-        <div class="dash-forecast-icon">${icon}</div>
-        <div class="dash-forecast-temps">
-          <span class="dash-forecast-hi">${hi}</span>
-          <span class="dash-forecast-sep">/</span>
-          <span class="dash-forecast-lo">${lo}</span>
-        </div>
-      </div>`;
-    }).join('');
-  },
-
-  renderUpcoming() {
-    const host = $('#dash-upcoming-list'); if (!host) return;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const horizon = new Date(today); horizon.setDate(horizon.getDate() + 60);
-    const items = [];
-
-    // US holidays — same source the Calendar uses. Pull this year and next
-    // since the 60-day window can straddle a year boundary.
-    [...usHolidaysForYear(today.getFullYear()), ...usHolidaysForYear(today.getFullYear() + 1)].forEach(h => {
-      const d = new Date(h.date + 'T00:00:00');
-      if (d < today || d > horizon) return;
-      items.push({
-        date: d, sort: d.getTime(), kind: 'holiday',
-        title: h.name, sub: 'US holiday', icon: '🇺🇸',
-        onClick: () => Views.show('calendar'),
-      });
-    });
-
-    // Birthdays — annual recurrence on MM-DD
-    Store.membersList().forEach(m => {
-      if (!m.birthday || m.birthday.length < 10) return;
-      const md = m.birthday.slice(5, 10);
-      const occ = nextOccurrenceInWindow(today, horizon, md);
-      if (!occ) return;
-      const birthYear = parseInt(m.birthday.slice(0, 4), 10);
-      const turning = Number.isFinite(birthYear) ? (occ.getFullYear() - birthYear) : null;
-      items.push({
-        date: occ, sort: occ.getTime(), kind: 'birthday',
-        title: `${displayName(m)}'s birthday`,
-        sub: turning != null && turning >= 0 ? `Turns ${turning}` : '',
-        icon: '🎂',
-        onClick: () => Drawer.open(m.id),
-      });
-    });
-    // Anniversaries
-    const seenPair = new Set();
-    Store.membersList().forEach(m => {
-      if (!m.spouseId) return;
-      const sp = Store.byId(m.spouseId); if (!sp) return;
-      const key = [m.id, sp.id].sort().join('|');
-      if (seenPair.has(key)) return;
-      seenPair.add(key);
-      const aniso = m.anniversary || sp.anniversary;
-      if (!aniso || aniso.length < 10) return;
-      const md = aniso.slice(5, 10);
-      const occ = nextOccurrenceInWindow(today, horizon, md);
-      if (!occ) return;
-      const aYear = parseInt(aniso.slice(0, 4), 10);
-      const nth = Number.isFinite(aYear) ? (occ.getFullYear() - aYear) : null;
-      const a = m.id < sp.id ? m : sp, b = m.id < sp.id ? sp : m;
-      items.push({
-        date: occ, sort: occ.getTime(), kind: 'anniversary',
-        title: `${a.firstName} & ${b.firstName} anniversary`,
-        sub: nth != null && nth > 0 ? `${nth}${nthSuffix(nth)} year` : '',
-        icon: '💍',
-        onClick: () => Drawer.open(a.id),
-      });
-    });
-    // Events — also compute per-event gift totals (received - given) so the
-    // row can show "+$X" or "−$X" next to each event.
-    const fmtMoney = (n) => `$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const giftsByEvent = new Map();
-    (Store.state.gifts || []).forEach(g => {
-      if (!g.eventId) return;
-      const cur = giftsByEvent.get(g.eventId) || { received: 0, given: 0 };
-      const amt = Number(g.amount) || 0;
-      if (g.direction === 'received') cur.received += amt;
-      else if (g.direction === 'given') cur.given += amt;
-      giftsByEvent.set(g.eventId, cur);
-    });
-    (Store.state.events || []).forEach(ev => {
-      if (!ev.date) return;
-      const d = new Date(ev.date + 'T00:00:00');
-      if (d < today || d > horizon) return;
-      const tot = giftsByEvent.get(ev.id);
-      let extra = '';
-      if (tot && (tot.received || tot.given)) {
-        const net = tot.received - tot.given;
-        const sign = net >= 0 ? '+' : '−';
-        extra = ` · Gifts ${sign}${fmtMoney(net)} (in ${fmtMoney(tot.received)}, out ${fmtMoney(tot.given)})`;
-      }
-      items.push({
-        date: d, sort: d.getTime(), kind: 'event',
-        title: ev.name,
-        sub: (ev.location || '') + extra,
-        icon: ev.icon || '🎉',
-        onClick: () => { EventsView.selectedId = ev.id; Views.show('events'); },
-      });
-    });
-    // Reminders — expand each recurring rule into occurrences in the window.
-    // Reminders marked hideFromDashboard never enter the upcoming list (they
-    // still render on the Calendar). Keeps low-signal recurring chores like
-    // trash day out of the Dashboard hero feed.
-    (Store.state.reminders || []).forEach(r => {
-      if (r.hideFromDashboard) return;
-      const occs = expandReminder(r, today, horizon);
-      occs.forEach(d => items.push({
-        date: d, sort: d.getTime(), kind: 'reminder',
-        title: r.title, sub: r.recurrence === 'none' ? '' : `Repeats ${reminderRecurrenceLabel(r)}`, icon: r.icon || '🔔',
-        onClick: () => { Views.show('calendar'); setTimeout(() => RemindersModal.open(r.id), 60); },
-      }));
-    });
-
-    items.sort((a, b) => a.sort - b.sort);
-    const filtered = this.upcomingFilter === 'all'
-      ? items
-      : items.filter(it => it.kind === this.upcomingFilter);
-    if (!filtered.length) {
-      host.innerHTML = this.upcomingFilter === 'all'
-        ? '<p class="muted small" style="margin:0;">Nothing in the next 60 days. Quiet stretch.</p>'
-        : `<p class="muted small" style="margin:0;">No ${this.upcomingFilter}s in the next 60 days.</p>`;
-      return;
-    }
-    // Rows for items happening today get a light-yellow accent so they
-    // pop out of the upcoming list. Date comparison uses LA timezone-ish
-    // via toIsoDate so a midnight rollover in the user's locale doesn't
-    // flicker the highlight on/off.
-    const todayIso = toIsoDate(today);
-    host.innerHTML = filtered.map((it, i) => {
-      const isToday = toIsoDate(it.date) === todayIso;
-      return `
-      <button type="button" class="dash-up-row${isToday ? ' is-today' : ''}" data-i="${i}">
-        <div class="dash-up-date">
-          <span class="dash-up-day">${it.date.getDate()}</span>
-          <span class="dash-up-mon">${it.date.toLocaleString(undefined, { month: 'short' })}</span>
-        </div>
-        <div class="dash-up-icon">${escape(it.icon)}</div>
-        <div class="dash-up-main">
-          <div class="dash-up-title">${escape(it.title)}</div>
-          ${it.sub ? `<div class="dash-up-sub">${escape(it.sub)}</div>` : ''}
-        </div>
-        <div class="dash-up-kind dash-up-kind-${it.kind}">${it.kind}</div>
-      </button>
-    `;}).join('');
-    host.querySelectorAll('.dash-up-row').forEach((b, i) => on(b, 'click', () => filtered[i].onClick && filtered[i].onClick()));
-  },
-
-  renderGifts() {
-    const host = $('#dash-gifts-list'); if (!host) return;
-    // Tracker only shows gifts WE are giving and that aren't fully done.
-    // Gifts received (direction='received') are records of stuff people gave
-    // us — there's nothing to purchase or send, so they don't belong here.
-    const all = (Store.state.gifts || []).filter(g =>
-      g.direction === 'given' && !(g.purchased && g.sent)
-    );
-    all.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    const top = all.slice(0, 8);
-    if (!top.length) {
-      host.innerHTML = '<p class="muted small" style="margin:0;">No gifts to track. Click "Log a gift" and pick "Given" to start tracking purchase &amp; send status.</p>';
-      return;
-    }
-    const memberName = (id) => { const m = id ? Store.byId(id) : null; return m ? displayName(m) : ''; };
-    host.innerHTML = top.map(g => {
-      const to = memberName(g.toMemberId) || g.toText || '—';
-      const from = (g.fromMemberIds || []).map(memberName).filter(Boolean).join(', ') || g.fromText || '';
-      const item = g.item || g.occasion || '';
-      const amt = g.amount != null ? `$${Number(g.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
-      return `
-        <div class="dash-gift-row" data-id="${g.id}">
-          <div class="dash-gift-main">
-            <div class="dash-gift-title">${escape(item || 'Gift')} <span class="muted small">→ ${escape(to)}</span></div>
-            <div class="dash-gift-sub">${from ? `From ${escape(from)} · ` : ''}${g.date ? escape(formatDate(g.date)) : ''}${amt ? ' · ' + escape(amt) : ''}</div>
-          </div>
-          <div class="dash-gift-flags">
-            <label class="dash-gift-flag"><input type="checkbox" data-flag="purchased" ${g.purchased ? 'checked' : ''}/><span>Purchased</span></label>
-            <label class="dash-gift-flag"><input type="checkbox" data-flag="sent" ${g.sent ? 'checked' : ''}/><span>Sent</span></label>
-          </div>
-        </div>`;
-    }).join('');
-    host.querySelectorAll('.dash-gift-row').forEach(row => {
-      row.querySelectorAll('input[type="checkbox"]').forEach(cb => on(cb, 'change', () => {
-        const g = (Store.state.gifts || []).find(x => x.id === row.dataset.id); if (!g) return;
-        g[cb.dataset.flag] = cb.checked;
-        Store.save();
-        this.renderGifts();
-      }));
-    });
-  },
-
-  renderGrocery() {
-    const host = $('#dash-grocery-list'); if (!host) return;
-    const list = Store.state.grocery || [];
-    if (!list.length) {
-      host.innerHTML = '<li class="muted small" style="padding:8px 4px;">List is empty. Add something above.</li>';
-      return;
-    }
-    // Sort: open items first (newest at top), then done items.
-    const open = list.filter(i => !i.done).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const done = list.filter(i => i.done).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const renderItem = (i) => `
-      <li class="dash-grocery-item ${i.done ? 'is-done' : ''}" data-id="${i.id}">
-        <label class="dash-grocery-check">
-          <input type="checkbox" ${i.done ? 'checked' : ''}/>
-          <span>${escape(i.text)}</span>
-        </label>
-        <button type="button" class="dash-grocery-del" title="Remove" aria-label="Remove">×</button>
-      </li>`;
-    host.innerHTML = open.map(renderItem).join('') + done.map(renderItem).join('');
-    host.querySelectorAll('.dash-grocery-item').forEach(li => {
-      const cb = li.querySelector('input[type="checkbox"]');
-      const del = li.querySelector('.dash-grocery-del');
-      on(cb, 'change', () => {
-        const item = (Store.state.grocery || []).find(x => x.id === li.dataset.id); if (!item) return;
-        item.done = cb.checked;
-        Store.save();
-        this.renderGrocery();
-      });
-      on(del, 'click', () => {
-        Store.state.grocery = (Store.state.grocery || []).filter(x => x.id !== li.dataset.id);
-        Store.save();
-        this.renderGrocery();
-      });
-    });
-  },
-
-  addGroceryItem() {
-    const input = $('#dash-grocery-input');
-    const text = (input.value || '').trim();
-    if (!text) return;
-    Store.state.grocery ||= [];
-    Store.state.grocery.unshift({ id: uid('g'), text, done: false, ts: Date.now() });
-    Store.save();
-    input.value = '';
-    input.focus();
-    this.renderGrocery();
+  render() {
+    this.renderGreeting();
+    NewsletterView.render();
   },
 };
-
-// Find the next occurrence of an annual MM-DD between today and horizon.
-// Returns a Date (inclusive on both ends) or null.
-function nextOccurrenceInWindow(today, horizon, md) {
-  const [mm, dd] = md.split('-').map(n => parseInt(n, 10));
-  if (!mm || !dd) return null;
-  for (let y = today.getFullYear(); y <= horizon.getFullYear() + 1; y++) {
-    const candidate = new Date(y, mm - 1, dd);
-    candidate.setHours(0, 0, 0, 0);
-    if (candidate < today) continue;
-    if (candidate > horizon) return null;
-    return candidate;
-  }
-  return null;
-}
-
-// Expand a reminder into Date objects whose iso falls between [today, horizon].
-function expandReminder(r, today, horizon) {
-  const out = [];
-  if (!r || !r.startDate) return out;
-  const start = new Date(r.startDate + 'T00:00:00');
-  if (start > horizon) return out;
-  // Walk days in the window — caps at 31 iterations so this stays cheap.
-  for (let d = new Date(Math.max(today.getTime(), start.getTime())); d <= horizon; d.setDate(d.getDate() + 1)) {
-    const iso = toIsoDate(d);
-    if (reminderOccursOn(r, iso)) out.push(new Date(d));
-  }
-  return out;
-}
 
 // -------------------- HISTORY VIEW (admin only) --------------------
 // Hand-maintained changelog of meaningful shipped changes. Bumped each time a
@@ -10003,6 +9621,19 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.51',
+    date: '2026-05-15',
+    title: 'Dashboard + Newsletter merge · Time Capsule moves under My Kids · Stories hidden',
+    changes: [
+      'Dashboard now IS the family newsletter. The previous Dashboard panels (clock/weather, upcoming-60-days chips, monthly gift totals, gift tracker, grocery list) have been replaced by the live newsletter digest — same date controls, same 🖨️ Print / 📋 Copy as email / 📧 Copy family emails actions, same compile pipeline. The standalone "Newsletter" nav tab is gone; everything lives on Dashboard.',
+      'My Kids → new fifth tab per kid: "Time Capsule." Shows every capsule whose recipient is that kid, split into Opened / Sealed groupings (same envelope cards as the global Time Capsule page). The "+ Add capsule" button pre-selects the kid as recipient. Non-admins (the kid themselves) see only their unlocked capsules; admins see everything plus Reveal Early / Edit / Delete controls. The global Time Capsule page still exists for capsules addressed to non-kid people.',
+      'Stories nav tab is hidden. The Stories view, data, and module remain — flipping a single attribute brings it back when needed.',
+      'Nav reorder: Memories now sits between My Family and My Kids (previously after Recipes).',
+      'Dead code: removed two unused dashboard-only helpers (nextOccurrenceInWindow + expandReminder) and ~350 lines of dashboard panel rendering. CalendarView keeps its own reminder logic via reminderOccursOn (still used).',
+      'CPU/memory: zero new SQL or realtime channels. Per-kid Time Capsule tab is a read-side filter over the same state.timeCapsules array. Newsletter compile is the same in-memory walk.',
+    ],
+  },
   {
     version: '4.50',
     date: '2026-05-15',
@@ -13574,7 +13205,13 @@ const MyKidsView = {
 
   init() {
     on($('#btn-mykids-back'),   'click', () => this.openRoster());
-    on($('#btn-mykids-add'),    'click', () => MyKidsEntryModal.openAdd(this.selectedKidId, this.activeTab));
+    on($('#btn-mykids-add'),    'click', () => {
+      if (this.activeTab === 'capsule') {
+        TimeCapsuleModal.openAdd(`m:${this.selectedKidId}`);
+      } else {
+        MyKidsEntryModal.openAdd(this.selectedKidId, this.activeTab);
+      }
+    });
     on($('#btn-mykids-pick'),   'click', () => MyKidsPickerModal.open());
     on($('#btn-mykids-manage'), 'click', () => MyKidsPickerModal.open());
     $$('.mykids-tab').forEach(btn => {
@@ -13710,9 +13347,18 @@ const MyKidsView = {
     this.render();
   },
   setTab(tab) {
-    if (!['milestones','school','art','letters'].includes(tab)) return;
+    if (!['milestones','school','art','letters','capsule'].includes(tab)) return;
     this.activeTab = tab;
     this.render();
+  },
+
+  // v4.51: every capsule whose recipient is this kid. Uses the same
+  // `m:<memberId>` ref shape the rest of the app already produces. Admins
+  // see everything; the kid themselves still gets filtered by visibility
+  // (locked vs opened) inside the render path.
+  capsulesForKid(kidId) {
+    const myRef = `m:${kidId}`;
+    return (Store.state.timeCapsules || []).filter(c => c.recipientRef === myRef);
   },
 
   renderDetail() {
@@ -13731,6 +13377,14 @@ const MyKidsView = {
     $$('.mykids-tab').forEach(btn => btn.classList.toggle('is-active', btn.dataset.mykidsTab === this.activeTab));
     // Show/hide Add button based on viewer permissions. Only admins can add.
     $('#btn-mykids-add').hidden = !Auth.isAdmin();
+    // The capsule tab borrows TimeCapsuleView's rendering and uses
+    // its own "+ Add capsule" wording on the add button.
+    if (this.activeTab === 'capsule') {
+      $('#btn-mykids-add').textContent = '+ Add capsule';
+      this.renderCapsules();
+      return;
+    }
+    $('#btn-mykids-add').textContent = '+ Add entry';
 
     const k = Store.state.myKids[this.selectedKidId] || {};
     const entries = [...(k[this.activeTab] || [])].sort((a, z) => (z.date || '').localeCompare(a.date || ''));
@@ -13759,6 +13413,57 @@ const MyKidsView = {
           e.preventDefault();
           this.openLightboxFromTile(tile);
         }
+      });
+    });
+  },
+
+  // v4.51: render the Time Capsule tab for the currently-selected kid.
+  // Mirrors the structure of the global Time Capsule page (sealed +
+  // opened sections) but scoped to capsules where recipientRef == this
+  // kid. Reuses TimeCapsuleView's card HTML so the look stays identical
+  // and we don't fork the template. Non-admin viewers (the kid themselves)
+  // only see opened capsules — locked ones are hidden until their date.
+  renderCapsules() {
+    const host = $('#mykids-entries');
+    if (!host) return;
+    const isAdmin = Auth.isAdmin();
+    const all = this.capsulesForKid(this.selectedKidId);
+    // Non-admins see only capsules already revealed.
+    const visible = isAdmin ? all : all.filter(c => !TimeCapsuleView.isLocked(c) || c.revealedBy);
+    const sealed  = visible.filter(c => TimeCapsuleView.isLocked(c) && !c.revealedBy);
+    const opened  = visible.filter(c => !TimeCapsuleView.isLocked(c) || c.revealedBy);
+    sealed.sort((a, b) => (a.unlockDate || '').localeCompare(b.unlockDate || ''));
+    opened.sort((a, b) => (b.unlockDate || '').localeCompare(a.unlockDate || ''));
+
+    if (!visible.length) {
+      host.innerHTML = `<p class="muted" style="padding:24px; text-align:center;">No capsules for this kid yet. ${isAdmin ? 'Click <strong>+ Add capsule</strong> to write one.' : ''}</p>`;
+      return;
+    }
+
+    const openedHTML = opened.length
+      ? `<section class="mykids-capsule-section"><h4 class="mykids-capsule-heading">Opened — ready to read</h4><div class="tcp-list">${opened.map(c => TimeCapsuleView.openedCardHTML(c)).join('')}</div></section>`
+      : '';
+    const sealedHTML = sealed.length
+      ? `<section class="mykids-capsule-section"><h4 class="mykids-capsule-heading">Sealed — waiting</h4><div class="tcp-list">${sealed.map(c => TimeCapsuleView.sealedCardHTML(c)).join('')}</div></section>`
+      : '';
+    host.innerHTML = openedHTML + sealedHTML;
+
+    // Wire up the same action handlers TimeCapsuleView.render() does so
+    // edit/delete/reveal-early all work from inside the kid's tab.
+    host.querySelectorAll('[data-tcp-reveal]').forEach(btn => {
+      on(btn, 'click', () => { TimeCapsuleView.revealNow(btn.dataset.tcpReveal); this.render(); });
+    });
+    host.querySelectorAll('[data-tcp-edit]').forEach(btn => {
+      on(btn, 'click', () => TimeCapsuleModal.openEdit(btn.dataset.tcpEdit));
+    });
+    host.querySelectorAll('[data-tcp-delete]').forEach(btn => {
+      on(btn, 'click', async () => { await TimeCapsuleView.deleteCapsule(btn.dataset.tcpDelete); this.render(); });
+    });
+    host.querySelectorAll('[data-tcp-photo]').forEach(el => TimeCapsuleView.resolvePhotoSrc(el));
+    host.querySelectorAll('[data-tcp-photo]').forEach(tile => {
+      on(tile, 'click', () => {
+        const c = all.find(x => x.id === tile.dataset.tcpPhotoCap);
+        if (c?.photo) MyKidsLightbox.open([c.photo], 0);
       });
     });
   },
@@ -15959,13 +15664,13 @@ const TimeCapsuleModal = {
     sel.value = currentRef || '';
   },
 
-  openAdd() {
+  openAdd(presetRecipientRef = '') {
     if (!Auth.isAdmin()) return;
     this.editingId = null;
     this.tempPhoto = null;
     this._clearPhoto = false;
     this.reset();
-    this.populateRecipientPicker('');
+    this.populateRecipientPicker(presetRecipientRef || '');
     $('#tcp-modal-title').textContent = 'New capsule';
     $('#tcp-submit').textContent = 'Seal capsule';
     $('#tcp-delete').hidden = true;
@@ -15976,7 +15681,12 @@ const TimeCapsuleModal = {
     $('#tcp-form').unlockDate.value = d.toISOString().slice(0, 10);
     this.renderPhotoPreview(null);
     this.open();
-    setTimeout(() => $('#tcp-recipient').focus(), 50);
+    // When opened from a kid's Time Capsule tab, the recipient is already
+    // set — focus the title field instead so the writer can dive in.
+    setTimeout(() => {
+      const focusTarget = presetRecipientRef ? $('#tcp-form [name="title"]') : $('#tcp-recipient');
+      focusTarget?.focus();
+    }, 50);
   },
 
   openEdit(id) {
@@ -16111,6 +15821,10 @@ const TimeCapsuleModal = {
     toast(this.editingId ? 'Capsule saved.' : 'Capsule sealed.');
     this.close();
     TimeCapsuleView.render();
+    // v4.51: if the capsule modal was opened from a kid's Time Capsule
+    // tab, that view needs to refresh too so the new card shows up
+    // without a manual nav round-trip.
+    if (MyKidsView.activeTab === 'capsule' && MyKidsView.selectedKidId) MyKidsView.render();
   },
 
   currentAuthorName() {

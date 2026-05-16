@@ -5780,11 +5780,13 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   text-align: center;
 }
 
-/* Print rules — hide the chrome and let the preview fill the page. */
+/* Print rules — hide the chrome and let the preview fill the page.
+   v4.51: Newsletter now lives inside the Dashboard view, so print rules
+   target #view-dashboard instead of the deprecated #view-newsletter. */
 @media print {
   body * { visibility: hidden; }
-  #view-newsletter, #view-newsletter * { visibility: visible; }
-  #view-newsletter {
+  #view-dashboard, #view-dashboard * { visibility: visible; }
+  #view-dashboard {
     position: absolute;
     inset: 0;
     background: #fff;
@@ -5806,4 +5808,18 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .newsletter-buttons .btn { flex: 1; }
   .newsletter-preview { padding: 16px 18px; }
   .newsletter-photos { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* v4.51 — My Kids · Time Capsule tab. Groups capsules into Opened /
+   Sealed sections, like the global Time Capsule page but scoped to one
+   kid. Heading sits above each section's stack of tcp-cards. */
+.mykids-capsule-section { margin: 0 0 18px; }
+.mykids-capsule-section:last-child { margin-bottom: 0; }
+.mykids-capsule-heading {
+  margin: 12px 14px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
 }
