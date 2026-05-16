@@ -5562,3 +5562,95 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   .story-source-pills { flex-wrap: wrap; }
   .story-pill { min-width: 130px; }
 }
+
+/* ============================================================
+   v4.49  ADMIN: DOCUMENTS DRAWER + HEALTH & LEGACY LOCKER
+   Documents tab on the Vault page (admin-only, peer to Family/
+   Finance/Benefits/Home). Health subsection appended to each
+   member's card in the Family tab.
+   ============================================================ */
+
+/* Health subsection inside Family-tab member cards */
+.vault-health {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--ink-200);
+}
+.vault-health-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-500);
+  margin: 0 0 8px;
+}
+.vault-kv-health dd {
+  white-space: pre-wrap;
+}
+
+/* Documents toolbar */
+.documents-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px 0;
+  align-items: center;
+}
+.documents-toolbar .input { min-width: 160px; flex: 1; }
+.documents-toolbar select.input { max-width: 220px; }
+.documents-toolbar #documents-search { max-width: 260px; flex: 2; }
+
+/* Documents list */
+.documents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px 22px;
+}
+.document-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.document-icon {
+  font-size: 28px;
+  line-height: 1;
+  width: 36px;
+  flex-shrink: 0;
+  text-align: center;
+}
+.document-main { flex: 1; min-width: 0; }
+.document-title { font-weight: 600; font-size: 15px; }
+.document-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  align-items: center;
+}
+.document-cat {
+  background: rgba(99, 102, 241, 0.10);
+  color: var(--brand-900);
+  padding: 1px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.document-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .documents-toolbar { flex-direction: column; align-items: stretch; padding: 12px; }
+  .documents-toolbar .input,
+  .documents-toolbar select.input,
+  .documents-toolbar #documents-search { max-width: 100%; min-width: 0; }
+  .document-row { flex-direction: column; align-items: stretch; }
+  .document-actions { justify-content: flex-start; }
+}

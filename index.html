@@ -1234,17 +1234,64 @@
           </div>
         </div>
         <div class="vault-tabs" role="tablist">
-          <button class="vault-tab is-active" data-vault-section="family"   role="tab">Family</button>
-          <button class="vault-tab"           data-vault-section="finance"  role="tab">Finance</button>
-          <button class="vault-tab"           data-vault-section="benefits" role="tab">Benefits</button>
-          <button class="vault-tab"           data-vault-section="home"     role="tab">Home</button>
+          <button class="vault-tab is-active" data-vault-section="family"    role="tab">Family</button>
+          <button class="vault-tab"           data-vault-section="finance"   role="tab">Finance</button>
+          <button class="vault-tab"           data-vault-section="benefits"  role="tab">Benefits</button>
+          <button class="vault-tab"           data-vault-section="home"      role="tab">Home</button>
+          <button class="vault-tab"           data-vault-section="documents" role="tab">Documents</button>
         </div>
-        <section id="vault-family"   class="vault-panel"></section>
-        <section id="vault-finance"  class="vault-panel" hidden></section>
-        <section id="vault-benefits" class="vault-panel" hidden></section>
-        <section id="vault-home"     class="vault-panel" hidden></section>
+        <section id="vault-family"    class="vault-panel"></section>
+        <section id="vault-finance"   class="vault-panel" hidden></section>
+        <section id="vault-benefits"  class="vault-panel" hidden></section>
+        <section id="vault-home"      class="vault-panel" hidden></section>
+        <section id="vault-documents" class="vault-panel" hidden></section>
       </div>
     </main>
+
+    <!-- ===== DOCUMENT MODAL (v4.49) =====
+         Per-member or household-level document upload. Stored in the
+         private family-documents Storage bucket (admin-only end-to-end).
+         Photos render inline; PDFs/other types open in a new tab via a
+         signed URL. -->
+    <div id="document-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="document-modal-title">
+        <header class="modal-head">
+          <h3 id="document-modal-title">Add document</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="document-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" required placeholder="e.g. Olive's birth certificate" /></label>
+          <div class="grid-2">
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🏷️</span>Category <span class="muted small">(optional)</span></span>
+              <input name="category" placeholder="e.g. Birth certificate · Passport · Tax · Medical" list="document-categories" autocomplete="off" />
+              <datalist id="document-categories"></datalist>
+            </label>
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">👤</span>For</span>
+              <select name="memberId" id="document-member" class="input">
+                <option value="">— Household / shared —</option>
+              </select>
+            </label>
+          </div>
+          <div class="field">
+            <span>File *</span>
+            <input type="file" id="document-file-input" accept="application/pdf,image/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*" />
+            <p class="muted small" id="document-file-status" style="margin: 6px 0 0;"></p>
+          </div>
+          <label class="field"><span>Notes <span class="muted small">(optional)</span></span><textarea name="notes" rows="3" placeholder="Anything worth remembering about this document."></textarea></label>
+          <p class="form-error" id="document-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="document-submit">Save document</button>
+            <button class="btn btn-danger-ghost" type="button" id="document-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ===== Vault image lightbox (insurance card photos) ===== -->
     <div id="vault-lightbox" class="vault-lightbox" hidden role="dialog" aria-modal="true" aria-label="Image preview">
