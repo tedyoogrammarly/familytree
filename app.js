@@ -861,6 +861,12 @@ const Store = {
       // Optional tag list of people (m:/f:/s:/k:) so a story can be
       // surfaced on Family Tree cards later.
       stories: [],
+      // v4.49: Documents drawer. Admin-only CRUD; admin-only view (the
+      // family-documents Storage bucket is admin-only-end-to-end). Each
+      // document is tagged to one member (memberId) or left null for
+      // household-level docs (deed, marriage cert). Free-text category
+      // with auto-suggest from previously used values.
+      documents: [],
     };
   },
   // Sync load: pull a snapshot from localStorage so the UI can render
@@ -937,6 +943,16 @@ const Store = {
           instagram: '',
           googleDrive: '',
           birth: { place: '', hospital: '', weightLbs: '', weightOz: '', lengthIn: '', time: '', notes: '' },
+          // v4.49: Health & Legacy locker per member. Allergies +
+          // medications are free-text textareas; bloodType is a fixed
+          // set; emergency contact + primary doctor are tiny structs.
+          health: {
+            allergies: '',
+            medications: '',
+            bloodType: '',
+            emergencyContact: { name: '', phone: '', relationship: '' },
+            primaryDoctor: { name: '', practice: '', phone: '' },
+          },
         };
       } else {
         if (!Array.isArray(m.private.driversLicenses)) m.private.driversLicenses = [];
@@ -949,6 +965,30 @@ const Store = {
         ['place', 'hospital', 'time', 'notes'].forEach(k => {
           if (m.private.birth[k] === undefined) m.private.birth[k] = '';
         });
+        // v4.49: Health & Legacy locker backfill. Older archives won't
+        // have it; default each sub-shape so render code can assume
+        // the object exists.
+        if (typeof m.private.health !== 'object' || m.private.health === null) {
+          m.private.health = { allergies: '', medications: '', bloodType: '',
+            emergencyContact: { name: '', phone: '', relationship: '' },
+            primaryDoctor:    { name: '', practice: '', phone: '' } };
+        } else {
+          ['allergies','medications','bloodType'].forEach(k => {
+            if (m.private.health[k] === undefined) m.private.health[k] = '';
+          });
+          if (typeof m.private.health.emergencyContact !== 'object' || m.private.health.emergencyContact === null) {
+            m.private.health.emergencyContact = { name: '', phone: '', relationship: '' };
+          }
+          ['name','phone','relationship'].forEach(k => {
+            if (m.private.health.emergencyContact[k] === undefined) m.private.health.emergencyContact[k] = '';
+          });
+          if (typeof m.private.health.primaryDoctor !== 'object' || m.private.health.primaryDoctor === null) {
+            m.private.health.primaryDoctor = { name: '', practice: '', phone: '' };
+          }
+          ['name','practice','phone'].forEach(k => {
+            if (m.private.health.primaryDoctor[k] === undefined) m.private.health.primaryDoctor[k] = '';
+          });
+        }
         // v4.23: weight/length structure. Parse legacy free-text "7 lbs 4 oz"
         // / "20.5 in" strings into structured fields once; drop the originals.
         const b = m.private.birth;
@@ -1084,6 +1124,17 @@ const Store = {
        'fromRef','fromText'].forEach(k => { if (r[k] === undefined) r[k] = ''; });
       if (r.photo !== null && (typeof r.photo !== 'object' || Array.isArray(r.photo))) r.photo = null;
       if (r.createdAt === undefined) r.createdAt = Date.now();
+    }
+
+    // v4.49: documents drawer. Each entry has a fixed shape so render
+    // code can assume the fields exist.
+    if (!Array.isArray(this.state.documents)) this.state.documents = [];
+    for (const d of this.state.documents) {
+      if (!d.id) d.id = uid('doc');
+      ['title','category','notes'].forEach(k => { if (d[k] === undefined) d[k] = ''; });
+      if (d.memberId === undefined) d.memberId = '';
+      if (d.file !== null && (typeof d.file !== 'object' || Array.isArray(d.file))) d.file = null;
+      if (d.createdAt === undefined) d.createdAt = Date.now();
     }
 
     // v4.48: voice / video stories. Backfill so render code can assume
@@ -9950,6 +10001,19 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.49',
+    date: '2026-05-15',
+    title: 'Admin: Documents drawer + Health & Legacy locker (Wave 5)',
+    changes: [
+      'New "Documents" tab on the Admin/vault page (peer to Family / Finance / Benefits / Home). Admin-only end-to-end: family-documents Storage bucket from Wave 1 already has admin-only RLS on insert / select / delete.',
+      'Each document: title (required), free-text category with auto-suggest from previously used values, optional member tag (or household-level), optional notes, and a file (PDF / images / Word / text). 25 MB cap matches the Wave 1 bucket file_size_limit.',
+      'Documents list with member filter, category filter, and live search. Click "Open" — images render in the existing lightbox; PDFs and other formats open in a new tab via a signed URL.',
+      'New Health & Legacy locker subsection inside each member\'s Family-tab card. Fields: blood type (select), allergies, medications, emergency contact (name + phone + relationship), primary doctor (name + practice + phone). Renders in the read view + the existing edit form; save handler updated to preserve the new fields.',
+      'Phones in the health locker (emergency contact, doctor) format to (XXX) XXX-XXXX on save, matching the rest of the app.',
+      'CPU/memory: zero new SQL or realtime channels. Documents live in state.documents as a flat list of refs; binaries are in Storage. Health fields are a nested object on each member\'s existing m.private record — negligible row growth.',
+    ],
+  },
+  {
     version: '4.48',
     date: '2026-05-15',
     title: 'Voice / Video Stories (Wave 4b of family-portal expansion)',
@@ -10602,6 +10666,7 @@ const VaultView = {
       $$('.vault-panel').forEach(p => { p.hidden = p.id !== `vault-${this.section}`; });
       this.render();
     }));
+    DocumentsView.init();
     // Lightbox close affordances: × button, backdrop click, Esc key.
     document.querySelectorAll('[data-vault-lightbox-close]').forEach(el => {
       on(el, 'click', () => {
@@ -10644,10 +10709,11 @@ const VaultView = {
 
   render() {
     if (!Auth.canAccessVault()) return;
-    if (this.section === 'family')   this.renderFamily();
-    if (this.section === 'finance')  this.renderFinance();
-    if (this.section === 'benefits') this.renderBenefits();
-    if (this.section === 'home')     this.renderHome();
+    if (this.section === 'family')    this.renderFamily();
+    if (this.section === 'finance')   this.renderFinance();
+    if (this.section === 'benefits')  this.renderBenefits();
+    if (this.section === 'home')      this.renderHome();
+    if (this.section === 'documents') DocumentsView.render();
   },
 
   // ---------------- Family section ----------------
@@ -10737,6 +10803,37 @@ const VaultView = {
     const gdriveValue = p.googleDrive
       ? `<a href="${escape(p.googleDrive)}" target="_blank" rel="noopener">${escape(p.googleDrive)}</a>`
       : '—';
+    // v4.49: Health & Legacy locker. Renders as a separate block under
+    // the existing kv grid so emergency info doesn't get lost among the
+    // member's other private fields. Blank when no health data is on
+    // record, to avoid an empty block for childhood / extended-family
+    // members where the locker would just be empty rows.
+    const h = p.health || {};
+    const ec = h.emergencyContact || {};
+    const pd = h.primaryDoctor || {};
+    const hasHealth = !!(h.allergies || h.medications || h.bloodType ||
+                         ec.name || ec.phone || ec.relationship ||
+                         pd.name || pd.practice || pd.phone);
+    const healthBlock = hasHealth ? `
+      <section class="vault-health">
+        <h4 class="vault-health-title">Health &amp; legacy</h4>
+        <dl class="vault-kv vault-kv-health">
+          ${h.bloodType   ? `<div><dt><span class="kv-emoji" aria-hidden="true">🩸</span>Blood type</dt><dd>${escape(h.bloodType)}</dd></div>` : ''}
+          ${h.allergies   ? `<div style="grid-column: 1 / -1;"><dt><span class="kv-emoji" aria-hidden="true">⚠️</span>Allergies</dt><dd>${escape(h.allergies).replace(/\n/g, '<br>')}</dd></div>` : ''}
+          ${h.medications ? `<div style="grid-column: 1 / -1;"><dt><span class="kv-emoji" aria-hidden="true">💊</span>Medications</dt><dd>${escape(h.medications).replace(/\n/g, '<br>')}</dd></div>` : ''}
+          ${(ec.name || ec.phone || ec.relationship) ? `
+            <div style="grid-column: 1 / -1;">
+              <dt><span class="kv-emoji" aria-hidden="true">📞</span>Emergency contact</dt>
+              <dd>${[ec.name, ec.relationship ? `(${ec.relationship})` : '', ec.phone].filter(Boolean).map(s => escape(s)).join(' · ')}</dd>
+            </div>` : ''}
+          ${(pd.name || pd.practice || pd.phone) ? `
+            <div style="grid-column: 1 / -1;">
+              <dt><span class="kv-emoji" aria-hidden="true">👩‍⚕️</span>Primary doctor</dt>
+              <dd>${[pd.name, pd.practice, pd.phone].filter(Boolean).map(s => escape(s)).join(' · ')}</dd>
+            </div>` : ''}
+        </dl>
+      </section>` : '';
+
     return `<dl class="vault-kv">
       ${rows.map(([emoji, label, value, isHtml]) => `
         <div>
@@ -10751,7 +10848,8 @@ const VaultView = {
         <dt><span class="kv-emoji" aria-hidden="true">👶</span>Birth details</dt>
         <dd>${birthValue}</dd>
       </div>
-    </dl>`;
+    </dl>
+    ${healthBlock}`;
   },
 
   startEditMember(mid) {
@@ -10857,6 +10955,54 @@ const VaultView = {
           </label>
         </div>
       </fieldset>
+      <fieldset class="vault-edit-fieldset">
+        <legend>🩸 Health &amp; legacy</legend>
+        <div class="vault-edit-grid">
+          <label class="vault-edit-field">
+            <span class="vault-edit-label">Blood type</span>
+            <select name="health-bloodType">
+              <option value="">—</option>
+              ${['O+','O−','A+','A−','B+','B−','AB+','AB−','Unknown'].map(bt => `<option value="${escape(bt)}" ${(p.health?.bloodType || '') === bt ? 'selected' : ''}>${bt}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <label class="vault-edit-field" style="margin-top:8px;">
+          <span class="vault-edit-label">⚠️ Allergies <span class="muted small">(one per line)</span></span>
+          <textarea name="health-allergies" rows="2" placeholder="e.g. peanuts, penicillin">${escape(p.health?.allergies || '')}</textarea>
+        </label>
+        <label class="vault-edit-field">
+          <span class="vault-edit-label">💊 Medications <span class="muted small">(one per line)</span></span>
+          <textarea name="health-medications" rows="2" placeholder="e.g. levothyroxine 50 mcg daily">${escape(p.health?.medications || '')}</textarea>
+        </label>
+        <fieldset class="vault-edit-fieldset" style="margin-top:8px;">
+          <legend>📞 Emergency contact</legend>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">Name</span>
+              <input name="health-ec-name" value="${escape(p.health?.emergencyContact?.name || '')}" />
+            </label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span>
+              <input name="health-ec-phone" type="tel" placeholder="(555) 123-4567" value="${escape(p.health?.emergencyContact?.phone || '')}" />
+            </label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Relationship</span>
+              <input name="health-ec-rel" placeholder="e.g. spouse, parent" value="${escape(p.health?.emergencyContact?.relationship || '')}" />
+            </label>
+          </div>
+        </fieldset>
+        <fieldset class="vault-edit-fieldset" style="margin-top:8px;">
+          <legend>👩‍⚕️ Primary doctor</legend>
+          <div class="vault-edit-grid">
+            <label class="vault-edit-field"><span class="vault-edit-label">Name</span>
+              <input name="health-pd-name" value="${escape(p.health?.primaryDoctor?.name || '')}" />
+            </label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Practice</span>
+              <input name="health-pd-practice" value="${escape(p.health?.primaryDoctor?.practice || '')}" />
+            </label>
+            <label class="vault-edit-field"><span class="vault-edit-label">Phone</span>
+              <input name="health-pd-phone" type="tel" placeholder="(555) 123-4567" value="${escape(p.health?.primaryDoctor?.phone || '')}" />
+            </label>
+          </div>
+        </fieldset>
+      </fieldset>
       <div class="vault-edit-actions">
         <button class="btn btn-primary btn-sm" type="button" data-action="save">Save</button>
         <button class="btn btn-ghost btn-sm"   type="button" data-action="cancel">Cancel</button>
@@ -10891,6 +11037,23 @@ const VaultView = {
         weightOz:  v('birth-weight-oz'),
         lengthIn:  v('birth-length-in'),
         notes:     v('birth-notes'),
+      },
+      // v4.49: Health & Legacy locker fields. Phones go through the same
+      // (XXX) XXX-XXXX formatter as other phone fields in the app.
+      health: {
+        bloodType:   v('health-bloodType'),
+        allergies:   v('health-allergies'),
+        medications: v('health-medications'),
+        emergencyContact: {
+          name:         v('health-ec-name'),
+          phone:        formatPhoneUS(v('health-ec-phone')),
+          relationship: v('health-ec-rel'),
+        },
+        primaryDoctor: {
+          name:     v('health-pd-name'),
+          practice: v('health-pd-practice'),
+          phone:    formatPhoneUS(v('health-pd-phone')),
+        },
       },
     };
     Store.save();
@@ -16600,6 +16763,373 @@ const StoryModal = {
     const id = this.editingId;
     this.close();
     StoriesView.deleteStory(id);
+  },
+};
+
+// -------------------- DOCUMENTS DRAWER (v4.49 — Wave 5) --------------------
+// Admin-only end-to-end. Each document is one row in state.documents,
+// tagged to a member (memberId) or null for household-level docs (deed,
+// marriage cert). File binaries live in the family-documents Storage
+// bucket from Wave 1 (RLS admin-only on insert / select / delete).
+const DocumentsView = {
+  memberFilter: '',     // '' = all; 'household' = household-level only; otherwise a member id
+  categoryFilter: '',   // '' = all; otherwise exact match
+  searchQuery: '',
+
+  init() {
+    DocumentModal.init();
+  },
+
+  list() {
+    return Array.isArray(Store.state.documents) ? Store.state.documents : [];
+  },
+
+  // Unique categories already used across saved documents (for the filter
+  // dropdown + the autocomplete datalist on the modal). Sorted alpha,
+  // dedupe case-insensitively.
+  categories() {
+    const seen = new Map();
+    for (const d of this.list()) {
+      const c = (d.category || '').trim();
+      if (!c) continue;
+      const key = c.toLowerCase();
+      if (!seen.has(key)) seen.set(key, c);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  },
+
+  filtered() {
+    let list = this.list();
+    if (this.memberFilter === 'household') {
+      list = list.filter(d => !d.memberId);
+    } else if (this.memberFilter) {
+      list = list.filter(d => d.memberId === this.memberFilter);
+    }
+    if (this.categoryFilter) {
+      const key = this.categoryFilter.toLowerCase();
+      list = list.filter(d => (d.category || '').toLowerCase() === key);
+    }
+    if (this.searchQuery) {
+      const q = this.searchQuery.toLowerCase();
+      list = list.filter(d => {
+        const hay = [d.title, d.category, d.notes,
+                     d.memberId ? displayName(Store.byId(d.memberId)) : 'household'].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    return list.slice().sort((a, z) => (z.createdAt || 0) - (a.createdAt || 0));
+  },
+
+  render() {
+    const host = $('#vault-documents');
+    if (!host) return;
+    if (!Auth.canAccessVault()) {
+      host.innerHTML = '<p class="muted" style="padding:24px; text-align:center;">Admin-only.</p>';
+      return;
+    }
+    const all = this.list();
+    const filtered = this.filtered();
+    const members = Store.membersList();
+    const cats = this.categories();
+    host.innerHTML = `
+      <div class="documents-toolbar">
+        <button class="btn btn-primary btn-sm" id="btn-document-add">+ Add document</button>
+        <select class="input" id="documents-member-filter">
+          <option value="" ${this.memberFilter === '' ? 'selected' : ''}>All members + household</option>
+          <option value="household" ${this.memberFilter === 'household' ? 'selected' : ''}>Household / shared only</option>
+          ${sortMembers(members).map(m => `<option value="${escape(m.id)}" ${this.memberFilter === m.id ? 'selected' : ''}>${escape(displayName(m))}</option>`).join('')}
+        </select>
+        <select class="input" id="documents-category-filter">
+          <option value="" ${this.categoryFilter === '' ? 'selected' : ''}>All categories</option>
+          ${cats.map(c => `<option value="${escape(c)}" ${this.categoryFilter.toLowerCase() === c.toLowerCase() ? 'selected' : ''}>${escape(c)}</option>`).join('')}
+        </select>
+        <input class="input" id="documents-search" type="search" placeholder="Search documents…" value="${escape(this.searchQuery)}" />
+      </div>
+      ${all.length === 0
+        ? `<div class="tree-empty" style="margin: 18px;">
+            <div class="tree-empty-card">
+              <h3>No documents yet</h3>
+              <p>Drop in birth certificates, passport scans, school records, anything you'd want to find later. Each document can be tagged to a member or kept as household-level.</p>
+              <button class="btn btn-primary" id="btn-document-add-first">+ Add your first document</button>
+            </div>
+          </div>`
+        : (filtered.length
+            ? `<div class="documents-list">${filtered.map(d => this.rowHTML(d)).join('')}</div>`
+            : '<p class="muted" style="padding:24px; text-align:center;">No documents match the current filters.</p>')
+      }
+    `;
+    on($('#btn-document-add'),         'click', () => DocumentModal.openAdd());
+    on($('#btn-document-add-first'),   'click', () => DocumentModal.openAdd());
+    on($('#documents-member-filter'),  'change', (e) => { this.memberFilter   = e.target.value; this.render(); });
+    on($('#documents-category-filter'),'change', (e) => { this.categoryFilter = e.target.value; this.render(); });
+    on($('#documents-search'),         'input',  (e) => { this.searchQuery    = e.target.value.trim(); this.render(); });
+
+    host.querySelectorAll('[data-doc-open]').forEach(btn => {
+      on(btn, 'click', () => this.openDocument(btn.dataset.docOpen));
+    });
+    host.querySelectorAll('[data-doc-edit]').forEach(btn => {
+      on(btn, 'click', () => DocumentModal.openEdit(btn.dataset.docEdit));
+    });
+    host.querySelectorAll('[data-doc-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deleteDocument(btn.dataset.docDelete));
+    });
+  },
+
+  rowHTML(d) {
+    const m = d.memberId ? Store.byId(d.memberId) : null;
+    const who = m ? displayName(m) : 'Household / shared';
+    const sizeBytes = d.file?.sizeBytes || 0;
+    const sizeStr = sizeBytes ? this.humanBytes(sizeBytes) : '';
+    const ext = (d.file?.originalName || '').split('.').pop()?.toUpperCase() || '';
+    const icon = this.iconForMime(d.file?.mimeType, ext);
+    return `
+      <article class="document-row" data-id="${escape(d.id)}">
+        <div class="document-icon">${icon}</div>
+        <div class="document-main">
+          <div class="document-title">${escape(d.title || 'Untitled')}</div>
+          <div class="document-meta muted small">
+            ${d.category ? `<span class="document-cat">${escape(d.category)}</span>` : ''}
+            <span>${escape(who)}</span>
+            ${ext ? `<span>${escape(ext)}${sizeStr ? ` · ${escape(sizeStr)}` : ''}</span>` : ''}
+            <span>Added ${escape(formatDate(new Date(d.createdAt).toISOString().slice(0, 10)))}</span>
+          </div>
+          ${d.notes ? `<div class="document-notes muted small" style="margin-top:6px;">${escape(d.notes)}</div>` : ''}
+        </div>
+        <div class="document-actions">
+          <button class="btn btn-primary btn-sm" type="button" data-doc-open="${escape(d.id)}">Open</button>
+          <button class="btn btn-ghost btn-sm"   type="button" data-doc-edit="${escape(d.id)}">Edit</button>
+          <button class="btn btn-danger-ghost btn-sm" type="button" data-doc-delete="${escape(d.id)}">Delete</button>
+        </div>
+      </article>`;
+  },
+
+  iconForMime(mime, ext) {
+    if (!mime && !ext) return '📄';
+    const m = (mime || '').toLowerCase();
+    const e = (ext  || '').toLowerCase();
+    if (m.startsWith('image/'))                            return '🖼️';
+    if (m === 'application/pdf' || e === 'pdf')            return '📕';
+    if (e === 'doc' || e === 'docx')                       return '📝';
+    if (e === 'xls' || e === 'xlsx' || m.includes('sheet')) return '📊';
+    if (m.startsWith('text/') || e === 'txt')              return '📄';
+    return '📄';
+  },
+
+  humanBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  },
+
+  // Open a document. Images render in the shared lightbox so the admin
+  // can preview without leaving the page; PDFs and everything else open
+  // in a new tab via the signed URL (browsers handle them better that
+  // way than trying to embed inline).
+  async openDocument(id) {
+    const d = this.list().find(x => x.id === id); if (!d || !d.file) return;
+    const url = await Backend.getMediaUrl(d.file.bucket, d.file.path, 3600);
+    if (!url) { toast('File unavailable. Try again in a moment.', 'warn'); return; }
+    const mime = (d.file.mimeType || '').toLowerCase();
+    if (mime.startsWith('image/')) {
+      this.openImageLightbox(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  },
+
+  openImageLightbox(src) {
+    const el = $('#vault-lightbox');
+    if (!el) return;
+    el.querySelector('img').src = src;
+    el.hidden = false;
+    document.body.style.overflow = 'hidden';
+  },
+
+  async deleteDocument(id) {
+    if (!Auth.isAdmin()) return;
+    const d = this.list().find(x => x.id === id); if (!d) return;
+    if (!confirm(`Delete "${d.title}"? The file is also removed from storage.`)) return;
+    if (d.file?.bucket && d.file.path) await Backend.deleteMedia(d.file.bucket, d.file.path);
+    Store.state.documents = this.list().filter(x => x.id !== id);
+    Store.save();
+    toast('Document deleted.');
+    this.render();
+  },
+};
+
+// -------------------- DOCUMENT MODAL (v4.49) --------------------
+const DocumentModal = {
+  editingId: null,
+  pendingFile: null,            // File from picker, pre-upload
+  uploadedRef: null,            // { bucket, path, mimeType, sizeBytes, originalName }
+  uploading: 0,
+  MAX_BYTES: 25 * 1024 * 1024,  // matches Wave 1 family-documents bucket cap
+
+  init() {
+    const el = $('#document-modal'); if (!el || el.dataset.bound) return;
+    el.dataset.bound = '1';
+    on(el, 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#document-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
+    on($('#document-delete'), 'click', () => this.deleteCurrent());
+    on($('#document-file-input'), 'change', (e) => this.onFilePick(e));
+  },
+
+  populateMemberSelect(currentId) {
+    const sel = $('#document-member'); if (!sel) return;
+    sel.innerHTML = `
+      <option value="">— Household / shared —</option>
+      ${sortMembers(Store.membersList()).map(m =>
+        `<option value="${escape(m.id)}" ${m.id === currentId ? 'selected' : ''}>${escape(displayName(m))}</option>`
+      ).join('')}
+    `;
+  },
+
+  populateCategoryDatalist() {
+    const datalist = $('#document-categories'); if (!datalist) return;
+    datalist.innerHTML = DocumentsView.categories().map(c => `<option value="${escape(c)}"></option>`).join('');
+  },
+
+  openAdd() {
+    if (!Auth.isAdmin()) return;
+    this.editingId = null;
+    this.pendingFile = null;
+    this.uploadedRef = null;
+    this.reset();
+    this.populateMemberSelect('');
+    this.populateCategoryDatalist();
+    $('#document-modal-title').textContent = 'Add document';
+    $('#document-submit').textContent = 'Save document';
+    $('#document-delete').hidden = true;
+    this.open();
+    setTimeout(() => $('#document-form').title.focus(), 50);
+  },
+
+  openEdit(id) {
+    if (!Auth.isAdmin()) return;
+    const d = (Store.state.documents || []).find(x => x.id === id); if (!d) return;
+    this.editingId = id;
+    this.pendingFile = null;
+    this.uploadedRef = d.file ? { ...d.file } : null;
+    this.reset();
+    this.populateMemberSelect(d.memberId || '');
+    this.populateCategoryDatalist();
+    $('#document-modal-title').textContent = 'Edit document';
+    $('#document-submit').textContent = 'Save changes';
+    $('#document-delete').hidden = false;
+    const fm = $('#document-form');
+    fm.title.value    = d.title || '';
+    fm.category.value = d.category || '';
+    fm.notes.value    = d.notes || '';
+    $('#document-file-status').textContent = d.file?.originalName
+      ? `Current file: ${d.file.originalName}. Pick a new one to replace it.`
+      : 'No file attached.';
+    this.open();
+  },
+
+  reset() {
+    $('#document-form').reset();
+    $('#document-error').hidden = true;
+    $('#document-file-status').textContent = '';
+  },
+  open() {
+    const el = $('#document-modal');
+    el.setAttribute('aria-hidden', 'false');
+    el.classList.add('is-open');
+  },
+  close() {
+    const el = $('#document-modal');
+    el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('is-open');
+    this.editingId = null;
+    this.pendingFile = null;
+    this.uploadedRef = null;
+  },
+
+  onFilePick(e) {
+    const file = e.target.files?.[0]; if (!file) { this.pendingFile = null; return; }
+    if (file.size > this.MAX_BYTES) {
+      toast(`File too large: ${(file.size / 1024 / 1024).toFixed(1)} MB. Max is ${this.MAX_BYTES / 1024 / 1024} MB.`, 'warn');
+      e.target.value = '';
+      return;
+    }
+    this.pendingFile = file;
+    $('#document-file-status').textContent = `Picked: ${file.name} (${DocumentsView.humanBytes(file.size)})`;
+  },
+
+  async save() {
+    if (!Auth.isAdmin()) return;
+    const fm = $('#document-form');
+    const fd = new FormData(fm);
+    const title = (fd.get('title') || '').toString().trim();
+    if (!title) { this.error('Title is required.'); return; }
+
+    const existing = this.editingId
+      ? (Store.state.documents || []).find(d => d.id === this.editingId)
+      : null;
+
+    let file = existing?.file || null;
+    // Replace file when the picker has a new selection.
+    if (this.pendingFile) {
+      this.uploading++;
+      $('#document-file-status').textContent = 'Uploading…';
+      try {
+        const result = await Backend.uploadMedia(this.pendingFile, {
+          bucket: 'family-documents', folder: 'docs', maxBytes: this.MAX_BYTES,
+        });
+        if (!result.ok) throw new Error(result.reason);
+        // Clean up any prior file from Storage before replacing.
+        if (existing?.file?.bucket) await Backend.deleteMedia(existing.file.bucket, existing.file.path);
+        file = {
+          bucket: result.bucket,
+          path: result.path,
+          mimeType: result.contentType || this.pendingFile.type || '',
+          sizeBytes: result.sizeBytes || this.pendingFile.size,
+          originalName: this.pendingFile.name,
+        };
+      } catch (err) {
+        this.uploading--;
+        this.error(`Upload failed: ${err.message || err}`);
+        return;
+      }
+      this.uploading--;
+    }
+    if (!file) { this.error('Attach a file first.'); return; }
+
+    const record = {
+      ...(existing || {}),
+      id: this.editingId || uid('doc'),
+      title,
+      category: (fd.get('category') || '').toString().trim(),
+      memberId: (fd.get('memberId') || '').toString(),
+      notes:    (fd.get('notes')    || '').toString(),
+      file,
+      createdAt: existing?.createdAt || Date.now(),
+      createdBy: existing?.createdBy || Backend.user?.id || null,
+    };
+
+    if (!Array.isArray(Store.state.documents)) Store.state.documents = [];
+    if (existing) {
+      const idx = Store.state.documents.findIndex(d => d.id === this.editingId);
+      Store.state.documents[idx] = record;
+    } else {
+      Store.state.documents.push(record);
+    }
+    Store.save();
+    toast(this.editingId ? 'Document saved.' : 'Document added.');
+    this.close();
+    DocumentsView.render();
+  },
+
+  error(msg) {
+    $('#document-error').textContent = msg;
+    $('#document-error').hidden = false;
+  },
+
+  async deleteCurrent() {
+    if (!this.editingId) return;
+    const id = this.editingId;
+    this.close();
+    DocumentsView.deleteDocument(id);
   },
 };
 
