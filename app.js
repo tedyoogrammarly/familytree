@@ -8758,7 +8758,6 @@ function bindTreeToolbar() {
     applyTheme();
     Canvas.renderAll();
   }));
-  on($('#btn-add-member'), 'click', () => MemberModal.open());
   on($('#btn-add-first'),  'click', () => MemberModal.open());
   $$('.nav-tab').forEach(tab => on(tab, 'click', () => Views.show(tab.dataset.view)));
 
@@ -13791,6 +13790,19 @@ const MyKidsView = {
     host.querySelectorAll('[data-mk-delete]').forEach(btn => {
       on(btn, 'click', () => this.deleteEntry(btn.dataset.mkDelete));
     });
+    // v4.55: reactions + comments wiring — mirrors MemoriesView.
+    host.querySelectorAll('[data-mk-react]').forEach(btn => {
+      on(btn, 'click', () => this.toggleReaction(btn.dataset.mkId, btn.dataset.mkReact));
+    });
+    host.querySelectorAll('[data-mk-react-more]').forEach(btn => {
+      on(btn, 'click', () => this.openReactionPicker(btn));
+    });
+    host.querySelectorAll('[data-mk-comment-submit]').forEach(form => {
+      on(form, 'submit', (ev) => { ev.preventDefault(); this.addComment(form.dataset.mkCommentSubmit); });
+    });
+    host.querySelectorAll('[data-mk-comment-delete]').forEach(btn => {
+      on(btn, 'click', () => this.deleteComment(btn.dataset.mkId, btn.dataset.mkCommentDelete));
+    });
     // Lazy-resolve signed URLs for every photo placeholder in this view.
     host.querySelectorAll('[data-mk-photo]').forEach(img => this.resolvePhotoSrc(img));
     // v4.41: clicking a photo opens the full-screen lightbox. We bind once
@@ -13902,6 +13914,9 @@ const MyKidsView = {
     const linkChip = e.link
       ? `<a href="${escape(e.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip" title="${escape(e.link)}">🔗 Open link</a>`
       : '';
+    // v4.55: reactions + comments live below the photo row.
+    const reactionsHTML = this.reactionsHTML(e);
+    const commentsHTML = this.commentsHTML(e);
     return `
       <article class="mykids-entry" data-id="${e.id}">
         <header class="mykids-entry-head">
@@ -13914,7 +13929,175 @@ const MyKidsView = {
         ${bodyHTML}
         ${linkChip}
         ${this.activeTab !== 'letters' && photos ? `<div class="mykids-entry-photos">${photos}</div>` : ''}
+        ${reactionsHTML}
+        ${commentsHTML}
       </article>`;
+  },
+
+  // ---------- Engagement helpers (v4.55) ----------
+  // Reactions + comments mirror the Memories implementation. Family and
+  // Admin can react/comment; User role sees the chips + reads comments
+  // but the composer + quick-pick row are hidden.
+  canEngage() { return Auth.isAdmin() || Auth.isFamily(); },
+  currentUserId() { return Backend.user?.id || null; },
+  currentAuthorName() {
+    const me = Auth.current;
+    if (me && me !== 'admin-bootstrap' && typeof me === 'object') return displayName(me);
+    return Backend.user?.email || 'Admin';
+  },
+  QUICK_REACTIONS: ['❤️', '😂', '😮', '😢', '🎉', '👍', '🔥'],
+
+  // Walk the current kid + section to find an entry by id. Used by every
+  // reaction/comment handler so the mutation lands on the right object.
+  findEntry(entryId) {
+    const k = Store.state.myKids?.[this.selectedKidId];
+    if (!k) return null;
+    const list = k[this.activeTab];
+    if (!Array.isArray(list)) return null;
+    return list.find(x => x.id === entryId) || null;
+  },
+
+  reactionsRolledUp(e) {
+    const out = new Map();
+    for (const r of (e.reactions || [])) {
+      if (!r || !r.emoji) continue;
+      if (!out.has(r.emoji)) out.set(r.emoji, []);
+      out.get(r.emoji).push(r);
+    }
+    return out;
+  },
+  myReactionEmojis(e) {
+    const me = this.currentUserId();
+    if (!me) return new Set();
+    return new Set((e.reactions || []).filter(r => r.userId === me).map(r => r.emoji));
+  },
+
+  toggleReaction(entryId, emoji) {
+    if (!this.canEngage()) {
+      toast('Sign in with a Family or Admin role to react.', 'warn');
+      return;
+    }
+    const e = this.findEntry(entryId); if (!e) return;
+    const me = this.currentUserId(); if (!me) return;
+    if (!Array.isArray(e.reactions)) e.reactions = [];
+    const idx = e.reactions.findIndex(r => r.userId === me && r.emoji === emoji);
+    if (idx >= 0) e.reactions.splice(idx, 1);
+    else e.reactions.push({ emoji, userId: me, createdAt: Date.now() });
+    Store.save();
+    this.render();
+  },
+
+  // Hidden proxy input + EmojiPicker, same pattern Memories uses.
+  openReactionPicker(btn) {
+    if (!this.canEngage()) {
+      toast('Sign in with a Family or Admin role to react.', 'warn');
+      return;
+    }
+    const entryId = btn.dataset.mkId;
+    let proxy = $('#mykids-reaction-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.type = 'hidden';
+      proxy.id = 'mykids-reaction-proxy';
+      proxy.dataset.entryId = entryId;
+      document.body.appendChild(proxy);
+      proxy.addEventListener('change', () => {
+        const ch = proxy.value;
+        if (!ch) return;
+        proxy.value = '';
+        this.toggleReaction(proxy.dataset.entryId, ch);
+      });
+    }
+    proxy.dataset.entryId = entryId;
+    EmojiPicker.open(proxy, btn);
+  },
+
+  addComment(entryId) {
+    if (!this.canEngage()) return;
+    const form = document.querySelector(`form[data-mk-comment-submit="${entryId}"]`);
+    if (!form) return;
+    const textarea = form.querySelector('textarea');
+    const body = (textarea.value || '').trim();
+    if (!body) return;
+    const e = this.findEntry(entryId); if (!e) return;
+    if (!Array.isArray(e.comments)) e.comments = [];
+    e.comments.push({
+      id: uid('cmt'),
+      body,
+      authorId:   this.currentUserId(),
+      authorName: this.currentAuthorName(),
+      createdAt:  Date.now(),
+    });
+    Store.save();
+    textarea.value = '';
+    this.render();
+  },
+
+  deleteComment(entryId, commentId) {
+    const e = this.findEntry(entryId); if (!e) return;
+    const c = (e.comments || []).find(x => x.id === commentId); if (!c) return;
+    const me = this.currentUserId();
+    const isOwn = c.authorId && me && c.authorId === me;
+    if (!isOwn && !Auth.isAdmin()) return;
+    if (!confirm('Delete this comment?')) return;
+    e.comments = e.comments.filter(x => x.id !== commentId);
+    Store.save();
+    this.render();
+  },
+
+  // Reuses .memory-* CSS classes so reactions render identically to the
+  // Memories feed. The data attributes are scoped to mk- so the
+  // delegated handlers above don't double-fire on the Memories view.
+  reactionsHTML(e) {
+    if (!this.canEngage() && !(e.reactions || []).length) return '';
+    const rolled = this.reactionsRolledUp(e);
+    const mine = this.myReactionEmojis(e);
+    const chips = [...rolled.entries()]
+      .sort((a, z) => z[1].length - a[1].length)
+      .map(([emoji, list]) => `
+        <button type="button" class="memory-reaction-chip ${mine.has(emoji) ? 'is-mine' : ''} ${this.canEngage() ? '' : 'is-readonly'}" data-mk-react="${escape(emoji)}" data-mk-id="${escape(e.id)}" ${this.canEngage() ? '' : 'disabled'} title="${list.length} reaction${list.length === 1 ? '' : 's'}">
+          <span class="memory-reaction-emoji">${emoji}</span>
+          <span class="memory-reaction-count">${list.length}</span>
+        </button>`).join('');
+    const quickPicks = this.canEngage() ? `
+      <div class="memory-react-picks">
+        ${this.QUICK_REACTIONS.map(em => `
+          <button type="button" class="memory-react-pick ${mine.has(em) ? 'is-mine' : ''}" data-mk-react="${escape(em)}" data-mk-id="${escape(e.id)}" title="React with ${em}">${em}</button>
+        `).join('')}
+        <button type="button" class="memory-react-more" data-mk-react-more data-mk-id="${escape(e.id)}" data-emoji-trigger title="More emojis">＋</button>
+      </div>` : '';
+    return `
+      <div class="memory-reactions">
+        ${chips ? `<div class="memory-reaction-chips">${chips}</div>` : ''}
+        ${quickPicks}
+      </div>`;
+  },
+
+  commentsHTML(e) {
+    const comments = (e.comments || []).slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const me = this.currentUserId();
+    const canDelete = (c) => (c.authorId && me && c.authorId === me) || Auth.isAdmin();
+    const items = comments.map(c => `
+      <li class="memory-comment">
+        <div class="memory-comment-head">
+          <strong class="memory-comment-author">${escape(c.authorName || 'Someone')}</strong>
+          <time class="memory-comment-date muted small">${relativeTime(c.createdAt)}</time>
+          ${canDelete(c) ? `<button type="button" class="memory-comment-x" data-mk-comment-delete="${escape(c.id)}" data-mk-id="${escape(e.id)}" aria-label="Delete comment">×</button>` : ''}
+        </div>
+        <div class="memory-comment-body">${escape(c.body).replace(/\n/g, '<br>')}</div>
+      </li>`).join('');
+    const composer = this.canEngage()
+      ? `<form class="memory-comment-add" data-mk-comment-submit="${escape(e.id)}">
+          <textarea rows="2" placeholder="Write a comment…" maxlength="2000"></textarea>
+          <button type="submit" class="btn btn-secondary btn-sm">Post</button>
+        </form>`
+      : '';
+    if (!items && !composer) return '';
+    return `
+      <section class="memory-comments">
+        ${items ? `<ul class="memory-comment-list">${items}</ul>` : ''}
+        ${composer}
+      </section>`;
   },
 
   // Resolve a single photo placeholder's signed URL and apply it as the
