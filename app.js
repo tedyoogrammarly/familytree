@@ -10094,6 +10094,15 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.57',
+    date: '2026-06-13',
+    title: 'Vault: Blood type always visible on Family cards',
+    changes: [
+      'The 🩸 Blood type row now shows on every member’s Vault > Family card, displaying “—” when it hasn’t been set yet, so it’s discoverable instead of hidden. (It was already editable via Edit → Health & legacy since v4.49 — it just stayed hidden until a value was entered.) Set a value the same way: open a member → Edit → 🩸 Health & legacy → Blood type.',
+      'Side effect: the Health & legacy section header now appears on every Family card (previously hidden until some health field was filled). Allergies, medications, emergency contact, and primary doctor still only appear once they have a value.',
+    ],
+  },
+  {
     version: '4.56',
     date: '2026-06-13',
     title: 'Refresh + Harden — re-unify the design, add depth, fix correctness & security landmines',
@@ -10982,14 +10991,14 @@ const VaultView = {
     const h = p.health || {};
     const ec = h.emergencyContact || {};
     const pd = h.primaryDoctor || {};
-    const hasHealth = !!(h.allergies || h.medications || h.bloodType ||
-                         ec.name || ec.phone || ec.relationship ||
-                         pd.name || pd.practice || pd.phone);
-    const healthBlock = hasHealth ? `
+    // v4.57: the Health & legacy section now ALWAYS renders, because Blood type
+    // is always shown on the card (— when unset) for discoverability. The other
+    // rows (allergies, medications, contacts) stay conditional on having a value.
+    const healthBlock = `
       <section class="vault-health">
         <h4 class="vault-health-title">Health &amp; legacy</h4>
         <dl class="vault-kv vault-kv-health">
-          ${h.bloodType   ? `<div><dt><span class="kv-emoji" aria-hidden="true">🩸</span>Blood type</dt><dd>${escape(h.bloodType)}</dd></div>` : ''}
+          <div><dt><span class="kv-emoji" aria-hidden="true">🩸</span>Blood type</dt><dd>${h.bloodType ? escape(h.bloodType) : '—'}</dd></div>
           ${h.allergies   ? `<div style="grid-column: 1 / -1;"><dt><span class="kv-emoji" aria-hidden="true">⚠️</span>Allergies</dt><dd>${escape(h.allergies).replace(/\n/g, '<br>')}</dd></div>` : ''}
           ${h.medications ? `<div style="grid-column: 1 / -1;"><dt><span class="kv-emoji" aria-hidden="true">💊</span>Medications</dt><dd>${escape(h.medications).replace(/\n/g, '<br>')}</dd></div>` : ''}
           ${(ec.name || ec.phone || ec.relationship) ? `
@@ -11003,7 +11012,7 @@ const VaultView = {
               <dd>${[pd.name, pd.practice, pd.phone].filter(Boolean).map(s => escape(s)).join(' · ')}</dd>
             </div>` : ''}
         </dl>
-      </section>` : '';
+      </section>`;
 
     return `<dl class="vault-kv">
       ${rows.map(([emoji, label, value, isHtml]) => `
