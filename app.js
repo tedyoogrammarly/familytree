@@ -10094,6 +10094,59 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.56',
+    date: '2026-06-13',
+    title: 'Refresh + Harden — re-unify the design, add depth, fix correctness & security landmines',
+    changes: [
+      'Visual re-unification: the indigo that had crept onto the newer pages (Recipes, Memories, My Kids, Stories, Documents — 26 occurrences) plus a stray blue on the 529-plan chips are gone, all replaced with the forest-green + copper brand. The app no longer looks like two products stitched together.',
+      'Depth + tactility: panels, tree cards, and vault cards now sit on a real elevation ladder (forest-tinted shadows + a pressed-paper top highlight) instead of flat outlines. Buttons lift on hover and press down on click.',
+      'Editorial typography: Fraunces optical sizing is now enabled (the font axis was already downloaded but unused), and each page gets one larger display masthead.',
+      'Data surfaces: the Members table finally has a tinted sticky header, quiet zebra striping, and a green row-hover with a copper edge; the Calendar gets weekend-column tinting on top of the existing today marker and colored chips.',
+      'Accessibility: added a global reduced-motion guard (animations were previously unconditional) and a keyboard focus-ring fallback across nav tabs, icon buttons, and chips.',
+      'Correctness: failure toasts now actually look like failures (the severity argument was ignored at 57 call sites, so a failed save looked identical to a success); the Time Capsule and Documents lists no longer blank out on a single bad date; media-upload modals can no longer get permanently wedged; event-attendee edits are keyed to a stable id instead of array position; and a runaway dashboard clock timer is cleared on navigation.',
+      'Security: the rich-text link sanitizer switched from a javascript:-only blocklist to a strict https/mailto/tel allowlist (closing vbscript:, data:, and tab-obfuscated bypasses); every photo background-image and every user-entered link (529, Google Drive, website, recipe/capsule/kid links) is now scheme-validated; and a Content-Security-Policy was added, with the public Supabase config moved into config.js so the policy can forbid inline scripts.',
+      'Deferred (written, not yet applied): a Supabase migration under supabase/migrations/ that splits the private Vault into an admin-only table — today the Vault is technically readable by any signed-in account. It ships with a README describing the paired app change.',
+      'CPU/memory: the visual work is almost entirely CSS tokens (no new render work) and the hardening adds only small per-render string helpers. Zero new SQL or realtime channels.',
+    ],
+  },
+  {
+    version: '4.55',
+    date: '2026-05-15',
+    title: 'My Kids — bigger photos, reactions & comments',
+    changes: [
+      'My Kids entries show larger photos and gained reactions + comments.',
+      'Removed the "+ Add Member" button from the top bar.',
+      '(Backfilled into this changelog in v4.56 — this release shipped before its History entry was written.)',
+    ],
+  },
+  {
+    version: '4.54',
+    date: '2026-05-15',
+    title: 'Family Tree — member ages visible to the User role',
+    changes: [
+      'The User role can now see member ages on the Family Tree cards.',
+      '(Backfilled into this changelog in v4.56.)',
+    ],
+  },
+  {
+    version: '4.53',
+    date: '2026-05-15',
+    title: 'Dashboard regains its day-to-day panels',
+    changes: [
+      'Dashboard got its day-to-day panels back (clock/weather, upcoming dates, gift totals, gift tracker, grocery list), with the family summary digest tucked underneath — without the date/print controls.',
+      '(Backfilled into this changelog in v4.56.)',
+    ],
+  },
+  {
+    version: '4.52',
+    date: '2026-05-15',
+    title: 'Hide the standalone Time Capsule nav tab',
+    changes: [
+      'The standalone Time Capsule nav tab is hidden — capsules now live under My Kids.',
+      '(Backfilled into this changelog in v4.56.)',
+    ],
+  },
+  {
     version: '4.51',
     date: '2026-05-15',
     title: 'Dashboard + Newsletter merge · Time Capsule moves under My Kids · Stories hidden',
