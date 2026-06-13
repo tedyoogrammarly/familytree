@@ -3,6 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- Content-Security-Policy (v4.56 hardening — C4). Defense-in-depth alongside
+       the rich-text sanitizer + escape() + cssUrl(). script-src deliberately
+       omits 'unsafe-inline' (the config script is externalized to config.js), so
+       injected inline scripts / event handlers are blocked. style-src keeps
+       'unsafe-inline' because the app uses inline style="" attributes throughout.
+       If a network feature ever breaks, this is the line to relax / remove. -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' https://cdn.jsdelivr.net https://accounts.google.com;
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    font-src 'self' https://fonts.gstatic.com data:;
+    img-src 'self' data: blob: https:;
+    media-src 'self' blob: data: https://*.supabase.co;
+    connect-src 'self' data: https://*.supabase.co wss://*.supabase.co https://api.open-meteo.com https://api.zippopotam.us https://www.googleapis.com https://accounts.google.com;
+    frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://accounts.google.com;
+    object-src 'none';
+    base-uri 'self';
+  " />
   <title>The Yoo Family</title>
   <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle' font-size='56'>🌳</text></svg>" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,12 +30,9 @@
 
   <!-- Supabase JS client (v2, UMD build). Exposes `window.supabase`. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script>
-    // Public anon key. Safe to commit — protected by RLS policies on the
-    // archive + member_accounts tables (see supabase/schema.sql).
-    window.SUPABASE_URL = 'https://inwutpebjqaakinybhwu.supabase.co';
-    window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlud3V0cGVianFhYWtpbnliaHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0ODA3NDgsImV4cCI6MjA5NDA1Njc0OH0.JvzkwmacCDIYQz0CndXVM29OlR0HPZ8E1gCQ41E2Dj0';
-  </script>
+  <!-- Public Supabase config — externalized (v4.56) so the CSP can forbid
+       inline scripts. Must load before app.js (it does: app.js is deferred). -->
+  <script src="config.js"></script>
 </head>
 <body>
 
@@ -98,7 +113,7 @@
           <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
           <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
           <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
-          <button class="nav-tab" data-view="vault" data-vault-only role="tab">Admin</button>
+          <button class="nav-tab" data-view="vault" data-vault-only role="tab">Vault</button>
           <button class="nav-tab" data-view="history" data-admin-only role="tab">History</button>
         </nav>
       </div>
@@ -1244,7 +1259,7 @@
       <div class="container">
         <div class="page-head">
           <div>
-            <h2><span class="page-emoji" data-page-emoji="vault"></span>Admin</h2>
+            <h2><span class="page-emoji" data-page-emoji="vault"></span>Vault</h2>
             <p>Private family records. Visible only to authorized accounts.</p>
           </div>
         </div>
