@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Family Archive — Style Gallery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* gallery chrome only — not part of the app */
+    body { background: var(--paper); }
+    .gallery { max-width: 1180px; margin: 0 auto; padding: 40px 28px 120px; }
+    .gallery-head { margin-bottom: 8px; }
+    .gallery-head h1 { font-family: var(--font-display); font-weight: 400; font-size: clamp(32px,4vw,48px); letter-spacing: -0.03em; margin: 6px 0 4px; }
+    .gallery-head p { color: var(--ink-500); margin: 0 0 8px; }
+    .gsection { margin-top: 44px; }
+    .gsection > h2 {
+      font-family: var(--font-display); font-weight: 500; font-size: 13px; text-transform: uppercase;
+      letter-spacing: .18em; color: var(--accent-700); border-bottom: 1px solid var(--ink-200);
+      padding-bottom: 8px; margin: 0 0 18px;
+    }
+    .grow { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 14px; }
+    .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+    .sw { width: 86px; }
+    .sw .chip { height: 52px; border-radius: 10px; border: 1px solid rgba(0,0,0,.06); box-shadow: var(--shadow-soft); }
+    .sw .lbl { font-size: 11px; color: var(--ink-500); margin-top: 5px; display:block; }
+    .gcols { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 18px; }
+    .demo-node-wrap { display: flex; gap: 18px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="gallery">
+    <div class="gallery-head">
+      <p class="eyebrow" style="font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent-700);">Internal · not shipped</p>
+      <h1>Style Gallery</h1>
+      <p>Every primitive the refresh touches, rendered from the real <code>styles.css</code>. Screenshot harness for visual iteration.</p>
+    </div>
+
+    <!-- PALETTE -->
+    <section class="gsection">
+      <h2>Palette</h2>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:var(--brand-900)"></div><span class="lbl">brand-900</span></div>
+        <div class="sw"><div class="chip" style="background:var(--brand-700)"></div><span class="lbl">brand-700</span></div>
+        <div class="sw"><div class="chip" style="background:var(--brand-500)"></div><span class="lbl">brand-500</span></div>
+        <div class="sw"><div class="chip" style="background:var(--brand-300)"></div><span class="lbl">brand-300</span></div>
+        <div class="sw"><div class="chip" style="background:var(--accent-700)"></div><span class="lbl">accent-700</span></div>
+        <div class="sw"><div class="chip" style="background:var(--accent-500)"></div><span class="lbl">accent-500</span></div>
+        <div class="sw"><div class="chip" style="background:var(--accent-300)"></div><span class="lbl">accent-300</span></div>
+        <div class="sw"><div class="chip" style="background:var(--paper)"></div><span class="lbl">paper</span></div>
+        <div class="sw"><div class="chip" style="background:var(--paper-veil)"></div><span class="lbl">paper-veil</span></div>
+        <div class="sw"><div class="chip" style="background:var(--tint-50,#eee)"></div><span class="lbl">tint-50*</span></div>
+        <div class="sw"><div class="chip" style="background:var(--tint-100,#eee)"></div><span class="lbl">tint-100*</span></div>
+        <div class="sw"><div class="chip" style="background:var(--tint-200,#eee)"></div><span class="lbl">tint-200*</span></div>
+      </div>
+    </section>
+
+    <!-- BUTTONS -->
+    <section class="gsection">
+      <h2>Buttons</h2>
+      <div class="grow">
+        <button class="btn btn-primary">Primary</button>
+        <button class="btn btn-secondary">Secondary</button>
+        <button class="btn btn-tonal">Tonal*</button>
+        <button class="btn btn-ghost">Ghost</button>
+        <button class="btn btn-danger-ghost">Delete</button>
+      </div>
+      <div class="grow">
+        <button class="btn btn-primary btn-lg">Primary lg</button>
+        <button class="btn btn-primary btn-sm">Primary sm</button>
+        <button class="btn btn-secondary btn-sm">Secondary sm</button>
+        <button class="icon-btn"><svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+        <button class="icon-btn"><span>100%</span></button>
+      </div>
+    </section>
+
+    <!-- PILLS / TAGS -->
+    <section class="gsection">
+      <h2>Pills, tags &amp; chips</h2>
+      <div class="grow">
+        <span class="role-pill admin">Admin</span>
+        <span class="role-pill user">User</span>
+        <span class="type-pill is-spouse">Spouse</span>
+        <span class="type-pill">Member</span>
+        <span class="friend-role-pill is-spouse">Spouse</span>
+      </div>
+      <div class="grow">
+        <span class="memory-tag">Mom <button class="memory-tag-x" title="remove">×</button></span>
+        <span class="memory-tag">Dad <button class="memory-tag-x" title="remove">×</button></span>
+        <span class="recipe-card-cat">Korean</span>
+        <span class="recipe-card-cat">Dessert</span>
+      </div>
+    </section>
+
+    <!-- RICH TEXT TOOLBAR (was indigo) -->
+    <section class="gsection">
+      <h2>Rich-text editor toolbar &amp; links</h2>
+      <div class="rich-text-editor" style="max-width:520px;">
+        <div class="rt-toolbar" role="toolbar">
+          <button type="button" class="rt-btn"><b>B</b></button>
+          <button type="button" class="rt-btn"><i>I</i></button>
+          <button type="button" class="rt-btn"><u>U</u></button>
+          <span class="rt-sep"></span>
+          <button type="button" class="rt-btn">• List</button>
+          <button type="button" class="rt-btn">🔗</button>
+          <span class="rt-sep"></span>
+          <button type="button" class="rt-btn">😊</button>
+        </div>
+        <div class="rt-surface" contenteditable="false">A few sentences about the day. <a href="#">A link inside the note</a> renders in the brand color now, not indigo.</div>
+      </div>
+    </section>
+
+    <!-- FORM FIELDS -->
+    <section class="gsection">
+      <h2>Form fields</h2>
+      <div class="gcols">
+        <label class="field"><span>Text input</span><input placeholder="Type here…" value="Olive Yoo" /></label>
+        <label class="field"><span>Select</span><select><option>Yoo Family</option><option>Friends</option></select></label>
+        <label class="field"><span>Textarea</span><textarea rows="2">Notes…</textarea></label>
+      </div>
+    </section>
+
+    <!-- PANELS -->
+    <section class="gsection">
+      <h2>Panels (elevation)</h2>
+      <div class="gcols">
+        <section class="panel">
+          <header class="panel-head"><h3>Members &amp; accounts</h3><button class="btn btn-primary btn-sm">+ Add member</button></header>
+          <div style="padding:18px;color:var(--ink-500);font-size:14px;">A raised surface. Should sit pressed into the paper with a subtle white top-highlight and a green-tinted ambient shadow.</div>
+        </section>
+        <section class="panel">
+          <header class="panel-head"><h3>This month's gifts</h3><span class="muted small">Logged so far</span></header>
+          <div style="padding:18px;color:var(--ink-500);font-size:14px;">Second panel for elevation comparison.</div>
+        </section>
+      </div>
+    </section>
+
+    <!-- MEMBER CARD (tree node analog) -->
+    <section class="gsection">
+      <h2>Profile card (tree node)</h2>
+      <div class="demo-node-wrap">
+        <div class="node" style="position:relative;width:188px;">
+          <div class="node-accent" style="height:5px;border-radius:14px 14px 0 0;background:var(--brand-500);"></div>
+          <div class="node-photo is-male" style="height:120px;background:var(--rose-male-bg);display:grid;place-items:center;font-size:40px;">🧑</div>
+          <div class="node-body" style="padding:12px 14px 14px;">
+            <div class="node-rel" style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-700);">You</div>
+            <div class="node-name" style="font-family:var(--font-display);font-weight:600;font-size:17px;">Ted Yoo</div>
+            <span class="role-pill user" style="margin-top:6px;display:inline-block;">Yoo Family</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TABLE -->
+    <section class="gsection">
+      <h2>Members table</h2>
+      <section class="panel">
+        <header class="panel-head"><h3>Members &amp; accounts</h3><span class="muted small">3 people</span></header>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr><th>Name</th><th>Email</th><th>Group</th><th>Birthday</th><th>Role</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="row-name"><div class="row-avatar is-male"></div><div><div>Hee Yoo</div></div></div></td>
+                <td><code>heeyoo</code></td><td>Yoo Family</td><td>May 15, 1962</td>
+                <td><span class="role-pill admin">Admin</span></td>
+                <td><button class="btn btn-ghost btn-sm">Edit</button></td>
+              </tr>
+              <tr>
+                <td><div class="row-name"><div class="row-avatar is-female"></div><div><div>Kim Yoo</div></div></div></td>
+                <td><code>kimyoo</code></td><td>Yoo Family</td><td>May 22, 1968</td>
+                <td><span class="role-pill user">User</span></td>
+                <td><button class="btn btn-ghost btn-sm">Edit</button></td>
+              </tr>
+              <tr>
+                <td><div class="row-name"><div class="row-avatar is-male"></div><div><div>Ted Yoo</div></div></div></td>
+                <td><code>tedyoo</code></td><td>Yoo Family</td><td>May 10, 1990</td>
+                <td><span class="role-pill user">User</span></td>
+                <td><button class="btn btn-ghost btn-sm">Edit</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- CALENDAR -->
+    <section class="gsection">
+      <h2>Calendar</h2>
+      <div class="cal-legend">
+        <span class="cal-legend-item"><span class="cal-dot is-event"></span>Event</span>
+        <span class="cal-legend-item"><span class="cal-dot is-birthday"></span>Birthday</span>
+        <span class="cal-legend-item"><span class="cal-dot is-anniv"></span>Anniversary</span>
+        <span class="cal-legend-item"><span class="cal-dot is-holiday"></span>US holiday</span>
+        <span class="cal-legend-item"><span class="cal-dot is-reminder"></span>Reminder</span>
+      </div>
+      <div class="panel cal-panel">
+        <div class="cal-weekdays">
+          <div class="cal-weekday">Sun</div><div class="cal-weekday">Mon</div><div class="cal-weekday">Tue</div><div class="cal-weekday">Wed</div><div class="cal-weekday">Thu</div><div class="cal-weekday">Fri</div><div class="cal-weekday">Sat</div>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Build a small month grid programmatically to mirror the app's calendar DOM.
+    const grid = document.getElementById('cal-grid');
+    const chips = {
+      10: [['birthday','🎂','Ted Yoo']],
+      15: [['event','🌷',"Mother's Day Brunch"]],
+      22: [['birthday','🎂','Kim Yoo']],
+      25: [['holiday','🇺🇸','Memorial Day'],['event','🍔','Family BBQ']],
+      26: [['reminder','🔔','Trash day']],
+    };
+    for (let i = 0; i < 35; i++) {
+      const dayNum = i - 3; // offset so day 1 lands on a Thu-ish
+      const cell = document.createElement('div');
+      cell.className = 'cal-cell';
+      const inMonth = dayNum >= 1 && dayNum <= 31;
+      if (!inMonth) cell.classList.add('is-other-month');
+      if (dayNum === 13) cell.classList.add('is-today');
+      const shown = inMonth ? dayNum : (dayNum < 1 ? 27 + dayNum : dayNum - 31);
+      const head = document.createElement('div');
+      head.className = 'cal-cell-head';
+      head.innerHTML = `<span class="cal-day-num">${shown}</span><button class="cal-add">+</button>`;
+      cell.appendChild(head);
+      const chipsWrap = document.createElement('div');
+      chipsWrap.className = 'cal-chips';
+      (chips[dayNum] || []).forEach(([kind, icon, text]) => {
+        const c = document.createElement('button');
+        c.className = `cal-chip cal-chip-${kind}`;
+        c.innerHTML = `<span class="cal-chip-icon">${icon}</span><span class="cal-chip-text">${text}</span>`;
+        chipsWrap.appendChild(c);
+      });
+      cell.appendChild(chipsWrap);
+      grid.appendChild(cell);
+    }
+  </script>
+</body>
+</html>
