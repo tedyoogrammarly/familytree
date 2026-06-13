@@ -35,18 +35,22 @@
   --warn:           #b6743d;
   --danger:         #b34141;
 
+  /* Elevation — ambient layers carry a trace of forest-green so surfaces
+     feel pressed into the warm paper rather than floating on neutral grey. */
   --shadow-soft:
-    0 1px 1px rgba(19, 24, 38, 0.04),
-    0 4px 10px -4px rgba(19, 24, 38, 0.08),
-    0 12px 28px -16px rgba(19, 24, 38, 0.18);
+    0 1px 1px rgba(23, 38, 33, 0.05),
+    0 4px 10px -4px rgba(23, 38, 33, 0.09),
+    0 12px 28px -16px rgba(23, 48, 40, 0.20);
   --shadow-lift:
-    0 1px 1px rgba(19, 24, 38, 0.05),
-    0 8px 18px -8px rgba(19, 24, 38, 0.16),
-    0 24px 48px -20px rgba(23, 48, 40, 0.22);
+    0 1px 1px rgba(23, 38, 33, 0.06),
+    0 8px 18px -8px rgba(23, 48, 40, 0.18),
+    0 24px 48px -20px rgba(23, 48, 40, 0.26);
   --shadow-float:
-    0 2px 4px rgba(19, 24, 38, 0.06),
-    0 18px 36px -12px rgba(19, 24, 38, 0.18),
-    0 40px 80px -30px rgba(23, 48, 40, 0.32);
+    0 2px 4px rgba(23, 38, 33, 0.07),
+    0 18px 36px -12px rgba(23, 48, 40, 0.20),
+    0 40px 80px -30px rgba(23, 48, 40, 0.34);
+  /* Pressed-paper top highlight — layer onto a raised surface's box-shadow. */
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 
   --radius-xs: 6px;
   --radius-sm: 10px;
@@ -69,6 +73,15 @@
 
   --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
   --ease-out:    cubic-bezier(.16, 1, .3, 1);
+
+  /* Forest-tinted neutrals + a brand focus ring, available for row hovers,
+     weekend cells, tonal fills, and focus states. */
+  --brand-600:  #285c4c;
+  --tint-50:    hsl(158 26% 96%);
+  --tint-100:   hsl(158 28% 92%);
+  --tint-200:   hsl(158 30% 85%);
+  --hairline:   rgba(19, 24, 38, 0.08);
+  --ring-brand: 0 0 0 3px rgba(47, 107, 89, 0.30);
 }
 
 * { box-sizing: border-box; }
@@ -80,6 +93,9 @@ body {
   background: var(--paper);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Fraunces ships its full optical-size axis (index.html) — let the browser
+     pick the right opsz per size so large headings get the display cut. */
+  font-optical-sizing: auto;
 }
 
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -87,6 +103,35 @@ input, select, textarea, button { font-family: inherit; }
 [hidden] { display: none !important; }
 a { color: var(--brand-700); text-decoration: none; }
 a:hover { color: var(--brand-900); }
+
+/* Global keyboard-focus fallback. Component rules with higher specificity
+   still win; this guarantees nav tabs, icon buttons, chips, and the like
+   show a visible ring when tabbed to. */
+:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
+
+/* Respect reduced-motion. The app uses spring/slide animations throughout;
+   this neutralizes them for users who ask the OS to minimize motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- Shared utilities (used by new surfaces; safe for existing markup) ---- */
+.eyebrow {
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--accent-700);
+}
+.btn-tonal {
+  background: var(--tint-200);
+  color: var(--brand-900);
+  border-color: transparent;
+}
+.btn-tonal:hover { background: hsl(158 30% 79%); }
 
 /* ============================================================
    Reusable components
@@ -119,20 +164,27 @@ a:hover { color: var(--brand-900); }
   border-color: var(--brand-900);
   box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 8px 18px -10px rgba(23,48,40,.6);
 }
-.btn-primary:hover { background: #0e231d; }
+.btn-primary:hover {
+  background: #0e231d;
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 12px 24px -10px rgba(23,48,40,.7);
+}
 .btn-secondary {
   background: var(--paper-soft);
   border-color: var(--ink-200);
   color: var(--ink-900);
   box-shadow: var(--shadow-soft);
 }
-.btn-secondary:hover { border-color: var(--ink-300); background: #fff; }
+.btn-secondary:hover { border-color: var(--ink-300); background: #fff; transform: translateY(-1px); }
 .btn-ghost {
   background: transparent; color: var(--ink-700);
 }
 .btn-ghost:hover { background: rgba(19,24,38,.05); color: var(--ink-900); }
 .btn-danger-ghost { color: var(--danger); }
 .btn-danger-ghost:hover { background: rgba(179,65,65,.08); }
+/* Keep a real downward press (matching .btn:active) even though hover now lifts
+   these buttons — without this, the hover's translateY(-1px) would win on click. */
+.btn-primary:active, .btn-secondary:active, .btn-tonal:active { transform: translateY(1px) scale(.99); }
 
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -407,9 +459,12 @@ code {
 }
 .page-head h2 {
   font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 36px;
-  letter-spacing: -0.025em;
+  /* One editorial masthead per page: lighter weight at a larger optical size
+     reads as a display cut rather than just "big bold text". */
+  font-weight: 400;
+  font-size: clamp(30px, 4vw, 44px);
+  line-height: 1.04;
+  letter-spacing: -0.03em;
   margin: 0 0 6px;
 }
 .page-head p { margin: 0; color: var(--ink-500); }
@@ -648,7 +703,7 @@ code {
   width: 200px;
   background: #fff;
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow-soft), var(--edge-highlight);
   /* overflow stays visible so absolutely-positioned siblings (memoriam
      badge above, "+" button below) aren't clipped. The photo handles its
      own corner-rounding below. */
@@ -662,12 +717,12 @@ code {
 }
 .node:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-lift), var(--edge-highlight);
   border-color: rgba(47, 107, 89, .35);
 }
 .node.is-selected {
   border-color: var(--brand-700);
-  box-shadow: 0 0 0 3px rgba(47, 107, 89, .15), var(--shadow-lift);
+  box-shadow: 0 0 0 3px rgba(47, 107, 89, .15), var(--shadow-lift), var(--edge-highlight);
 }
 /* Edit-layout mode: cards become directly grab-able. Strip the hover
    transform so the card doesn't shift under the cursor while dragging,
@@ -1819,8 +1874,8 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .friend-expand.is-open {
   transform: rotate(90deg);
   color: var(--brand-900);
-  border-color: rgba(99, 102, 241, 0.45);
-  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(47, 107, 89, 0.45);
+  background: rgba(47, 107, 89, 0.08);
 }
 .friend-expand svg { display: block; }
 
@@ -1831,8 +1886,8 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 /* Sub-rows (spouse / child): indented + subtle background so the household
    grouping reads at a glance. The visual indent is done with padding +
    ::before tick on the name cell, not a real <td> indent. */
-.friend-subrow { background: rgba(99, 102, 241, 0.025); cursor: pointer; }
-.friend-subrow:hover { background: rgba(99, 102, 241, 0.06); }
+.friend-subrow { background: rgba(47, 107, 89, 0.025); cursor: pointer; }
+.friend-subrow:hover { background: rgba(47, 107, 89, 0.06); }
 .friend-subrow .row-name { padding-left: 26px; position: relative; }
 .friend-subrow .row-name::before {
   content: "";
@@ -1856,7 +1911,7 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   color: var(--ink-700);
   border: 1px solid var(--ink-200);
 }
-.friend-role-pill.is-spouse { background: rgba(99, 102, 241, 0.10); color: #4c4fb8; border-color: rgba(99, 102, 241, 0.25); }
+.friend-role-pill.is-spouse { background: rgba(47, 107, 89, 0.10); color: #1f4a3d; border-color: rgba(47, 107, 89, 0.25); }
 .friend-role-pill.is-child  { background: rgba(244, 162, 97, 0.14);  color: #a05a16; border-color: rgba(244, 162, 97, 0.30); }
 
 /* "Type" pill in the All tab. */
@@ -1871,7 +1926,7 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 }
 .type-pill.is-family { background: rgba(46, 134, 222, 0.10); color: #1d5a99; border-color: rgba(46, 134, 222, 0.25); }
 .type-pill.is-friend { background: rgba(74, 184, 116, 0.10); color: #2b6e44; border-color: rgba(74, 184, 116, 0.25); }
-.type-pill.is-spouse { background: rgba(99, 102, 241, 0.10); color: #4c4fb8; border-color: rgba(99, 102, 241, 0.25); }
+.type-pill.is-spouse { background: rgba(47, 107, 89, 0.10); color: #1f4a3d; border-color: rgba(47, 107, 89, 0.25); }
 .type-pill.is-child  { background: rgba(244, 162, 97, 0.14); color: #a05a16; border-color: rgba(244, 162, 97, 0.30); }
 
 /* 529-plan chip — small inline link for the column cell. */
@@ -1880,12 +1935,12 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   font-size: 12px;
   padding: 3px 8px;
   border-radius: 999px;
-  background: rgba(46, 134, 222, 0.08);
-  color: #1d5a99;
-  border: 1px solid rgba(46, 134, 222, 0.20);
+  background: rgba(47, 107, 89, 0.08);
+  color: var(--brand-700);
+  border: 1px solid rgba(47, 107, 89, 0.20);
   text-decoration: none;
 }
-.plan529-chip:hover { background: rgba(46, 134, 222, 0.16); }
+.plan529-chip:hover { background: rgba(47, 107, 89, 0.16); }
 
 /* ===== Friend modal: household roster section ===== */
 .household-roster {
@@ -1933,6 +1988,9 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   border: 1px solid var(--ink-200);
   border-radius: var(--radius);
   overflow: hidden;
+  /* Raised tier: soft forest-tinted shadow + pressed-paper top highlight,
+     so panels read as cards set into the paper instead of flat outlines. */
+  box-shadow: var(--shadow-soft), var(--edge-highlight);
 }
 .panel-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -1946,7 +2004,7 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .inline-form { display: flex; gap: 6px; }
 .inline-form .input { padding: 7px 10px; font-size: 13px; }
 
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
 #admin-rows code { font-size: 12px; padding: 2px 5px; }
 #admin-rows .row-name > div:last-child > div:first-child { white-space: nowrap; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -1956,6 +2014,13 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   border-bottom: 1px solid var(--ink-100);
 }
 .table th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-500); font-weight: 600; }
+/* Tinted header that holds when the body scrolls, quiet zebra, and a green
+   row hover with a copper edge — the Members table no longer reads as raw HTML. */
+.table thead th { background: var(--paper-soft); position: sticky; top: 0; z-index: 1; }
+.table tbody tr { transition: background-color .12s var(--ease-out); }
+.table tbody tr:nth-child(even) td { background: rgba(19, 24, 38, 0.018); }
+.table tbody tr:hover td { background: var(--tint-50); }
+.table tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent-500); }
 .table tr:last-child td { border-bottom: 0; }
 .table .row-name { display: flex; align-items: center; gap: 10px; }
 .table .row-avatar {
@@ -2763,6 +2828,13 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   z-index: 100;
 }
 .toast.is-show { opacity: 1; transform: translate(-50%, 0); }
+/* Severity styling so a failed save no longer looks like a success.
+   Dark warm/maroon grounds keep the toast aesthetic; the inset bar + glyph
+   carry the meaning. Driven by toast(msg, 'warn' | 'error'). */
+.toast.is-warn  { background: #43330f; box-shadow: var(--shadow-float), inset 4px 0 0 var(--warn); }
+.toast.is-error { background: #3d1a1a; box-shadow: var(--shadow-float), inset 4px 0 0 var(--danger); }
+.toast.is-warn::before,
+.toast.is-error::before { content: "⚠"; margin-right: 8px; opacity: .9; }
 
 /* ============================================================
    CALENDAR
@@ -2835,6 +2907,9 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   min-height: 116px;
 }
 .cal-cell:nth-child(7n) { border-right: none; }
+/* Weekend columns (Sun = 7n-6, Sat = 7n) get a faint warm tint so the week
+   has rhythm. Declared before is-other-month / is-today so those still win. */
+.cal-cell:nth-child(7n-6), .cal-cell:nth-child(7n) { background: var(--paper-soft); }
 .cal-cell.is-other-month { background: rgba(19,24,38,.025); }
 .cal-cell.is-other-month .cal-day-num { color: var(--ink-300); }
 .cal-cell.is-today {
@@ -3698,7 +3773,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   border: 1px solid var(--ink-200);
   border-radius: var(--radius);
   padding: 18px;
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow-soft), var(--edge-highlight);
 }
 .vault-card + .vault-card { margin-top: 14px; }
 .vault-card-head {
@@ -4313,7 +4388,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
     align-items: stretch;
     gap: 10px;
   }
-  .page-head h2 { font-size: 26px; }
+  .page-head h2 { font-size: 26px; line-height: 1.14; }
   .page-head-actions { width: 100%; flex-wrap: wrap; }
   .page-head-actions .btn { flex: 1 1 auto; min-width: 0; }
 
@@ -4451,7 +4526,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .mykids-roster-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(99, 102, 241, 0.35);
+  border-color: rgba(47, 107, 89, 0.35);
   box-shadow: 0 8px 24px -12px rgba(19, 24, 38, 0.18);
 }
 .mykids-roster-avatar {
@@ -4670,7 +4745,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   min-width: 28px;
 }
 .rt-btn:hover { background: #fff; color: var(--brand-900); }
-.rt-btn:active { background: rgba(99, 102, 241, 0.12); }
+.rt-btn:active { background: rgba(47, 107, 89, 0.12); }
 .rt-sep {
   width: 1px;
   height: 18px;
@@ -4695,14 +4770,14 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .rt-surface ul, .rt-surface ol { margin: 4px 0 4px 22px; padding: 0; }
 .rt-surface li { margin: 2px 0; }
-.rt-surface a { color: var(--brand-900, #0044cc); text-decoration: underline; }
+.rt-surface a { color: var(--brand-900, #173028); text-decoration: underline; }
 
 /* Rich-text body in entry cards (render side) */
 .mykids-entry-body.rich { line-height: 1.55; }
 .mykids-entry-body.rich ul, .mykids-entry-body.rich ol { margin: 4px 0 4px 22px; padding: 0; }
 .mykids-entry-body.rich li { margin: 2px 0; }
 .mykids-entry-body.rich a {
-  color: var(--brand-900, #0044cc);
+  color: var(--brand-900, #173028);
   text-decoration: underline;
 }
 
@@ -4714,8 +4789,8 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   margin-top: 10px;
   padding: 6px 12px;
   border-radius: 8px;
-  background: rgba(99, 102, 241, 0.08);
-  border: 1px solid rgba(99, 102, 241, 0.25);
+  background: rgba(47, 107, 89, 0.08);
+  border: 1px solid rgba(47, 107, 89, 0.25);
   color: var(--brand-900);
   text-decoration: none;
   font-size: 13px;
@@ -4723,8 +4798,8 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   transition: background-color .12s, border-color .12s;
 }
 .mykids-link-chip:hover {
-  background: rgba(99, 102, 241, 0.14);
-  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(47, 107, 89, 0.14);
+  border-color: rgba(47, 107, 89, 0.45);
 }
 
 /* Lightbox prev/next/counter (shown only when .is-mykids is set on
@@ -4851,7 +4926,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .recipe-card:hover {
   transform: translateY(-3px);
   box-shadow: 0 10px 24px -14px rgba(19, 24, 38, 0.22);
-  border-color: rgba(99, 102, 241, 0.32);
+  border-color: rgba(47, 107, 89, 0.32);
 }
 .recipe-card-photo {
   width: 100%;
@@ -4878,7 +4953,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   align-items: center;
 }
 .recipe-card-cat {
-  background: rgba(99, 102, 241, 0.10);
+  background: rgba(47, 107, 89, 0.10);
   color: var(--brand-900);
   padding: 1px 8px;
   border-radius: 99px;
@@ -4955,7 +5030,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   left: 4px; top: 12px;
   width: 6px; height: 6px;
   border-radius: 50%;
-  background: var(--brand-900, #0044cc);
+  background: var(--brand-900, #173028);
   opacity: 0.7;
 }
 .recipe-instructions.rich,
@@ -5025,7 +5100,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   transition: border-color .15s var(--ease-out), box-shadow .15s var(--ease-out);
 }
 .memory-post:hover {
-  border-color: rgba(99, 102, 241, 0.25);
+  border-color: rgba(47, 107, 89, 0.25);
 }
 .memory-head {
   display: flex;
@@ -5046,7 +5121,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   color: var(--ink-900);
 }
 .memory-body.rich a {
-  color: var(--brand-900, #0044cc);
+  color: var(--brand-900, #173028);
   text-decoration: underline;
 }
 .memory-body.rich ul, .memory-body.rich ol { margin: 6px 0 6px 22px; padding: 0; }
@@ -5057,7 +5132,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   gap: 6px;
 }
 .memory-tag {
-  background: rgba(99, 102, 241, 0.10);
+  background: rgba(47, 107, 89, 0.10);
   color: var(--brand-900);
   font-size: 12px;
   font-weight: 500;
@@ -5087,7 +5162,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   align-items: center;
   gap: 4px;
   padding: 3px 6px 3px 10px;
-  background: rgba(99, 102, 241, 0.10);
+  background: rgba(47, 107, 89, 0.10);
   color: var(--brand-900);
   border-radius: 99px;
   font-size: 12.5px;
@@ -5103,7 +5178,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   padding: 2px 6px;
   border-radius: 50%;
 }
-.memory-tag-x:hover { background: rgba(99, 102, 241, 0.2); }
+.memory-tag-x:hover { background: rgba(47, 107, 89, 0.2); }
 
 @media (max-width: 760px) {
   .memories-feed { padding: 10px 12px 18px; }
@@ -5140,12 +5215,12 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   white-space: nowrap;
 }
 .recipes-cat-tab:hover {
-  border-color: rgba(99, 102, 241, 0.32);
+  border-color: rgba(47, 107, 89, 0.32);
   color: var(--brand-900);
 }
 .recipes-cat-tab.is-active {
-  background: var(--brand-900, #0044cc);
-  border-color: var(--brand-900, #0044cc);
+  background: var(--brand-900, #173028);
+  border-color: var(--brand-900, #173028);
   color: #fff;
 }
 .recipes-cat-count {
@@ -5195,8 +5270,8 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .memory-reaction-chip:hover { background: #eee; }
 .memory-reaction-chip.is-mine {
-  background: rgba(99, 102, 241, 0.12);
-  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(47, 107, 89, 0.12);
+  border-color: rgba(47, 107, 89, 0.45);
   color: var(--brand-900);
 }
 .memory-reaction-chip.is-readonly { cursor: default; opacity: 0.85; }
@@ -5230,7 +5305,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   transform: scale(1.15);
 }
 .memory-react-pick.is-mine {
-  background: rgba(99, 102, 241, 0.12);
+  background: rgba(47, 107, 89, 0.12);
 }
 .memory-react-more {
   font-size: 14px;
@@ -5301,7 +5376,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .memory-comment-add textarea:focus {
   outline: none;
-  border-color: rgba(99, 102, 241, 0.45);
+  border-color: rgba(47, 107, 89, 0.45);
 }
 
 @media (max-width: 760px) {
@@ -5401,7 +5476,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   color: var(--ink-900);
   margin-top: 6px;
 }
-.tcp-body.rich a { color: var(--brand-900, #0044cc); text-decoration: underline; }
+.tcp-body.rich a { color: var(--brand-900, #173028); text-decoration: underline; }
 .tcp-body.rich ul, .tcp-body.rich ol { margin: 6px 0 6px 22px; padding: 0; }
 .tcp-photo {
   margin-top: 14px;
@@ -5454,7 +5529,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .story-card:hover {
   transform: translateY(-3px);
-  border-color: rgba(99, 102, 241, 0.32);
+  border-color: rgba(47, 107, 89, 0.32);
   box-shadow: 0 10px 24px -14px rgba(19, 24, 38, 0.22);
 }
 .story-card-thumb {
@@ -5637,7 +5712,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   align-items: center;
 }
 .document-cat {
-  background: rgba(99, 102, 241, 0.10);
+  background: rgba(47, 107, 89, 0.10);
   color: var(--brand-900);
   padding: 1px 8px;
   border-radius: 99px;
@@ -5748,7 +5823,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .newsletter-card-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
 .newsletter-tag {
-  background: rgba(99, 102, 241, 0.10);
+  background: rgba(47, 107, 89, 0.10);
   color: var(--brand-900);
   font-size: 11px;
   font-weight: 500;
