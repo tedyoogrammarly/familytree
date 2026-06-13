@@ -229,6 +229,20 @@ const Backend = {
         .upsert({ id: 1, state, updated_at: new Date().toISOString(), updated_by: this.user?.id || null });
       if (error) {
         console.warn('saveArchive:', error.message);
+        // Surface the failure rather than silently dropping the write — but ONLY
+        // for admins. An admin has write RLS, so a failure is a real problem
+        // (network/outage) worth flagging. A non-admin's writes are rejected by
+        // RLS BY DESIGN today (the app also fires background normalization saves
+        // on load), so toasting those would alarm regular family members on every
+        // navigation — pure noise, not signal. Re-enable for non-admins once the
+        // collaborative-data RLS ships (see supabase/migrations/README).
+        // lastSavedHash is left unchanged so the next mutation retries.
+        const t = Date.now();
+        const isAdmin = typeof Auth !== 'undefined' && Auth.isAdmin && Auth.isAdmin();
+        if (isAdmin && typeof toast === 'function' && t - (this._lastSaveErrAt || 0) > 8000) {
+          this._lastSaveErrAt = t;
+          toast("Couldn't save your changes — check your connection, then try again.", 'error');
+        }
       } else {
         this.lastWriteAt = now;
         if (this._pendingHash) this.lastSavedHash = this._pendingHash;
@@ -381,7 +395,7 @@ const MemberPicker = {
             const m = Store.byId(id);
             if (!m) return '';
             return `<span class="mp-chip" data-id="${id}">
-              <div class="mp-chip-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+              <div class="mp-chip-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}></div>
               <span>${escape(displayName(m))}</span>
               <button type="button" class="mp-chip-x" data-remove="${id}" aria-label="Remove">
                 <svg viewBox="0 0 16 16" width="10" height="10"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -395,7 +409,7 @@ const MemberPicker = {
         .filter(m => !q || (`${m.firstName} ${m.middleName || ''} ${m.lastName} ${m.displayName || ''}`).toLowerCase().includes(q));
       list.innerHTML = matches.map(m => `
         <button type="button" class="mp-option ${sel.has(m.id) ? 'is-selected' : ''}" data-toggle="${m.id}">
-          <div class="mp-option-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+          <div class="mp-option-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}></div>
           <span>${escape(displayName(m))}</span>
           ${sel.has(m.id) ? '<svg viewBox="0 0 16 16" width="12" height="12" style="margin-left:auto;"><path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
         </button>`).join('');
@@ -496,7 +510,7 @@ const SingleMemberPicker = {
       list.innerHTML = matches.length
         ? matches.map(m => `
           <button type="button" class="mp-option ${m.id === id ? 'is-selected' : ''}" data-pick="${m.id}">
-            <div class="mp-option-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+            <div class="mp-option-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}></div>
             <span>${escape(displayName(m))}</span>
             ${m.id === id ? '<svg viewBox="0 0 16 16" width="12" height="12" style="margin-left:auto;"><path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
           </button>`).join('')
@@ -2760,7 +2774,7 @@ const TreeEditLayout = {
 };
 
 function nodeHTML(m) {
-  const photoBg = m.photo ? `style="background-image:url('${m.photo}'); background-size: cover;"` : '';
+  const photoBg = m.photo ? `style="background-image:url('${cssUrl(m.photo)}'); background-size: cover;"` : '';
   const inner = m.photo ? '' : Silhouettes.for(m);
   const isSelf = Auth.isSelf(m.id) ? ' is-self' : '';
   const relation = Tree.computeRelation(m.id);
@@ -2928,7 +2942,7 @@ const Drawer = {
     const photo = $('#drawer-photo');
     photo.className = 'drawer-photo is-' + m.gender;
     if (m.photo) {
-      photo.style.backgroundImage = `url('${m.photo}')`;
+      photo.style.backgroundImage = `url('${cssUrl(m.photo)}')`;
       photo.innerHTML = '';
     } else {
       photo.style.backgroundImage = '';
@@ -2997,10 +3011,13 @@ const Drawer = {
     // 529 plan row (only when set)
     const plan529Row = $('#kv-529-row');
     if (plan529Row) {
-      if (m.plan529) {
+      // Scheme-validate before assigning href — a raw 'javascript:' value would
+      // otherwise execute on click (the tree-card path already normalizes). C3.
+      const safe529 = safeHttpUrl(m.plan529);
+      if (safe529) {
         plan529Row.hidden = false;
         const a = $('#kv-529');
-        a.href = m.plan529;
+        a.href = safe529;
         a.textContent = m.plan529;
       } else { plan529Row.hidden = true; }
     }
@@ -3144,7 +3161,7 @@ const Drawer = {
     }
 
     const preview = $('#photo-preview');
-    if (m.photo) { preview.style.backgroundImage = `url('${m.photo}')`; preview.innerHTML = ''; }
+    if (m.photo) { preview.style.backgroundImage = `url('${cssUrl(m.photo)}')`; preview.innerHTML = ''; }
     else { preview.style.backgroundImage = ''; preview.innerHTML = Silhouettes.for(m); }
     f.dataset.tempPhoto = '';
     // The Crop button only makes sense when there's a photo to crop. It tracks
@@ -3235,7 +3252,7 @@ const Drawer = {
       f.dataset.tempPhoto = cropped;
       const preview = $('#photo-preview');
       preview.innerHTML = '';
-      preview.style.backgroundImage = `url('${cropped}')`;
+      preview.style.backgroundImage = `url('${cssUrl(cropped)}')`;
       $('#photo-recrop').hidden = false;
     };
     reader.readAsDataURL(file);
@@ -3256,7 +3273,7 @@ const Drawer = {
     f.dataset.tempPhoto = cropped;
     const preview = $('#photo-preview');
     preview.innerHTML = '';
-    preview.style.backgroundImage = `url('${cropped}')`;
+    preview.style.backgroundImage = `url('${cssUrl(cropped)}')`;
   },
   clearPhoto() {
     const f = $('#drawer-edit');
@@ -3390,7 +3407,7 @@ function renderDrawerGifts(member) {
 
 function relRow(r) {
   const m = r.member;
-  const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+  const bg = m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : '';
   return `
     <div class="rel-row" data-id="${m.id}" data-rel="${r.label.toLowerCase()}">
       <div class="rel-avatar is-${m.gender}" ${bg}></div>
@@ -3470,6 +3487,8 @@ const Views = {
     $('#view-events').hidden       = name !== 'events';
     $('#view-calendar').hidden     = name !== 'calendar';
     $('#view-gifts').hidden        = name !== 'gifts';
+    // Leaving the dashboard: stop its background clock interval (v4.56).
+    if (name !== 'dashboard') DashboardView.stopClock();
     // Defer the heavy per-view render to a fresh task. The click handler
     // returns immediately and the browser paints the visibility change in
     // <50ms (good INP). The render — which can run 100ms+ on a populated
@@ -4360,7 +4379,7 @@ const AdminView = {
     const accountIds = this.accountIds; // may be null while pending
     const lastSeenById = this.lastSeenById; // may be null while pending
     const rows = list.map(m => {
-      const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+      const bg = m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : '';
       const hasLogin = accountIds ? accountIds.has(m.id) : null;
       const loginCell = accountIds == null
         ? '<span class="muted small">…</span>'
@@ -4448,7 +4467,7 @@ const AdminView = {
       return;
     }
     grid.innerHTML = list.map(m => {
-      const photoBg = m.photo ? `style="background-image:url('${m.photo}'); background-size: cover;"` : '';
+      const photoBg = m.photo ? `style="background-image:url('${cssUrl(m.photo)}'); background-size: cover;"` : '';
       const inner   = m.photo ? '' : Silhouettes.for(m);
       const relation = Tree.computeRelation(m.id) || (m.group || 'Family');
       const ethnicities = m.ethnicities || [];
@@ -4509,7 +4528,7 @@ const AdminView = {
           ${inGroup.length ? inGroup.map(m => `
             <div class="group-member-row" data-mid="${m.id}">
               <div class="row-name">
-                <div class="row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+                <div class="row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}></div>
                 <span>${escape(displayName(m))}</span>
               </div>
               <button class="btn btn-ghost btn-sm" data-remove="${m.id}">Remove</button>
@@ -6040,7 +6059,7 @@ const EventsView = {
       reader.onload = async () => {
         const dataUrl = await resizeDataUrl(reader.result, 1024);
         $('#event-form').dataset.cover = dataUrl;
-        $('#event-cover-preview').style.backgroundImage = `url('${dataUrl}')`;
+        $('#event-cover-preview').style.backgroundImage = `url('${cssUrl(dataUrl)}')`;
         $('#event-cover-url').value = '';
       };
       reader.readAsDataURL(file);
@@ -6048,7 +6067,7 @@ const EventsView = {
     on($('#event-cover-url'), 'input', (e) => {
       const url = e.target.value.trim();
       $('#event-form').dataset.cover = url;
-      $('#event-cover-preview').style.backgroundImage = url ? `url('${url}')` : '';
+      $('#event-cover-preview').style.backgroundImage = url ? `url('${cssUrl(url)}')` : '';
     });
     on($('#event-cover-clear'), 'click', () => {
       $('#event-form').dataset.cover = '';
@@ -6146,6 +6165,18 @@ const EventsView = {
     }
     const memMap = Object.fromEntries(Store.membersList().map(m => [m.id, m]));
     const attendeesRaw = ev.attendees || [];
+    // Give every attendee a STABLE synthetic id so a row's identity never
+    // depends on array position OR on an editable field (email/meal — which an
+    // earlier composite key wrongly included, so editing email then meal on the
+    // same row silently dropped the second edit). Legacy rows get an id lazily
+    // here; it persists on the next save. uids are unique → no key collisions.
+    attendeesRaw.forEach(a => { if (a && !a.attUid) a.attUid = uid('att'); });
+    const keyOf = (a) => (a && a.attUid) ? a.attUid : '';
+    const resolveAttendee = (idx, key) => {
+      if (!key) return Number.isInteger(idx) ? idx : -1;            // legacy/no-key
+      if (attendeesRaw[idx] && keyOf(attendeesRaw[idx]) === key) return idx; // fast path
+      return attendeesRaw.findIndex(a => keyOf(a) === key);          // -1 if gone
+    };
     const isAdmin = Auth.isAdmin();
     const MEAL_LABEL = { none: '—', full: 'Full', half: 'Half', kids: 'Kids' };
     const STATUS_LABEL = { accepted: 'Accepted', invited: 'Invited', declined: 'Declined', 'no-show': 'No-show' };
@@ -6196,7 +6227,7 @@ const EventsView = {
       const isYou    = isOwnRow(a);
       const nameCell = m ? `
         <div class="row-name">
-          <div class="row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+          <div class="row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}></div>
           <div>
             <div style="font-weight:600">${escape(displayName(m))}${isYou ? ' <span class="row-you-tag">you</span>' : ''}</div>
           </div>
@@ -6253,7 +6284,7 @@ const EventsView = {
             : '');
 
       return `
-        <tr data-idx="${idx}" class="status-${status}${isYou ? ' is-you-row' : ''}">
+        <tr data-idx="${idx}" data-att-key="${escape(keyOf(a))}" class="status-${status}${isYou ? ' is-you-row' : ''}">
           <td>${nameCell}</td>
           <td>${statusCell}</td>
           <td>${plusCell}</td>
@@ -6462,7 +6493,7 @@ const EventsView = {
 
     const tripPanel = ev.isTrip ? renderTripPanel(ev) : '';
     detail.innerHTML = `
-      ${cover ? `<div class="event-cover" style="background-image:url('${cover}')"></div>` : ''}
+      ${cover ? `<div class="event-cover" style="background-image:url('${cssUrl(cover)}')"></div>` : ''}
       <header class="panel-head">
         <div>
           <h3>${ev.isTrip ? '<span class="trip-badge">Trip</span>' : ''}${ev.icon ? `<span class="event-title-icon">${escape(ev.icon)}</span>` : ''}${escape(ev.name)}</h3>
@@ -6625,7 +6656,8 @@ const EventsView = {
 
     const updateField = (sel, field, transform = v => v, requireRerender = false) => {
       detail.querySelectorAll(sel).forEach(el => on(el, 'change', () => {
-        const i = +el.dataset.idx;
+        const i = resolveAttendee(+el.dataset.idx, el.closest('tr')?.dataset.attKey);
+        if (i < 0) { this.renderDetail(); return; } // index went stale — re-render
         // Belt-and-suspenders: even if the row's controls are rendered, refuse
         // to write through unless the viewer is allowed to edit this attendee.
         if (!canEditAttendee(attendeesRaw[i])) return;
@@ -6642,7 +6674,8 @@ const EventsView = {
     updateField('.att-email', 'email');
 
     detail.querySelectorAll('[data-remove]').forEach(btn => on(btn, 'click', () => {
-      const i = +btn.dataset.remove;
+      const i = resolveAttendee(+btn.dataset.remove, btn.closest('tr')?.dataset.attKey);
+      if (i < 0) { this.renderDetail(); return; } // index went stale — re-render
       if (!isAdmin && attendeesRaw[i]?.addedBy !== u?.id) return; // user can only remove own guest
       attendeesRaw.splice(i, 1);
       ev.attendees = attendeesRaw;
@@ -6653,7 +6686,7 @@ const EventsView = {
     if (isAdmin) {
       // Per-attendee "Add gift" — opens the gift modal pre-filled with this event
       detail.querySelectorAll('[data-gift]').forEach(btn => on(btn, 'click', () => {
-        const i = +btn.dataset.gift;
+        const i = resolveAttendee(+btn.dataset.gift, btn.closest('tr')?.dataset.attKey);
         const a = attendeesRaw[i]; if (!a) return;
         Views.show('gifts');
         GiftsView.openModal(null, {
@@ -6715,7 +6748,7 @@ const EventsView = {
       const cover = ev.coverPhoto || ev.coverUrl || '';
       f.dataset.cover = cover;
       $('#event-cover-url').value = ev.coverUrl || '';
-      $('#event-cover-preview').style.backgroundImage = cover ? `url('${cover}')` : '';
+      $('#event-cover-preview').style.backgroundImage = cover ? `url('${cssUrl(cover)}')` : '';
       // Trip fields
       const isTrip = !!ev.isTrip;
       f.isTrip.checked = isTrip;
@@ -7791,7 +7824,7 @@ const GiftsView = {
         const colorClass = kind === 'recipient' ? 'is-given' : 'is-received';
         return `
           <div class="report-row" data-report-mid="${mid}" role="button" tabindex="0" title="Open ${escape(displayName(m))}'s profile">
-            <div class="report-row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}></div>
+            <div class="report-row-avatar is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}></div>
             <div class="report-row-body">
               <div class="report-row-label">${escape(displayName(m))}</div>
               <div class="report-bar-wrap"><div class="report-bar ${colorClass}" style="width:${pct}%"></div></div>
@@ -8061,7 +8094,7 @@ const MemberModal = {
       $('#modal-anchor-name').textContent = `${t.firstName} ${t.lastName}`;
       const av = $('#modal-anchor-avatar');
       av.className = 'modal-anchor-avatar is-' + t.gender;
-      if (t.photo) { av.style.backgroundImage = `url('${t.photo}')`; av.innerHTML = ''; }
+      if (t.photo) { av.style.backgroundImage = `url('${cssUrl(t.photo)}')`; av.innerHTML = ''; }
       else { av.style.backgroundImage = ''; av.innerHTML = Silhouettes.for(t); }
       anchor.hidden = false;
 
@@ -8326,7 +8359,7 @@ const UserChip = {
       $('#user-chip-role').textContent = capitalize(u.role || 'user');
       $('#user-chip-avatar').style.background = '';
       if (u.photo) {
-        $('#user-chip-avatar').style.backgroundImage = `url('${u.photo}')`;
+        $('#user-chip-avatar').style.backgroundImage = `url('${cssUrl(u.photo)}')`;
       } else {
         $('#user-chip-avatar').style.backgroundImage = '';
         $('#user-chip-avatar').style.backgroundColor = u.gender === 'male' ? '#e3edf8' : '#fbe3ec';
@@ -8934,6 +8967,38 @@ function formatDate(iso) {
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
+
+// Safe "YYYY-MM-DD" from a timestamp/date-ish value. Returns '' for missing or
+// unparseable input instead of throwing — a single bad/legacy record (e.g. a
+// time-capsule with no sealedAt) must not blank an entire rendered list.
+function isoDay(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+}
+
+// Build a safe CSS url() body from a possibly-untrusted image source. Photos can
+// come from free-text URL fields (event cover, "paste an image URL"), so a value
+// containing a quote or paren could break out of url('...') inside an inline
+// style attribute and inject CSS. Validate the scheme (data:image / http(s) /
+// blob: only) and CSS-escape any breakout character; return '' for anything
+// unrecognized so the rule simply renders no image. (v4.56 hardening — C2.)
+function cssUrl(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!/^(data:image\/|https?:|blob:)/i.test(s)) return '';
+  return s.replace(/[\\'"()\u0000-\u001F\u007F]/g, (c) => '\\' + c.charCodeAt(0).toString(16) + ' ');
+}
+
+// Normalize a user-supplied external link to a safe http(s) URL, or '' if it
+// can't be made safe — blocks javascript:/vbscript:/data: on hrefs. Schemeless
+// input is assumed https. (v4.56 hardening — C3; used by 529-plan links.)
+function safeHttpUrl(raw) {
+  const s = String(raw == null ? '' : raw).replace(/[\u0000-\u001F\u007F]/g, '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return ''; // some other explicit scheme → reject
+  return 'https://' + s;                          // schemeless → assume https
+}
 // Human-friendly relative time stamp for memory comments and reactions
 // ("just now", "5m ago", "Mar 12"). Falls back to a full date for
 // anything older than ~7 days so old comments stay readable.
@@ -9151,9 +9216,16 @@ let toastTimer = null;
 function toast(msg, kind = 'ok') {
   const t = $('#toast');
   t.textContent = msg;
+  // Apply severity so failures don't render identically to confirmations.
+  // Callers pass 'ok' (default), 'warn', or 'error'.
+  t.classList.remove('is-warn', 'is-error');
+  if (kind === 'warn' || kind === 'error') t.classList.add('is-' + kind);
+  // Errors interrupt assistive tech; routine confirmations announce politely.
+  t.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
   t.classList.add('is-show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('is-show'), 2400);
+  // Failures linger a little longer — they often carry an instruction.
+  toastTimer = setTimeout(() => t.classList.remove('is-show'), kind === 'ok' ? 2400 : 4200);
 }
 
 // -------------------- USER EVENT VISIBILITY --------------------
@@ -9662,10 +9734,21 @@ const DashboardView = {
   },
 
   renderClock() {
+    const timeEl = $('#dash-time');
+    // The dashboard may have been navigated away from between ticks; if its
+    // nodes are gone, stop the interval instead of throwing on a null.
+    if (!timeEl) { this.stopClock(); return; }
     const tz = 'America/Los_Angeles';
     const now = new Date();
-    $('#dash-time').textContent = now.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-    $('#dash-date').textContent = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }) + ' · Las Vegas, NV';
+    timeEl.textContent = now.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+    const dateEl = $('#dash-date');
+    if (dateEl) dateEl.textContent = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }) + ' · Las Vegas, NV';
+  },
+
+  // Stop the 30s clock interval when the dashboard is not on screen, so it
+  // doesn't keep firing (and re-querying absent nodes) forever.
+  stopClock() {
+    if (this.clockTimer) { clearInterval(this.clockTimer); this.clockTimer = null; }
   },
 
   // Open-Meteo: free, no API key. 5-day daily forecast for Las Vegas.
@@ -10781,7 +10864,7 @@ const VaultView = {
     return `
       <article class="vault-card" data-mid="${m.id}">
         <header class="vault-card-head">
-          <div class="vault-card-photo is-${m.gender}" ${m.photo ? `style="background-image:url('${m.photo}')"` : ''}>${m.photo ? '' : Silhouettes.for(m)}</div>
+          <div class="vault-card-photo is-${m.gender}" ${m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : ''}>${m.photo ? '' : Silhouettes.for(m)}</div>
           <div class="vault-card-id">
             <h3>${escape(displayName(m))}</h3>
             <p class="muted small">${m.birthday ? formatDate(m.birthday) : 'No birthday'}${m.dateOfDeath ? ` — ${formatDate(m.dateOfDeath)}` : ''}</p>
@@ -10836,7 +10919,7 @@ const VaultView = {
       ? `<div class="vault-birth">${bits.map(x => `<span>${escape(x)}</span>`).join('')}${b.notes ? `<div class="muted small" style="margin-top:6px;">${escape(b.notes)}</div>` : ''}</div>`
       : '—';
     const gdriveValue = p.googleDrive
-      ? `<a href="${escape(p.googleDrive)}" target="_blank" rel="noopener">${escape(p.googleDrive)}</a>`
+      ? `<a href="${escape(safeHttpUrl(p.googleDrive))}" target="_blank" rel="noopener">${escape(p.googleDrive)}</a>`
       : '—';
     // v4.49: Health & Legacy locker. Renders as a separate block under
     // the existing kv grid so emergency info doesn't get lost among the
@@ -11384,8 +11467,8 @@ const VaultView = {
                 </div>
                 ${i.notes ? `<div class="muted small" style="margin-top:6px;">${escape(i.notes)}</div>` : ''}
                 ${(i.frontPhoto || i.backPhoto) ? `<div class="vault-card-photos">
-                  ${i.frontPhoto ? `<button type="button" class="vault-card-photo-large" data-lightbox-src="${i.frontPhoto}" style="background-image:url('${i.frontPhoto}')" title="Front of card — click to enlarge"><span class="vault-card-photo-caption">Front</span></button>` : ''}
-                  ${i.backPhoto  ? `<button type="button" class="vault-card-photo-large" data-lightbox-src="${i.backPhoto}"  style="background-image:url('${i.backPhoto}')"  title="Back of card — click to enlarge"><span class="vault-card-photo-caption">Back</span></button>` : ''}
+                  ${i.frontPhoto ? `<button type="button" class="vault-card-photo-large" data-lightbox-src="${escape(i.frontPhoto)}" style="background-image:url('${cssUrl(i.frontPhoto)}')" title="Front of card — click to enlarge"><span class="vault-card-photo-caption">Front</span></button>` : ''}
+                  ${i.backPhoto  ? `<button type="button" class="vault-card-photo-large" data-lightbox-src="${escape(i.backPhoto)}"  style="background-image:url('${cssUrl(i.backPhoto)}')"  title="Back of card — click to enlarge"><span class="vault-card-photo-caption">Back</span></button>` : ''}
                 </div>` : ''}
               </div>
               <div class="vault-row-actions">
@@ -11419,7 +11502,7 @@ const VaultView = {
               <div class="vault-photo-row">
                 <div class="vault-photo-slot" data-slot="frontPhoto">
                   <div class="vault-photo-label">Front of card</div>
-                  <div class="vault-photo-preview" ${i.frontPhoto ? `style="background-image:url('${i.frontPhoto}')"` : ''}></div>
+                  <div class="vault-photo-preview" ${i.frontPhoto ? `style="background-image:url('${cssUrl(i.frontPhoto)}')"` : ''}></div>
                   <div class="vault-photo-actions">
                     <label class="btn btn-secondary btn-sm">Upload<input type="file" accept="image/*" data-photo-target="frontPhoto" hidden /></label>
                     <button type="button" class="btn btn-ghost btn-sm" data-action="clear-photo" data-photo-target="frontPhoto">Clear</button>
@@ -11427,7 +11510,7 @@ const VaultView = {
                 </div>
                 <div class="vault-photo-slot" data-slot="backPhoto">
                   <div class="vault-photo-label">Back of card</div>
-                  <div class="vault-photo-preview" ${i.backPhoto ? `style="background-image:url('${i.backPhoto}')"` : ''}></div>
+                  <div class="vault-photo-preview" ${i.backPhoto ? `style="background-image:url('${cssUrl(i.backPhoto)}')"` : ''}></div>
                   <div class="vault-photo-actions">
                     <label class="btn btn-secondary btn-sm">Upload<input type="file" accept="image/*" data-photo-target="backPhoto" hidden /></label>
                     <button type="button" class="btn btn-ghost btn-sm" data-action="clear-photo" data-photo-target="backPhoto">Clear</button>
@@ -11801,7 +11884,7 @@ const VaultView = {
   // -------- Utility (formatted like HOA card, with emoji prefix on name) --------
   renderUtilityRow(u) {
     const titlePrefix = u.emoji ? `${u.emoji} ` : '';
-    const websiteHref = u.website && !u.website.startsWith('http') ? `https://${u.website}` : (u.website || '');
+    const websiteHref = safeHttpUrl(u.website);
     return `
       <div class="vault-row" data-uid="${u.id}">
         ${this.renderDragHandle()}
@@ -11886,7 +11969,7 @@ const VaultView = {
 
   // -------- HOAs (list) --------
   renderHOARow(h) {
-    const websiteHref = h.website && !h.website.startsWith('http') ? `https://${h.website}` : (h.website || '');
+    const websiteHref = safeHttpUrl(h.website);
     const hasAny = h.name || h.contact || h.address || h.email || h.phone;
     return `
       <div class="vault-row" data-hid="${h.id}">
@@ -12120,7 +12203,7 @@ const VaultView = {
         <div class="vault-row-view" data-role="view">
           <div class="vault-neighbor-view">
             ${n.photo
-              ? `<button type="button" class="vault-neighbor-photo" data-lightbox-src="${n.photo}" style="background-image:url('${n.photo}')" title="Click to enlarge"></button>`
+              ? `<button type="button" class="vault-neighbor-photo" data-lightbox-src="${escape(n.photo)}" style="background-image:url('${cssUrl(n.photo)}')" title="Click to enlarge"></button>`
               : `<div class="vault-neighbor-photo is-empty" aria-hidden="true">👤</div>`}
             <div class="vault-row-main">
               <div class="vault-row-title">${escape(n.name || 'Unnamed neighbor')}</div>
@@ -12148,7 +12231,7 @@ const VaultView = {
           <div class="vault-photo-row">
             <div class="vault-photo-slot vault-photo-slot-neighbor" data-slot="photo">
               <div class="vault-photo-label">Photo</div>
-              <div class="vault-photo-preview vault-photo-preview-neighbor" ${n.photo ? `style="background-image:url('${n.photo}')"` : ''}></div>
+              <div class="vault-photo-preview vault-photo-preview-neighbor" ${n.photo ? `style="background-image:url('${cssUrl(n.photo)}')"` : ''}></div>
               <div class="vault-photo-actions">
                 <label class="btn btn-secondary btn-sm">Upload<input type="file" accept="image/*" data-photo-target="photo" hidden /></label>
                 <button type="button" class="btn btn-ghost btn-sm" data-action="clear-photo" data-photo-target="photo">Clear</button>
@@ -12861,7 +12944,7 @@ function sortFriends(list) {
 // present — e.g. "Paul Cho 🇰🇷 (40)". Either field can be missing; the
 // suffix only renders for what's actually filled in.
 function nameCellHTML(person, role) {
-  const bg = person.photo ? `style="background-image:url('${person.photo}')"` : '';
+  const bg = person.photo ? `style="background-image:url('${cssUrl(person.photo)}')"` : '';
   const sub = (() => {
     if (role === 'spouse') return '<span class="friend-role-pill is-spouse">Spouse</span>';
     if (role === 'child')  return '<span class="friend-role-pill is-child">Child</span>';
@@ -12948,7 +13031,10 @@ function addressCellHTML(input, opts = {}) {
 
 function plan529CellHTML(url) {
   if (!url) return '<span class="muted">—</span>';
-  return `<a href="${escape(url)}" target="_blank" rel="noopener" class="plan529-chip" title="${escape(url)}" onclick="event.stopPropagation()">🎓 Open</a>`;
+  // No inline onclick (would violate the CSP's script-src). The friend-row
+  // click handler already ignores clicks on <a>, and the All table has no row
+  // click — so the chip opens its link without triggering a row action.
+  return `<a href="${escape(safeHttpUrl(url))}" target="_blank" rel="noopener" class="plan529-chip" title="${escape(url)}">🎓 Open</a>`;
 }
 
 // -------------------- ALL TAB (Members > All) --------------------
@@ -13291,7 +13377,7 @@ const FriendModal = {
         <div class="field">
           <span>Photo</span>
           <div class="photo-row">
-            <div class="photo-preview" data-kid-photo-preview="${i}" ${k.photo ? `style="background-image:url('${escape(k.photo)}')"` : ''}>${k.photo ? '' : Silhouettes.for(k)}</div>
+            <div class="photo-preview" data-kid-photo-preview="${i}" ${k.photo ? `style="background-image:url('${cssUrl(k.photo)}')"` : ''}>${k.photo ? '' : Silhouettes.for(k)}</div>
             <div class="photo-actions">
               <label class="btn btn-secondary btn-sm">
                 Upload photo
@@ -13366,7 +13452,7 @@ const FriendModal = {
     const preview = $(`[data-kid-photo-preview="${i}"]`);
     if (!preview) return;
     if (k.photo) {
-      preview.style.backgroundImage = `url('${k.photo}')`;
+      preview.style.backgroundImage = `url('${cssUrl(k.photo)}')`;
       preview.innerHTML = '';
     } else {
       preview.style.backgroundImage = '';
@@ -13379,7 +13465,7 @@ const FriendModal = {
     const preview = $('#friend-spouse-photo-preview');
     if (!preview) return;
     const src = this._clearSpousePhoto ? '' : (this.spouseTempPhoto || this.spouseDraft?.photo || '');
-    if (src) { preview.style.backgroundImage = `url('${src}')`; preview.innerHTML = ''; }
+    if (src) { preview.style.backgroundImage = `url('${cssUrl(src)}')`; preview.innerHTML = ''; }
     else { preview.style.backgroundImage = ''; preview.innerHTML = Silhouettes.for(this.spouseDraft || { gender: 'female' }); }
   },
   async onSpousePhotoUpload(e) {
@@ -13460,7 +13546,7 @@ const FriendModal = {
     const preview = $('#friend-photo-preview');
     if (!preview) return;
     const src = this.tempPhoto || f.photo;
-    if (src) { preview.style.backgroundImage = `url('${src}')`; preview.innerHTML = ''; }
+    if (src) { preview.style.backgroundImage = `url('${cssUrl(src)}')`; preview.innerHTML = ''; }
     else { preview.style.backgroundImage = ''; preview.innerHTML = Silhouettes.for(f); }
   },
   async onPhotoUpload(e) {
@@ -13704,7 +13790,7 @@ const MyKidsView = {
     }
     empty.hidden = true;
     grid.innerHTML = list.map(m => {
-      const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+      const bg = m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : '';
       const age = ageLabel(m.birthday) || '';
       const entries = this.totalEntriesFor(m.id);
       return `
@@ -13753,9 +13839,9 @@ const MyKidsView = {
   renderDetail() {
     const kid = Store.byId(this.selectedKidId);
     if (!kid) { this.openRoster(); return; }
-    const bg = kid.photo ? `style="background-image:url('${kid.photo}')"` : '';
+    const bg = kid.photo ? `style="background-image:url('${cssUrl(kid.photo)}')"` : '';
     $('#mykids-kid-avatar').className = `mykids-kid-avatar is-${kid.gender || 'female'}`;
-    $('#mykids-kid-avatar').setAttribute('style', kid.photo ? `background-image:url('${kid.photo}')` : '');
+    $('#mykids-kid-avatar').setAttribute('style', kid.photo ? `background-image:url('${cssUrl(kid.photo)}')` : '');
     $('#mykids-kid-avatar').innerHTML = kid.photo ? '' : Silhouettes.for(kid);
     $('#mykids-kid-name').textContent = displayName(kid);
     const sub = [];
@@ -13912,7 +13998,7 @@ const MyKidsView = {
           : `<div class="mykids-entry-body">${escape(e.body).replace(/\n/g, '<br>')}</div>`)
       : '';
     const linkChip = e.link
-      ? `<a href="${escape(e.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip" title="${escape(e.link)}">🔗 Open link</a>`
+      ? `<a href="${escape(safeHttpUrl(e.link))}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip" title="${escape(e.link)}">🔗 Open link</a>`
       : '';
     // v4.55: reactions + comments live below the photo row.
     const reactionsHTML = this.reactionsHTML(e);
@@ -14111,13 +14197,13 @@ const MyKidsView = {
     const now = Date.now();
     const cached = this.signedUrlCache.get(key);
     if (cached && cached.expiresAt > now) {
-      el.style.backgroundImage = `url('${cached.url}')`;
+      el.style.backgroundImage = `url('${cssUrl(cached.url)}')`;
       return;
     }
     const url = await Backend.getMediaUrl(bucket, path, 3600);
     if (!url) { el.style.backgroundImage = ''; el.classList.add('is-missing'); return; }
     this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
-    el.style.backgroundImage = `url('${url}')`;
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
   },
 
   async deleteEntry(entryId) {
@@ -14253,12 +14339,18 @@ const RichText = {
         if (!allowed.has(attr.name)) child.removeAttribute(attr.name);
       });
       if (tag === 'A') {
-        // Force safe target/rel and strip javascript: URLs.
-        const href = (child.getAttribute('href') || '').trim();
-        if (/^\s*javascript:/i.test(href) || !href) child.removeAttribute('href');
-        if (child.getAttribute('href')) {
+        // Scheme ALLOWLIST (replaces the old javascript:-only blacklist, which
+        // let vbscript:, data:, and tab/newline-obfuscated "java&#9;script:"
+        // through). First strip the control chars browsers ignore mid-scheme,
+        // then permit only http/https/mailto/tel. Write the cleaned value back
+        // so storage never holds the raw payload.
+        const href = (child.getAttribute('href') || '').replace(/[\u0000-\u001F\u007F]/g, '').trim();
+        if (/^(https?:|mailto:|tel:)/i.test(href)) {
+          child.setAttribute('href', href);
           child.setAttribute('target', '_blank');
           child.setAttribute('rel', 'noopener noreferrer');
+        } else {
+          child.removeAttribute('href');
         }
       }
       this._scrub(child);
@@ -14319,7 +14411,7 @@ const MyKidsPickerModal = {
       return;
     }
     list.innerHTML = members.map(m => {
-      const bg = m.photo ? `style="background-image:url('${m.photo}')"` : '';
+      const bg = m.photo ? `style="background-image:url('${cssUrl(m.photo)}')"` : '';
       const checked = this.workingIds.has(m.id) ? 'checked' : '';
       const age = ageLabel(m.birthday);
       const meta = [age, m.group].filter(Boolean).join(' · ');
@@ -14596,6 +14688,7 @@ const MyKidsEntryModal = {
     this.editingId = null;
     this.kidId = null;
     this.pendingPhotos = [];
+    this.uploading = 0; // abandon any in-flight count so a reopen isn't wedged
   },
 
   // Photo picker: each file goes through a downscale (no crop — multi-photo
@@ -14637,7 +14730,7 @@ const MyKidsEntryModal = {
         placeholder.error = err.message || String(err);
         toast(`Photo upload failed: ${placeholder.error}`, 'warn');
       } finally {
-        this.uploading--;
+        this.uploading = Math.max(0, this.uploading - 1);
         this.renderPhotoGrid();
       }
     }
@@ -14996,7 +15089,7 @@ const RecipesView = {
           </div>
           ${adminActions}
         </header>
-        ${r.link ? `<a href="${escape(r.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip">🔗 Open link</a>` : ''}
+        ${r.link ? `<a href="${escape(safeHttpUrl(r.link))}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip">🔗 Open link</a>` : ''}
         <div class="recipe-detail-grid">
           ${ingredientsList ? `
             <section>
@@ -15041,13 +15134,13 @@ const RecipesView = {
     const cached = this.signedUrlCache.get(key);
     const now = Date.now();
     if (cached && cached.expiresAt > now) {
-      el.style.backgroundImage = `url('${cached.url}')`;
+      el.style.backgroundImage = `url('${cssUrl(cached.url)}')`;
       return;
     }
     const url = await Backend.getMediaUrl(bucket, path, 3600);
     if (!url) { el.classList.add('is-missing'); return; }
     this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
-    el.style.backgroundImage = `url('${url}')`;
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
   },
 
   async deleteRecipe(id) {
@@ -15208,6 +15301,7 @@ const RecipeModal = {
     this.editingId = null;
     this.tempPhoto = null;
     this._clearPhoto = false;
+    this.uploading = 0; // abandon any in-flight count so a reopen isn't wedged
   },
 
   // Show either the most recent in-flight photo or the persisted one. If
@@ -15223,7 +15317,7 @@ const RecipeModal = {
     }
     const url = await Backend.getMediaUrl(ref.bucket, ref.path, 3600);
     if (url) {
-      el.style.backgroundImage = `url('${url}')`;
+      el.style.backgroundImage = `url('${cssUrl(url)}')`;
       el.innerHTML = '';
     }
   },
@@ -15254,7 +15348,7 @@ const RecipeModal = {
     } catch (err) {
       toast(`Photo upload failed: ${err.message || err}`, 'warn');
     } finally {
-      this.uploading--;
+      this.uploading = Math.max(0, this.uploading - 1);
     }
   },
 
@@ -15666,13 +15760,13 @@ const MemoriesView = {
     const now = Date.now();
     const cached = this.signedUrlCache.get(key);
     if (cached && cached.expiresAt > now) {
-      el.style.backgroundImage = `url('${cached.url}')`;
+      el.style.backgroundImage = `url('${cssUrl(cached.url)}')`;
       return;
     }
     const url = await Backend.getMediaUrl(bucket, path, 3600);
     if (!url) { el.classList.add('is-missing'); return; }
     this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
-    el.style.backgroundImage = `url('${url}')`;
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
   },
 
   openLightboxFromTile(tile) {
@@ -15862,6 +15956,7 @@ const MemoryModal = {
     this.editingId = null;
     this.pendingPhotos = [];
     this.workingTags = [];
+    this.uploading = 0; // abandon any in-flight count so a reopen isn't wedged
   },
 
   async onPhotoPick(e) {
@@ -15891,7 +15986,7 @@ const MemoryModal = {
         placeholder.status = 'failed';
         toast(`Photo upload failed: ${err.message || err}`, 'warn');
       } finally {
-        this.uploading--;
+        this.uploading = Math.max(0, this.uploading - 1);
         this.renderPhotoGrid();
       }
     }
@@ -16125,13 +16220,13 @@ const TimeCapsuleView = {
           <div>
             <div class="muted small">To <strong>${escape(recipient)}</strong> · From <strong>${escape(author)}</strong></div>
             ${c.title ? `<h3 class="tcp-card-title">${escape(c.title)}</h3>` : ''}
-            <div class="muted small">Sealed ${escape(formatDate(new Date(c.sealedAt).toISOString().slice(0, 10)))} · Opened ${escape(formatDate(c.unlockDate))}${wasOverride ? ' <span class="tcp-override-tag">(early reveal)</span>' : ''}</div>
+            <div class="muted small">Sealed ${escape(formatDate(isoDay(c.sealedAt)))} · Opened ${escape(formatDate(c.unlockDate))}${wasOverride ? ' <span class="tcp-override-tag">(early reveal)</span>' : ''}</div>
           </div>
           ${adminControls}
         </header>
         ${bodyHTML}
         ${photoHTML}
-        ${c.link ? `<a href="${escape(c.link)}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip">🔗 Open link</a>` : ''}
+        ${c.link ? `<a href="${escape(safeHttpUrl(c.link))}" target="_blank" rel="noopener noreferrer" class="mykids-link-chip">🔗 Open link</a>` : ''}
       </article>`;
   },
 
@@ -16143,13 +16238,13 @@ const TimeCapsuleView = {
     const now = Date.now();
     const cached = this.signedUrlCache.get(key);
     if (cached && cached.expiresAt > now) {
-      el.style.backgroundImage = `url('${cached.url}')`;
+      el.style.backgroundImage = `url('${cssUrl(cached.url)}')`;
       return;
     }
     const url = await Backend.getMediaUrl(bucket, path, 3600);
     if (!url) { el.classList.add('is-missing'); return; }
     this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
-    el.style.backgroundImage = `url('${url}')`;
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
   },
 
   // Admin override: stamp the capsule as force-revealed by this admin so
@@ -16298,6 +16393,7 @@ const TimeCapsuleModal = {
     this.editingId = null;
     this.tempPhoto = null;
     this._clearPhoto = false;
+    this.uploading = 0; // abandon any in-flight count so a reopen isn't wedged
   },
 
   async renderPhotoPreview(existing) {
@@ -16306,7 +16402,7 @@ const TimeCapsuleModal = {
     const ref = this._clearPhoto ? null : (this.tempPhoto || existing || null);
     if (!ref) { el.style.backgroundImage = ''; el.innerHTML = '<span style="opacity:.45; font-size:36px;">📷</span>'; return; }
     const url = await Backend.getMediaUrl(ref.bucket, ref.path, 3600);
-    if (url) { el.style.backgroundImage = `url('${url}')`; el.innerHTML = ''; }
+    if (url) { el.style.backgroundImage = `url('${cssUrl(url)}')`; el.innerHTML = ''; }
   },
 
   async onPhotoPick(e) {
@@ -16327,7 +16423,7 @@ const TimeCapsuleModal = {
     } catch (err) {
       toast(`Photo upload failed: ${err.message || err}`, 'warn');
     } finally {
-      this.uploading--;
+      this.uploading = Math.max(0, this.uploading - 1);
     }
   },
 
@@ -16559,7 +16655,7 @@ const StoriesView = {
       } else {
         // Generic URL — we don't iframe arbitrary domains (clickjacking /
         // XSS risk). Render as a Watch link chip instead.
-        playerHTML = `<a href="${escape(s.embedUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">▶ Watch on external site</a>`;
+        playerHTML = `<a href="${escape(safeHttpUrl(s.embedUrl))}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">▶ Watch on external site</a>`;
       }
     }
 
@@ -16935,6 +17031,7 @@ const StoryModal = {
     el.classList.remove('is-open');
     this.editingId = null;
     this.workingTags = [];
+    this.uploading = 0; // abandon any in-flight count so a reopen isn't wedged
   },
 
   // ---------- Save ----------
@@ -16969,8 +17066,11 @@ const StoryModal = {
           const result = await Backend.uploadMedia(file, {
             bucket: 'family-audio', folder: 'stories', maxBytes: this.MAX_AUDIO_BYTES,
           });
-          this.uploading--;
+          // Throw BEFORE decrementing so a failed upload doesn't decrement here
+          // and again in the catch (the old double-decrement). The catch owns
+          // the failure decrement; this line owns the success decrement.
           if (!result.ok) throw new Error(result.reason);
+          this.uploading = Math.max(0, this.uploading - 1);
           // Replace existing upload — clean up the previous one in Storage.
           if (existing?.media?.bucket) await Backend.deleteMedia(existing.media.bucket, existing.media.path);
           media = { bucket: result.bucket, path: result.path, mimeType: result.contentType || 'audio/webm' };
@@ -16990,8 +17090,8 @@ const StoryModal = {
             bucket, folder: 'stories',
             maxBytes: isVideo ? this.MAX_VIDEO_BYTES : this.MAX_AUDIO_BYTES,
           });
-          this.uploading--;
           if (!result.ok) throw new Error(result.reason);
+          this.uploading = Math.max(0, this.uploading - 1);
           if (existing?.media?.bucket) await Backend.deleteMedia(existing.media.bucket, existing.media.path);
           media = { bucket: result.bucket, path: result.path, mimeType: result.contentType || (isVideo ? 'video/mp4' : 'audio/mp3') };
           if (this.pendingFileDuration) durationSec = this.pendingFileDuration;
@@ -17193,7 +17293,7 @@ const DocumentsView = {
             ${d.category ? `<span class="document-cat">${escape(d.category)}</span>` : ''}
             <span>${escape(who)}</span>
             ${ext ? `<span>${escape(ext)}${sizeStr ? ` · ${escape(sizeStr)}` : ''}</span>` : ''}
-            <span>Added ${escape(formatDate(new Date(d.createdAt).toISOString().slice(0, 10)))}</span>
+            <span>Added ${escape(formatDate(isoDay(d.createdAt)))}</span>
           </div>
           ${d.notes ? `<div class="document-notes muted small" style="margin-top:6px;">${escape(d.notes)}</div>` : ''}
         </div>
@@ -17345,6 +17445,7 @@ const DocumentModal = {
     this.editingId = null;
     this.pendingFile = null;
     this.uploadedRef = null;
+    this.uploading = 0; // abandon any in-flight count so a reopen isn't wedged
   },
 
   onFilePick(e) {
@@ -17389,11 +17490,11 @@ const DocumentModal = {
           originalName: this.pendingFile.name,
         };
       } catch (err) {
-        this.uploading--;
+        this.uploading = Math.max(0, this.uploading - 1);
         this.error(`Upload failed: ${err.message || err}`);
         return;
       }
-      this.uploading--;
+      this.uploading = Math.max(0, this.uploading - 1);
     }
     if (!file) { this.error('Attach a file first.'); return; }
 
@@ -17769,13 +17870,13 @@ const NewsletterView = {
     const now = Date.now();
     const cached = this.signedUrlCache.get(key);
     if (cached && cached.expiresAt > now) {
-      el.style.backgroundImage = `url('${cached.url}')`;
+      el.style.backgroundImage = `url('${cssUrl(cached.url)}')`;
       return;
     }
     const url = await Backend.getMediaUrl(bucket, path, 3600);
     if (!url) { el.classList.add('is-missing'); return; }
     this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
-    el.style.backgroundImage = `url('${url}')`;
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
   },
 
   // Trigger the browser's print dialog. Modern OS print dialogs include
