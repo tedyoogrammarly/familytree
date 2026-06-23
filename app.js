@@ -10296,6 +10296,14 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.63',
+    date: '2026-06-22',
+    title: 'Drag & drop photos into new posts too',
+    changes: [
+      'The “New post” composer now has the same drag-and-drop photo upload as albums — drag image files onto the “Drag photos here” zone (or click to choose). Up to 6 photos per post; non-image files are skipped.',
+    ],
+  },
+  {
     version: '4.62',
     date: '2026-06-22',
     title: 'Drag & drop photos into albums',
@@ -16167,6 +16175,14 @@ const MemoryModal = {
     on($('#memory-form'), 'submit', (e) => { e.preventDefault(); this.save(); });
     on($('#memory-delete'), 'click', () => this.deleteCurrent());
     on($('#memory-photo-input'), 'change', (e) => this.onPhotoPick(e));
+    const dz = $('#memory-dropzone');
+    if (dz) {
+      const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+      on(dz, 'dragenter', (e) => { stop(e); dz.classList.add('is-dragover'); });
+      on(dz, 'dragover',  (e) => { stop(e); dz.classList.add('is-dragover'); });
+      on(dz, 'dragleave', (e) => { if (e.target === dz) dz.classList.remove('is-dragover'); });
+      on(dz, 'drop',      (e) => { stop(e); dz.classList.remove('is-dragover'); this.uploadFiles(e.dataTransfer && e.dataTransfer.files); });
+    }
     on($('#memory-tag-picker'),  'change', (e) => this.onTagPick(e));
     RichText.mount($('#memory-body-editor'));
     // Emoji button in body editor → reuse the same proxy pattern other
@@ -16298,13 +16314,22 @@ const MemoryModal = {
   },
 
   async onPhotoPick(e) {
-    const files = [...(e.target.files || [])];
+    const list = e.target.files;
     e.target.value = '';
-    if (!files.length) return;
+    await this.uploadFiles(list);
+  },
+
+  // Shared by the file picker and drag-and-drop. Images only, max 6 per post.
+  async uploadFiles(fileList) {
+    const all = [...(fileList || [])];
+    if (!all.length) return;
+    const imgs = all.filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!imgs.length) { toast('Only image files can be added.', 'warn'); return; }
+    if (imgs.length < all.length) toast(`Skipped ${all.length - imgs.length} non-image file(s).`, 'warn');
     const room = 6 - this.pendingPhotos.length;
     if (room <= 0) { toast('Max 6 photos per post.', 'warn'); return; }
-    const toUpload = files.slice(0, room);
-    if (files.length > room) toast(`Only first ${room} added — max 6 per post.`, 'warn');
+    const toUpload = imgs.slice(0, room);
+    if (imgs.length > room) toast(`Only ${room} added — max 6 per post.`, 'warn');
     for (const file of toUpload) {
       const placeholder = { status: 'uploading' };
       this.pendingPhotos.push(placeholder);
@@ -16354,8 +16379,8 @@ const MemoryModal = {
       });
     });
     grid.querySelectorAll('[data-mem-photo-preview]').forEach(el => MemoriesView.resolvePhotoSrc(el));
-    const lbl = $('#memory-photo-add-label');
-    if (lbl) lbl.style.display = (this.pendingPhotos.length >= 6 ? 'none' : '');
+    const dz = $('#memory-dropzone');
+    if (dz) dz.style.display = (this.pendingPhotos.length >= 6 ? 'none' : '');
   },
 
   async save() {
@@ -16569,12 +16594,12 @@ const AlbumsView = {
           </div>` : ''}
       </header>
       ${manage ? `
-        <label class="album-dropzone" id="album-dropzone">
+        <label class="photo-dropzone" id="album-dropzone">
           <input type="file" accept="image/*" id="album-photo-input" hidden multiple />
-          <span class="album-dropzone-icon" aria-hidden="true">
+          <span class="photo-dropzone-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/></svg>
           </span>
-          <span class="album-dropzone-text">Drag photos here, or <span class="album-dropzone-link">click to choose</span></span>
+          <span class="photo-dropzone-text">Drag photos here, or <span class="photo-dropzone-link">click to choose</span></span>
         </label>` : ''}
       <div id="album-upload-progress" class="album-upload-progress" hidden>
         <div class="aup-bar"><div class="aup-fill"></div></div>

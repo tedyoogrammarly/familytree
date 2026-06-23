@@ -767,9 +767,12 @@
           <div class="field" id="memory-photos-wrap">
             <span>Photos <span class="muted small">(up to 6)</span></span>
             <div class="mykids-photo-grid" id="memory-photo-grid"></div>
-            <label class="btn btn-secondary btn-sm" id="memory-photo-add-label">
-              + Add photo
+            <label class="photo-dropzone" id="memory-dropzone">
               <input type="file" accept="image/*" id="memory-photo-input" hidden multiple />
+              <span class="photo-dropzone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/></svg>
+              </span>
+              <span class="photo-dropzone-text">Drag photos here, or <span class="photo-dropzone-link">click to choose</span></span>
             </label>
           </div>
           <p class="form-error" id="memory-error" role="alert" hidden></p>
