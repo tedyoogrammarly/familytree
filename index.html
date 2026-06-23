@@ -106,7 +106,6 @@
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
           <button class="nav-tab" data-view="memories" role="tab">Memories</button>
-          <button class="nav-tab" data-view="albums" role="tab">Albums</button>
           <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
           <button class="nav-tab" data-view="recipes" role="tab">Recipes</button>
           <button class="nav-tab" data-view="timecapsule" role="tab" hidden>Time Capsule</button>
@@ -674,18 +673,28 @@
          authenticated views. Each post: date + rich-text body + up to
          6 photos + multi-tag of people (members or friend household
          persons). Photos in family-photos bucket (Wave 1 storage). -->
+    <!-- ===== MEMORIES VIEW (v4.58) — one page, two sub-tabs: Posts + Albums -->
     <main id="view-memories" class="view" hidden>
       <div class="container">
         <div class="page-head">
           <div>
             <h2><span class="page-emoji" data-page-emoji="memories"></span>Memories</h2>
-            <p>Moments worth holding on to — quick notes, a few photos, who was there.</p>
+            <p id="memories-subtitle">Moments worth holding on to — quick notes, a few photos, who was there.</p>
           </div>
           <div class="page-head-actions">
             <button class="btn btn-primary btn-sm" id="btn-memory-add">+ New post</button>
+            <button class="btn btn-primary btn-sm" id="btn-album-add" hidden>+ New album</button>
           </div>
         </div>
-        <section class="panel memories-panel">
+
+        <!-- Sub-tabs -->
+        <div class="member-tabs" role="tablist">
+          <button class="member-tab is-active" data-mem-subtab="posts"  role="tab">Posts</button>
+          <button class="member-tab"           data-mem-subtab="albums" role="tab">Albums</button>
+        </div>
+
+        <!-- Posts sub-panel (the feed) -->
+        <section id="memories-subpanel" class="panel memories-panel">
           <header class="panel-head">
             <div>
               <h3 id="memories-list-title">All memories</h3>
@@ -703,32 +712,20 @@
             </div>
           </div>
         </section>
-      </div>
-    </main>
 
-    <!-- ===== ALBUMS VIEW (v4.58) — owned photo collections, open to all -->
-    <main id="view-albums" class="view" hidden>
-      <div class="container">
-        <div class="page-head">
-          <div>
-            <h2><span class="page-emoji" data-page-emoji="albums"></span>Albums</h2>
-            <p>Photo collections — trips, birthdays, everyday moments. Make an album, add your photos.</p>
+        <!-- Albums sub-panel (the gallery) -->
+        <div id="albums-subpanel" hidden>
+          <section id="albums-gallery" class="albums-gallery"></section>
+          <div id="albums-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No albums yet</h3>
+              <p>Start the first one — give it a name and add a few photos.</p>
+              <button class="btn btn-primary" id="btn-album-add-first">+ Create the first album</button>
+            </div>
           </div>
-          <div class="page-head-actions">
-            <button class="btn btn-primary btn-sm" id="btn-album-add">+ New album</button>
-          </div>
+          <!-- Album detail (hidden until an album is opened) -->
+          <section id="album-detail" class="album-detail" hidden></section>
         </div>
-        <!-- Gallery (list of albums) -->
-        <section id="albums-gallery" class="albums-gallery"></section>
-        <div id="albums-empty" class="tree-empty" hidden>
-          <div class="tree-empty-card">
-            <h3>No albums yet</h3>
-            <p>Start the first one — give it a name and add a few photos.</p>
-            <button class="btn btn-primary" id="btn-album-add-first">+ Create the first album</button>
-          </div>
-        </div>
-        <!-- Album detail (hidden until an album is opened) -->
-        <section id="album-detail" class="album-detail" hidden></section>
       </div>
     </main>
 

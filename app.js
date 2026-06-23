@@ -3677,7 +3677,6 @@ const Views = {
     $('#view-mykids').hidden       = name !== 'mykids';
     $('#view-recipes').hidden      = name !== 'recipes';
     $('#view-memories').hidden     = name !== 'memories';
-    $('#view-albums').hidden       = name !== 'albums';
     $('#view-timecapsule').hidden  = name !== 'timecapsule';
     $('#view-stories').hidden      = name !== 'stories';
     $('#view-admin').hidden        = name !== 'admin';
@@ -3711,8 +3710,7 @@ const Views = {
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
-      if (name === 'memories')  MemoriesView.refresh();
-      if (name === 'albums')    AlbumsView.render();
+      if (name === 'memories')  MemoriesView.showSubtab(MemoriesView.subtab);
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
       if (name === 'tree')      Canvas.renderAll();
@@ -10298,6 +10296,14 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.59',
+    date: '2026-06-22',
+    title: 'Memories + Albums combined into one page',
+    changes: [
+      'Memories and Albums now live under a single “Memories” tab with two sub-tabs — “Posts” (the feed) and “Albums” (the gallery) — instead of two separate top-level tabs. Same features, one less tab in the bar; the “+ New post” / “+ New album” button swaps to match whichever sub-tab you’re on.',
+    ],
+  },
+  {
     version: '4.58',
     date: '2026-06-22',
     title: 'Albums + Memories opened to everyone',
@@ -15720,6 +15726,7 @@ const RecipeModal = {
 const MemoriesView = {
   searchQuery: '',
   signedUrlCache: new Map(),
+  subtab: 'posts',                 // v4.58: 'posts' (feed) | 'albums' (gallery)
 
   init() {
     on($('#btn-memory-add'),       'click', () => MemoryModal.openAdd());
@@ -15731,7 +15738,28 @@ const MemoriesView = {
         this.render();
       });
     }
+    // v4.58: Posts | Albums sub-tabs share one page.
+    $$('[data-mem-subtab]').forEach(b => on(b, 'click', () => this.showSubtab(b.dataset.memSubtab)));
     MemoryModal.init();
+  },
+
+  // Switch between the Posts feed and the Albums gallery sub-panels, toggling
+  // the matching "+ New …" action button + subtitle, then render that panel.
+  showSubtab(which) {
+    this.subtab = (which === 'albums') ? 'albums' : 'posts';
+    $$('[data-mem-subtab]').forEach(b => b.classList.toggle('is-active', b.dataset.memSubtab === this.subtab));
+    const postsPanel  = $('#memories-subpanel');
+    const albumsPanel = $('#albums-subpanel');
+    if (postsPanel)  postsPanel.hidden  = this.subtab !== 'posts';
+    if (albumsPanel) albumsPanel.hidden = this.subtab !== 'albums';
+    const addPost  = $('#btn-memory-add'); if (addPost)  addPost.hidden  = this.subtab !== 'posts';
+    const addAlbum = $('#btn-album-add');  if (addAlbum) addAlbum.hidden = this.subtab !== 'albums';
+    const sub = $('#memories-subtitle');
+    if (sub) sub.textContent = this.subtab === 'albums'
+      ? 'Photo collections — trips, birthdays, everyday moments. Make an album, add your photos.'
+      : 'Moments worth holding on to — quick notes, a few photos, who was there.';
+    if (this.subtab === 'albums') AlbumsView.render();
+    else this.refresh();
   },
 
   // v4.58: memories now live in dedicated tables (open feed). The view holds
