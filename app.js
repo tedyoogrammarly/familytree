@@ -328,6 +328,122 @@ const Backend = {
   },
 };
 
+// -------------------- ALBUMS DATA ACCESS (v4.58) --------------------
+// CRUD against the dedicated albums/* tables. RLS enforces permissions
+// server-side; callers also gate UI on ownership. Every method degrades
+// gracefully (returns empty/null) if the tables aren't there yet, so the
+// front-end is safe to ship before the SQL migration is applied.
+const AlbumsApi = {
+  _warn(where, error) { if (error) console.warn(`AlbumsApi.${where}:`, error.message); },
+
+  async listAlbums() {
+    if (!Backend.client) return [];
+    const { data, error } = await Backend.client
+      .from('albums')
+      .select('id, title, description, event_date, cover_photo_id, created_by, created_at')
+      .order('created_at', { ascending: false });
+    if (error) { this._warn('listAlbums', error); return []; }
+    return data || [];
+  },
+
+  // One album with its photos + comments. Returns { album, photos, comments } or null.
+  async getAlbum(id) {
+    if (!Backend.client || !id) return null;
+    const a = await Backend.client.from('albums').select('*').eq('id', id).maybeSingle();
+    if (a.error || !a.data) { this._warn('getAlbum', a.error); return null; }
+    const p = await Backend.client.from('album_photos')
+      .select('id, bucket, path, uploaded_by, sort_order, created_at')
+      .eq('album_id', id).order('sort_order', { ascending: true }).order('created_at', { ascending: true });
+    const c = await Backend.client.from('album_comments')
+      .select('id, photo_id, author, body, created_at')
+      .eq('album_id', id).order('created_at', { ascending: true });
+    return { album: a.data, photos: p.data || [], comments: c.data || [] };
+  },
+
+  async createAlbum({ title, description, event_date }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await Backend.client.from('albums')
+      .insert({ title, description: description || null, event_date: event_date || null })
+      .select('id').single();
+    if (error) { this._warn('createAlbum', error); return { ok: false, reason: error.message }; }
+    return { ok: true, id: data.id };
+  },
+
+  async updateAlbum(id, { title, description, event_date, cover_photo_id }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const patch = { updated_at: new Date().toISOString() };
+    if (title !== undefined)          patch.title = title;
+    if (description !== undefined)    patch.description = description || null;
+    if (event_date !== undefined)     patch.event_date = event_date || null;
+    if (cover_photo_id !== undefined) patch.cover_photo_id = cover_photo_id;
+    const { error } = await Backend.client.from('albums').update(patch).eq('id', id);
+    if (error) { this._warn('updateAlbum', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  async deleteAlbum(id) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('albums').delete().eq('id', id);
+    if (error) { this._warn('deleteAlbum', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  // photos: array of { bucket, path }. Returns { ok }.
+  async addPhotos(albumId, photos) {
+    if (!Backend.client || !photos.length) return { ok: true };
+    const rows = photos.map((p, i) => ({ album_id: albumId, bucket: p.bucket, path: p.path, sort_order: i }));
+    const { error } = await Backend.client.from('album_photos').insert(rows);
+    if (error) { this._warn('addPhotos', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  async removePhoto(photoId) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('album_photos').delete().eq('id', photoId);
+    if (error) { this._warn('removePhoto', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  async addComment(albumId, photoId, body) {
+    if (!Backend.client) return { ok: false };
+    const { data, error } = await Backend.client.from('album_comments')
+      .insert({ album_id: albumId, photo_id: photoId || null, body })
+      .select('id, photo_id, author, body, created_at').single();
+    if (error) { this._warn('addComment', error); return { ok: false, reason: error.message }; }
+    return { ok: true, comment: data };
+  },
+
+  async deleteComment(commentId) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('album_comments').delete().eq('id', commentId);
+    if (error) { this._warn('deleteComment', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+};
+
+// Resolve an auth user id to a display name via member_accounts → members.
+// Cached in-session. Falls back to "Family member". Async warm-up: call
+// AuthorNames.warm() once on login so the synchronous nameFor() has data.
+const AuthorNames = {
+  _byUser: new Map(),   // user_id -> displayName
+  async warm() {
+    if (!Backend.client) return;
+    const { data } = await Backend.client.from('member_accounts').select('user_id, member_id');
+    for (const row of (data || [])) {
+      const m = Store.byId(row.member_id);
+      if (m) this._byUser.set(row.user_id, displayName(m));
+    }
+    // include myself even if my member record is the bootstrap admin
+    if (Backend.user?.id && !this._byUser.has(Backend.user.id)) {
+      this._byUser.set(Backend.user.id, MemoriesView.currentAuthorName?.() || 'Admin');
+    }
+  },
+  nameFor(userId) {
+    if (!userId) return 'Family member';
+    return this._byUser.get(userId) || 'Family member';
+  },
+};
+
 // -------------------- ethnicities --------------------
 // Common ethnicities + ISO 3166 country code → flag emoji (regional indicators).
 const ETHNICITIES = [
@@ -8683,6 +8799,9 @@ async function onSignedIn() {
   try { Backend.lastSavedHash = hashStringFast(JSON.stringify(Store.state)); } catch {}
 
   Auth.applyAccount();
+  // v4.58: warm the auth-id → display-name cache for Albums/Memories author
+  // labels. Fire-and-forget; views re-render with names once it resolves.
+  AuthorNames.warm().catch(e => console.warn('AuthorNames.warm:', e.message || e));
   if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
     TreeFilters.refreshGroupOptions();
   }
