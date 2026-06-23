@@ -5993,6 +5993,24 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .album-upload-progress .aup-label { font-size: 12.5px; color: var(--ink-400); white-space: nowrap; }
 
+/* v4.62: drag-and-drop photo upload zone */
+.album-dropzone {
+  display: flex; align-items: center; justify-content: center; gap: var(--space-3);
+  width: 100%; padding: var(--space-5); margin: 0 0 var(--space-4);
+  border: 1.5px dashed var(--ink-200); border-radius: var(--radius);
+  background: var(--paper); color: var(--ink-400); cursor: pointer; text-align: center;
+  transition: border-color .18s var(--ease-out), background .18s var(--ease-out), color .18s var(--ease-out);
+}
+.album-dropzone * { pointer-events: none; }   /* drag events fire on the zone, not its children */
+.album-dropzone:hover { border-color: var(--brand-300); color: var(--brand-700); }
+.album-dropzone.is-dragover {
+  border-color: var(--brand-500); background: var(--tint-50); color: var(--brand-700);
+  box-shadow: var(--ring-brand);
+}
+.album-dropzone-icon { display: inline-flex; color: var(--brand-500); }
+.album-dropzone-text { font-size: 13.5px; }
+.album-dropzone-link { color: var(--brand-700); font-weight: 600; text-decoration: underline; }
+
 /* Comments (album-level + per-photo) */
 .album-comments, .album-photo-comments-inner { margin-top: var(--space-6); border-top: 1px solid var(--hairline); padding-top: var(--space-4); }
 .album-comments-title { font-size: 14px; margin: 0 0 var(--space-3); color: var(--brand-700); text-transform: uppercase; letter-spacing: 0.04em; }
