@@ -444,6 +444,88 @@ const AuthorNames = {
   },
 };
 
+// -------------------- MEMORIES DATA ACCESS (v4.58) --------------------
+// CRUD against the dedicated memories/* tables (open feed). Returns objects
+// shaped like the legacy blob so MemoriesView renders unchanged. Degrades
+// gracefully (returns []/false) if the tables aren't there yet.
+const MemoriesApi = {
+  _warn(w, e) { if (e) console.warn(`MemoriesApi.${w}:`, e.message); },
+
+  // Returns array shaped like the legacy blob memory objects:
+  // { id, date, body, tags, photos, createdAt, createdBy,
+  //   reactions:[{emoji,userId,createdAt}], comments:[{id,body,authorId,authorName,createdAt}] }
+  async list() {
+    if (!Backend.client) return [];
+    const mem = await Backend.client.from('memories')
+      .select('id, author, date, body, tags, photos, created_at')
+      .order('date', { ascending: false }).order('created_at', { ascending: false });
+    if (mem.error) { this._warn('list', mem.error); return []; }
+    const memories = mem.data || [];
+    if (!memories.length) return [];
+    const ids = memories.map(m => m.id);
+    const rx = await Backend.client.from('memory_reactions').select('memory_id, user_id, emoji, created_at').in('memory_id', ids);
+    const cm = await Backend.client.from('memory_comments').select('id, memory_id, author, body, created_at').in('memory_id', ids);
+    const rxBy = new Map(), cmBy = new Map();
+    for (const r of (rx.data || [])) { if (!rxBy.has(r.memory_id)) rxBy.set(r.memory_id, []); rxBy.get(r.memory_id).push(r); }
+    for (const c of (cm.data || [])) { if (!cmBy.has(c.memory_id)) cmBy.set(c.memory_id, []); cmBy.get(c.memory_id).push(c); }
+    return memories.map(m => ({
+      id: m.id, date: m.date, body: m.body || '', tags: m.tags || [], photos: m.photos || [],
+      createdAt: new Date(m.created_at).getTime(), createdBy: m.author,
+      reactions: (rxBy.get(m.id) || []).map(r => ({ emoji: r.emoji, userId: r.user_id, createdAt: new Date(r.created_at).getTime() })),
+      comments: (cmBy.get(m.id) || [])
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+        .map(c => ({ id: c.id, body: c.body, authorId: c.author, authorName: AuthorNames.nameFor(c.author), createdAt: new Date(c.created_at).getTime() })),
+    }));
+  },
+
+  async create({ date, body, tags, photos }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await Backend.client.from('memories')
+      .insert({ date, body: body || null, tags: tags || [], photos: photos || [] }).select('id').single();
+    if (error) { this._warn('create', error); return { ok: false, reason: error.message }; }
+    return { ok: true, id: data.id };
+  },
+  async update(id, { date, body, tags, photos }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { error } = await Backend.client.from('memories')
+      .update({ date, body: body || null, tags: tags || [], photos: photos || [] }).eq('id', id);
+    if (error) { this._warn('update', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+  async remove(id) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memories').delete().eq('id', id);
+    if (error) { this._warn('remove', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+  async addReaction(memoryId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_reactions').insert({ memory_id: memoryId, emoji });
+    if (error) { this._warn('addReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async removeReaction(memoryId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_reactions').delete()
+      .eq('memory_id', memoryId).eq('user_id', Backend.user?.id).eq('emoji', emoji);
+    if (error) { this._warn('removeReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async addComment(memoryId, body) {
+    if (!Backend.client) return { ok: false };
+    const { data, error } = await Backend.client.from('memory_comments')
+      .insert({ memory_id: memoryId, body }).select('id, author, body, created_at').single();
+    if (error) { this._warn('addComment', error); return { ok: false }; }
+    return { ok: true, comment: data };
+  },
+  async deleteComment(commentId) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_comments').delete().eq('id', commentId);
+    if (error) { this._warn('deleteComment', error); return { ok: false }; }
+    return { ok: true };
+  },
+};
+
 // -------------------- ethnicities --------------------
 // Common ethnicities + ISO 3166 country code → flag emoji (regional indicators).
 const ETHNICITIES = [
@@ -3629,7 +3711,7 @@ const Views = {
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
-      if (name === 'memories')  MemoriesView.render();
+      if (name === 'memories')  MemoriesView.refresh();
       if (name === 'albums')    AlbumsView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
@@ -15642,9 +15724,13 @@ const MemoriesView = {
     MemoryModal.init();
   },
 
-  list() {
-    return Array.isArray(Store.state.memories) ? Store.state.memories : [];
-  },
+  // v4.58: memories now live in dedicated tables (open feed). The view holds
+  // a cache loaded from MemoriesApi; render() draws from it. Mutations call
+  // refresh() (load + render); the search box calls render() (no refetch).
+  _items: [],
+  list() { return this._items; },
+  async load() { this._items = await MemoriesApi.list(); },
+  async refresh() { await this.load(); this.render(); },
 
   // Filter + sort. Sort by date descending (newest first), falling back
   // to createdAt for posts that share a date.
@@ -15726,8 +15812,9 @@ const MemoriesView = {
   // Per design decision: Family + Admin can react and comment; User role
   // can view but not engage. Bootstrap admin (no member record) still
   // passes because isAdmin() handles that case.
+  // v4.58: open feed — any signed-in user can react & comment (was Admin+Family).
   canEngage() {
-    return Auth.isAdmin() || Auth.isFamily();
+    return !!Backend.user;
   },
   currentUserId() {
     return Backend.user?.id || null;
@@ -15761,9 +15848,9 @@ const MemoriesView = {
     return new Set((m.reactions || []).filter(r => r.userId === me).map(r => r.emoji));
   },
 
-  toggleReaction(memId, emoji) {
+  async toggleReaction(memId, emoji) {
     if (!this.canEngage()) {
-      toast('Sign in with a Family or Admin role to react.', 'warn');
+      toast('Sign in to react.', 'warn');
       return;
     }
     const m = this.list().find(x => x.id === memId); if (!m) return;
@@ -15772,12 +15859,16 @@ const MemoriesView = {
     if (!Array.isArray(m.reactions)) m.reactions = [];
     const existingIdx = m.reactions.findIndex(r => r.userId === me && r.emoji === emoji);
     if (existingIdx >= 0) {
-      m.reactions.splice(existingIdx, 1);
+      m.reactions.splice(existingIdx, 1);          // optimistic
+      this.render();
+      const res = await MemoriesApi.removeReaction(memId, emoji);
+      if (!res.ok) this.refresh();                 // reconcile on failure
     } else {
-      m.reactions.push({ emoji, userId: me, createdAt: Date.now() });
+      m.reactions.push({ emoji, userId: me, createdAt: Date.now() });  // optimistic
+      this.render();
+      const res = await MemoriesApi.addReaction(memId, emoji);
+      if (!res.ok) this.refresh();
     }
-    Store.save();
-    this.render();
   },
 
   // Open the shared EmojiPicker. Picked emoji goes through toggleReaction
@@ -15786,7 +15877,7 @@ const MemoriesView = {
   // doesn't close it instantly.
   openReactionPicker(btn) {
     if (!this.canEngage()) {
-      toast('Sign in with a Family or Admin role to react.', 'warn');
+      toast('Sign in to react.', 'warn');
       return;
     }
     const memId = btn.dataset.memId;
@@ -15808,38 +15899,30 @@ const MemoriesView = {
     EmojiPicker.open(proxy, btn);
   },
 
-  // ---------- Comments (v4.46) ----------
-  addComment(memId) {
+  // ---------- Comments (v4.46; tables in v4.58) ----------
+  async addComment(memId) {
     if (!this.canEngage()) return;
     const form = document.querySelector(`form[data-comment-submit="${memId}"]`);
     if (!form) return;
     const textarea = form.querySelector('textarea');
     const body = (textarea.value || '').trim();
     if (!body) return;
-    const m = this.list().find(x => x.id === memId); if (!m) return;
-    if (!Array.isArray(m.comments)) m.comments = [];
-    m.comments.push({
-      id: uid('cmt'),
-      body,
-      authorId:   this.currentUserId(),
-      authorName: this.currentAuthorName(),
-      createdAt:  Date.now(),
-    });
-    Store.save();
+    const res = await MemoriesApi.addComment(memId, body);
+    if (!res.ok) { toast('Could not post comment.', 'warn'); return; }
     textarea.value = '';
-    this.render();
+    await this.refresh();
   },
 
-  deleteComment(memId, commentId) {
+  async deleteComment(memId, commentId) {
     const m = this.list().find(x => x.id === memId); if (!m) return;
     const c = (m.comments || []).find(x => x.id === commentId); if (!c) return;
     const me = this.currentUserId();
     const isOwn = c.authorId && me && c.authorId === me;
     if (!isOwn && !Auth.isAdmin()) return;
     if (!confirm('Delete this comment?')) return;
-    m.comments = m.comments.filter(x => x.id !== commentId);
-    Store.save();
-    this.render();
+    const res = await MemoriesApi.deleteComment(commentId);
+    if (!res.ok) { toast('Could not delete comment.', 'warn'); return; }
+    await this.refresh();
   },
 
   postHTML(m) {
@@ -15857,7 +15940,10 @@ const MemoriesView = {
           return label ? `<span class="memory-tag">${escape(label)}</span>` : '';
         }).join('')}</div>`
       : '';
-    const actions = Auth.isAdmin() ? `
+    // v4.58: a post's author can edit/delete their own; admin can manage any.
+    const meId = this.currentUserId();
+    const canManage = (m.createdBy && meId && m.createdBy === meId) || Auth.isAdmin();
+    const actions = canManage ? `
       <div class="memory-actions">
         <button class="btn btn-ghost btn-sm"        type="button" data-mem-edit="${escape(m.id)}">Edit</button>
         <button class="btn btn-danger-ghost btn-sm" type="button" data-mem-delete="${escape(m.id)}">Delete</button>
@@ -15962,16 +16048,18 @@ const MemoriesView = {
   },
 
   async deletePost(id) {
-    if (!Auth.isAdmin()) return;
     const m = this.list().find(x => x.id === id); if (!m) return;
+    const me = this.currentUserId();
+    const canManage = (m.createdBy && me && m.createdBy === me) || Auth.isAdmin();
+    if (!canManage) return;
     if (!confirm('Delete this post? Photos attached to it are also removed from storage.')) return;
     for (const p of (m.photos || [])) {
       await Backend.deleteMedia(p.bucket, p.path);
     }
-    Store.state.memories = this.list().filter(x => x.id !== id);
-    Store.save();
+    const res = await MemoriesApi.remove(id);
+    if (!res.ok) { toast('Could not delete post.', 'warn'); return; }
     toast('Post deleted.');
-    this.render();
+    await this.refresh();
   },
 };
 
@@ -16088,7 +16176,7 @@ const MemoryModal = {
   },
 
   openAdd() {
-    if (!Auth.isAdmin()) return;
+    if (!Backend.user) { toast('Sign in to post.', 'warn'); return; }   // v4.58: open to all
     this.editingId = null;
     this.pendingPhotos = [];
     this.workingTags = [];
@@ -16106,8 +16194,10 @@ const MemoryModal = {
   },
 
   openEdit(id) {
-    if (!Auth.isAdmin()) return;
-    const m = (Store.state.memories || []).find(x => x.id === id); if (!m) return;
+    const m = MemoriesView.list().find(x => x.id === id); if (!m) return;
+    const me = Backend.user?.id;
+    const canManage = (m.createdBy && me && m.createdBy === me) || Auth.isAdmin();
+    if (!canManage) return;   // v4.58: author or admin only
     this.editingId = id;
     this.pendingPhotos = (m.photos || []).map(p => ({ status: 'saved', bucket: p.bucket, path: p.path }));
     this.workingTags = (m.tags || []).slice();
@@ -16205,7 +16295,7 @@ const MemoryModal = {
   },
 
   async save() {
-    if (!Auth.isAdmin()) return;
+    if (!Backend.user) return;   // v4.58: any signed-in user
     if (this.uploading > 0) {
       $('#memory-error').textContent = 'Wait for photos to finish uploading.';
       $('#memory-error').hidden = false;
@@ -16228,30 +16318,19 @@ const MemoryModal = {
       $('#memory-error').hidden = false;
       return;
     }
-    if (!Array.isArray(Store.state.memories)) Store.state.memories = [];
-    const existing = this.editingId
-      ? Store.state.memories.find(m => m.id === this.editingId)
-      : null;
-    const record = {
-      ...(existing || {}),
-      id: this.editingId || uid('mem'),
-      date,
-      body,
-      photos,
-      tags: this.workingTags.slice(),
-      createdAt: existing?.createdAt || Date.now(),
-      createdBy: existing?.createdBy || Backend.user?.id || null,
-    };
-    if (existing) {
-      const idx = Store.state.memories.findIndex(m => m.id === this.editingId);
-      Store.state.memories[idx] = record;
-    } else {
-      Store.state.memories.push(record);
+    // v4.58: persist via the memories tables (RLS enforces author/admin).
+    const payload = { date, body, tags: this.workingTags.slice(), photos };
+    const res = this.editingId
+      ? await MemoriesApi.update(this.editingId, payload)
+      : await MemoriesApi.create(payload);
+    if (!res.ok) {
+      $('#memory-error').textContent = res.reason || 'Could not save your post.';
+      $('#memory-error').hidden = false;
+      return;
     }
-    Store.save();
     toast(this.editingId ? 'Post saved.' : 'Post added.');
     this.close();
-    MemoriesView.render();
+    await MemoriesView.refresh();
   },
 
   async deleteCurrent() {
@@ -18156,14 +18235,17 @@ const NewsletterView = {
       return;
     }
     this.ensureDefaults();
-    const data = this.compile();
     const host = $('#newsletter-preview');
     if (!host) return;
-    host.innerHTML = this.renderHTML(data);
-    // Resolve image signed URLs on the next tick so the preview shows
-    // the actual photos. Each section that includes photos uses the
-    // same data-newsletter-photo placeholder pattern.
-    host.querySelectorAll('[data-newsletter-photo]').forEach(el => this.resolvePhotoSrc(el));
+    // v4.58: warm the memories cache (now table-backed) before compiling.
+    MemoriesView.load().then(() => {
+      const data = this.compile();
+      host.innerHTML = this.renderHTML(data);
+      // Resolve image signed URLs on the next tick so the preview shows
+      // the actual photos. Each section that includes photos uses the
+      // same data-newsletter-photo placeholder pattern.
+      host.querySelectorAll('[data-newsletter-photo]').forEach(el => this.resolvePhotoSrc(el));
+    });
   },
 
   // Compile: pull all sources, filter by date range, return a structured
@@ -18175,7 +18257,9 @@ const NewsletterView = {
     const inRange = (iso) => !!iso && iso >= from && iso <= to;
 
     // --- Memory posts (date field) ---
-    const memories = (Store.state.memories || [])
+    // v4.58: memories live in tables now; read MemoriesView's loaded cache
+    // (warmed by render()/copyAsText() before compile()).
+    const memories = (MemoriesView.list() || [])
       .filter(m => inRange(m.date))
       .sort((a, z) => (z.date || '').localeCompare(a.date || ''));
 
@@ -18449,6 +18533,7 @@ const NewsletterView = {
   // Plain-text version for "Copy as email." Photos and rich markup are
   // omitted; only the words. Each section becomes a labeled block.
   async copyAsText() {
+    await MemoriesView.load();   // v4.58: ensure table-backed memories are loaded
     const data = this.compile();
     const stripHtml = (html) => (html || '')
       .replace(/<br\s*\/?>/gi, '\n')
