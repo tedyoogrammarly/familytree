@@ -3595,6 +3595,7 @@ const Views = {
     $('#view-mykids').hidden       = name !== 'mykids';
     $('#view-recipes').hidden      = name !== 'recipes';
     $('#view-memories').hidden     = name !== 'memories';
+    $('#view-albums').hidden       = name !== 'albums';
     $('#view-timecapsule').hidden  = name !== 'timecapsule';
     $('#view-stories').hidden      = name !== 'stories';
     $('#view-admin').hidden        = name !== 'admin';
@@ -3629,6 +3630,7 @@ const Views = {
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
       if (name === 'memories')  MemoriesView.render();
+      if (name === 'albums')    AlbumsView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
       if (name === 'tree')      Canvas.renderAll();
@@ -9544,6 +9546,7 @@ async function init() {
   MyKidsView.init();
   RecipesView.init();
   MemoriesView.init();
+  AlbumsView.init();
   TimeCapsuleView.init();
   StoriesView.init();
   NewsletterView.init();
@@ -16256,6 +16259,377 @@ const MemoryModal = {
     const id = this.editingId;
     this.close();
     MemoriesView.deletePost(id);
+  },
+};
+
+// -------------------- ALBUMS VIEW (v4.58) --------------------
+// Owned photo collections, open to every signed-in user. Gallery = newest
+// album as a hero banner + a cover-card grid below (layout B). Detail = a
+// photo grid with the shared lightbox, plus album- and photo-level comments.
+// Data lives in the albums/* tables via AlbumsApi; photos in family-photos.
+const AlbumsView = {
+  signedUrlCache: new Map(),   // bucket|path -> { url, expiresAt }
+  albums: [],                   // cached list for the gallery
+  coverByAlbum: new Map(),      // album_id -> { bucket, path } | null
+  current: null,                // { album, photos, comments } when a detail is open
+  _activePhotoId: null,
+
+  init() {
+    on($('#btn-album-add'),       'click', () => AlbumModal.openAdd());
+    on($('#btn-album-add-first'), 'click', () => AlbumModal.openAdd());
+    AlbumModal.init();
+  },
+
+  canCreate() { return !!Backend.user; },          // any logged-in user
+  isOwner(album) { return album && Backend.user && album.created_by === Backend.user.id; },
+  canManage(album) { return this.isOwner(album) || Auth.isAdmin(); },
+
+  // ---------- Gallery (layout B: hero + grid) ----------
+  async render() {
+    // Always return to the gallery (not a stale detail view) on tab entry.
+    this.current = null;
+    this._activePhotoId = null;
+    const detail = $('#album-detail');
+    if (detail) { detail.hidden = true; detail.innerHTML = ''; }
+    const gallery = $('#albums-gallery');
+    const empty   = $('#albums-empty');
+    if (!gallery) return;
+    this.albums = await AlbumsApi.listAlbums();
+    await this._resolveCovers();
+    if (!this.albums.length) { gallery.innerHTML = ''; if (empty) empty.hidden = false; return; }
+    if (empty) empty.hidden = true;
+    const [hero, ...rest] = this.albums;
+    gallery.innerHTML = `
+      ${this.heroHTML(hero)}
+      ${rest.length ? `<div class="albums-grid">${rest.map(a => this.cardHTML(a)).join('')}</div>` : ''}
+    `;
+    gallery.querySelectorAll('[data-album-open]').forEach(el => {
+      on(el, 'click', () => this.openAlbum(el.dataset.albumOpen));
+      on(el, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openAlbum(el.dataset.albumOpen); } });
+    });
+    gallery.querySelectorAll('[data-album-cover]').forEach(el => this.resolvePhotoSrc(el));
+  },
+
+  // For each album, resolve a cover ref (explicit cover_photo_id, else newest
+  // photo). One light query per album; albums are few. Cached across renders.
+  async _resolveCovers() {
+    for (const a of this.albums) {
+      if (this.coverByAlbum.has(a.id)) continue;
+      let ref = null;
+      if (Backend.client) {
+        let q = Backend.client.from('album_photos').select('bucket, path').eq('album_id', a.id);
+        q = a.cover_photo_id ? q.eq('id', a.cover_photo_id) : q.order('created_at', { ascending: false }).limit(1);
+        const { data } = await q;
+        if (data && data[0]) ref = { bucket: data[0].bucket, path: data[0].path };
+      }
+      this.coverByAlbum.set(a.id, ref);
+    }
+  },
+
+  metaLine(a) {
+    const by = AuthorNames.nameFor(a.created_by);
+    const date = a.event_date ? formatDate(a.event_date) : '';
+    return `by ${escape(by)}${date ? ' · ' + escape(date) : ''}`;
+  },
+
+  coverAttrs(a) {
+    const ref = this.coverByAlbum.get(a.id);
+    return ref
+      ? `data-album-cover data-bucket="${escape(ref.bucket)}" data-path="${escape(ref.path)}"`
+      : 'data-album-cover'; // no photo → placeholder via CSS .is-missing
+  },
+
+  heroHTML(a) {
+    return `
+      <article class="album-hero" data-album-open="${escape(a.id)}" tabindex="0" role="button" aria-label="Open album ${escape(a.title)}">
+        <div class="album-hero-cover" ${this.coverAttrs(a)}></div>
+        <div class="album-hero-cap">
+          <h3 class="album-hero-title">${escape(a.title)}</h3>
+          <p class="album-hero-meta">${this.metaLine(a)}</p>
+        </div>
+      </article>`;
+  },
+
+  cardHTML(a) {
+    return `
+      <article class="album-card" data-album-open="${escape(a.id)}" tabindex="0" role="button" aria-label="Open album ${escape(a.title)}">
+        <div class="album-card-cover" ${this.coverAttrs(a)}></div>
+        <div class="album-card-body">
+          <h4 class="album-card-title">${escape(a.title)}</h4>
+          <p class="album-card-meta">${this.metaLine(a)}</p>
+        </div>
+      </article>`;
+  },
+
+  // Shared signed-URL resolver (same shape as MemoriesView.resolvePhotoSrc).
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket, path = el.dataset.path;
+    if (!bucket || !path) { el.classList.add('is-missing'); return; }
+    const key = `${bucket}|${path}`, now = Date.now();
+    const cached = this.signedUrlCache.get(key);
+    if (cached && cached.expiresAt > now) { el.style.backgroundImage = `url('${cssUrl(cached.url)}')`; return; }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
+  },
+
+  // ---------- Detail ----------
+  async openAlbum(id) {
+    const data = await AlbumsApi.getAlbum(id);
+    if (!data) { toast("Couldn't open that album.", 'warn'); return; }
+    this.current = data;
+    this._activePhotoId = null;
+    $('#albums-gallery').innerHTML = '';
+    const empty = $('#albums-empty'); if (empty) empty.hidden = true;
+    this.renderDetail();
+  },
+
+  backToGallery() { this.current = null; this._activePhotoId = null; this.render(); },
+
+  renderDetail() {
+    const wrap = $('#album-detail');
+    if (!wrap || !this.current) return;
+    const { album, photos } = this.current;
+    const albumComments = this.current.comments.filter(c => !c.photo_id);
+    const manage = this.canManage(album);
+    const photosHTML = photos.map((p, i) => `
+      <div class="album-photo" data-album-photo data-bucket="${escape(p.bucket)}" data-path="${escape(p.path)}" data-photo-idx="${i}" data-photo-id="${escape(p.id)}" tabindex="0" role="button" aria-label="Photo ${i + 1}">
+        ${manage ? `<button type="button" class="album-photo-x" data-remove-photo="${escape(p.id)}" aria-label="Remove photo">×</button>` : ''}
+      </div>`).join('');
+    wrap.hidden = false;
+    wrap.innerHTML = `
+      <button type="button" class="btn btn-ghost btn-sm album-back" id="album-back">← All albums</button>
+      <header class="album-detail-head">
+        <div>
+          <h3 class="album-detail-title">${escape(album.title)}</h3>
+          <p class="album-detail-meta">${this.metaLine(album)}</p>
+          ${album.description ? `<p class="album-detail-desc">${escape(album.description).replace(/\n/g, '<br>')}</p>` : ''}
+        </div>
+        ${manage ? `
+          <div class="album-detail-actions">
+            <label class="btn btn-secondary btn-sm" id="album-photo-add-label">+ Add photos
+              <input type="file" accept="image/*" id="album-photo-input" hidden multiple />
+            </label>
+            <button class="btn btn-ghost btn-sm"        type="button" id="album-edit">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" type="button" id="album-delete">Delete album</button>
+          </div>` : ''}
+      </header>
+      ${photos.length ? `<div class="album-photo-grid">${photosHTML}</div>`
+                      : `<p class="muted" style="padding:24px;text-align:center;">No photos yet${manage ? ' — add the first one.' : '.'}</p>`}
+      ${this.commentsHTML(album, null, albumComments)}
+      <div id="album-photo-comments"></div>
+    `;
+    on($('#album-back'), 'click', () => this.backToGallery());
+    if (manage) {
+      on($('#album-photo-input'), 'change', (e) => this.onPhotoPick(e));
+      on($('#album-edit'),   'click', () => AlbumModal.openEdit(album));
+      on($('#album-delete'), 'click', () => this.deleteAlbum());
+      wrap.querySelectorAll('[data-remove-photo]').forEach(btn =>
+        on(btn, 'click', (e) => { e.stopPropagation(); this.removePhoto(btn.dataset.removePhoto); }));
+    }
+    wrap.querySelectorAll('[data-album-photo]').forEach(el => this.resolvePhotoSrc(el));
+    wrap.querySelectorAll('[data-album-photo]').forEach(tile => {
+      on(tile, 'click', () => this.openLightbox(Number(tile.dataset.photoIdx)));
+      on(tile, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openLightbox(Number(tile.dataset.photoIdx)); } });
+    });
+    this.wireComments(album);
+    this._renderPhotoComments();
+  },
+
+  openLightbox(idx) {
+    const photos = (this.current?.photos || []);
+    if (!photos.length) return;
+    MyKidsLightbox.open(photos.map(p => ({ bucket: p.bucket, path: p.path })), idx || 0);
+    // Surface the selected photo's comment thread beneath the grid.
+    this._activePhotoId = photos[idx]?.id || null;
+    this._renderPhotoComments();
+  },
+
+  async onPhotoPick(e) {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (!files.length || !this.current) return;
+    const album = this.current.album;
+    const uploaded = [];
+    for (const file of files) {
+      try {
+        const blob = await downscaleImageToBlob(file, 2400, 0.85);
+        const r = await Backend.uploadMedia(new File([blob], file.name, { type: 'image/jpeg' }),
+          { bucket: 'family-photos', folder: 'albums', maxBytes: 10 * 1024 * 1024 });
+        if (!r.ok) throw new Error(r.reason);
+        uploaded.push({ bucket: r.bucket, path: r.path });
+      } catch (err) { toast(`Photo upload failed: ${err.message || err}`, 'warn'); }
+    }
+    if (uploaded.length) {
+      const res = await AlbumsApi.addPhotos(album.id, uploaded);
+      if (!res.ok) { toast('Could not save photos.', 'warn'); return; }
+      this.coverByAlbum.delete(album.id);   // cover may have changed
+      await this.openAlbum(album.id);        // re-fetch + re-render
+      toast(`${uploaded.length} photo${uploaded.length === 1 ? '' : 's'} added.`);
+    }
+  },
+
+  async removePhoto(photoId) {
+    if (!this.current) return;
+    if (!confirm('Remove this photo from the album?')) return;
+    const photo = this.current.photos.find(p => p.id === photoId);
+    const res = await AlbumsApi.removePhoto(photoId);
+    if (!res.ok) { toast('Could not remove photo.', 'warn'); return; }
+    if (photo) await Backend.deleteMedia(photo.bucket, photo.path);  // best-effort storage cleanup
+    this.coverByAlbum.delete(this.current.album.id);
+    await this.openAlbum(this.current.album.id);
+  },
+
+  async deleteAlbum() {
+    if (!this.current) return;
+    const album = this.current.album;
+    if (!confirm('Delete this whole album and its photos? This cannot be undone.')) return;
+    for (const p of this.current.photos) await Backend.deleteMedia(p.bucket, p.path); // best-effort
+    const res = await AlbumsApi.deleteAlbum(album.id);
+    if (!res.ok) { toast('Could not delete album.', 'warn'); return; }
+    this.coverByAlbum.delete(album.id);
+    toast('Album deleted.');
+    this.backToGallery();
+  },
+
+  // ---------- Comments (album-level + per-photo) ----------
+  canComment() { return !!Backend.user; },
+  canDeleteComment(c, album) {
+    const me = Backend.user?.id;
+    return (c.author && me && c.author === me) || this.isOwner(album) || Auth.isAdmin();
+  },
+
+  // photoId null → album-level comments. `list` is the pre-filtered subset.
+  commentsHTML(album, photoId, list) {
+    const items = (list || []).slice()
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).map(c => `
+      <li class="album-comment">
+        <div class="album-comment-head">
+          <strong class="album-comment-author">${escape(AuthorNames.nameFor(c.author))}</strong>
+          <time class="album-comment-date muted small">${relativeTime(new Date(c.created_at).getTime())}</time>
+          ${this.canDeleteComment(c, album) ? `<button type="button" class="album-comment-x" data-del-comment="${escape(c.id)}" aria-label="Delete comment">×</button>` : ''}
+        </div>
+        <div class="album-comment-body">${escape(c.body).replace(/\n/g, '<br>')}</div>
+      </li>`).join('');
+    const composer = this.canComment()
+      ? `<form class="album-comment-add" data-comment-submit="${photoId ? escape(photoId) : 'album'}">
+           <textarea rows="2" placeholder="Write a comment…" maxlength="2000"></textarea>
+           <button type="submit" class="btn btn-secondary btn-sm">Post</button>
+         </form>`
+      : '';
+    return `<section class="album-comments">
+        <h4 class="album-comments-title">Comments</h4>
+        ${items ? `<ul class="album-comment-list">${items}</ul>` : '<p class="muted small">No comments yet.</p>'}
+        ${composer}
+      </section>`;
+  },
+
+  wireComments(album) {
+    const wrap = $('#album-detail');
+    if (!wrap) return;
+    wrap.querySelectorAll('form[data-comment-submit]').forEach(form => {
+      on(form, 'submit', (e) => {
+        e.preventDefault();
+        const target = form.dataset.commentSubmit;          // 'album' or a photo id
+        const photoId = target === 'album' ? null : target;
+        this.addComment(album, photoId, form.querySelector('textarea'));
+      });
+    });
+    wrap.querySelectorAll('[data-del-comment]').forEach(btn =>
+      on(btn, 'click', () => this.deleteComment(album, btn.dataset.delComment)));
+  },
+
+  // Render the active photo's comment thread (if a photo is selected) into the
+  // dedicated host beneath the grid.
+  _renderPhotoComments() {
+    const host = $('#album-photo-comments');
+    if (!host || !this.current) return;
+    if (!this._activePhotoId) { host.innerHTML = ''; return; }
+    const album = this.current.album;
+    const list = this.current.comments.filter(c => c.photo_id === this._activePhotoId);
+    const inner = this.commentsHTML(album, this._activePhotoId, list)
+      .replace('<h4 class="album-comments-title">Comments</h4>', '<h4 class="album-comments-title">Comments on the selected photo</h4>');
+    host.innerHTML = `<div class="album-photo-comments-inner">${inner}</div>`;
+    this.wireComments(album);
+  },
+
+  async addComment(album, photoId, textarea) {
+    if (!this.canComment()) { toast('Sign in to comment.', 'warn'); return; }
+    const body = (textarea.value || '').trim();
+    if (!body) return;
+    const res = await AlbumsApi.addComment(album.id, photoId, body);
+    if (!res.ok) { toast('Could not post comment.', 'warn'); return; }
+    this.current.comments.push(res.comment);
+    textarea.value = '';
+    this.renderDetail();
+  },
+
+  async deleteComment(album, commentId) {
+    const c = this.current.comments.find(x => x.id === commentId);
+    if (!c || !this.canDeleteComment(c, album)) return;
+    if (!confirm('Delete this comment?')) return;
+    const res = await AlbumsApi.deleteComment(commentId);
+    if (!res.ok) { toast('Could not delete comment.', 'warn'); return; }
+    this.current.comments = this.current.comments.filter(x => x.id !== commentId);
+    this.renderDetail();
+  },
+};
+
+// -------------------- ALBUM MODAL (v4.58) --------------------
+// Create / edit album metadata (title, date, description). Photos are added
+// from the detail view, so creating an album drops you straight into it.
+const AlbumModal = {
+  editing: null,   // album object when editing, else null
+  init() {
+    const fm = $('#album-form');
+    if (fm) on(fm, 'submit', (e) => { e.preventDefault(); this.save(); });
+    const modal = $('#album-modal');
+    if (modal) modal.querySelectorAll('[data-close]').forEach(el => on(el, 'click', () => this.close()));
+  },
+  openAdd() {
+    if (!AlbumsView.canCreate()) { toast('Sign in to create an album.', 'warn'); return; }
+    this.editing = null;
+    $('#album-form').reset();
+    $('#album-error').hidden = true;
+    $('#album-modal-title').textContent = 'New album';
+    $('#album-submit').textContent = 'Create album';
+    this.open();
+    setTimeout(() => $('#album-form').title.focus(), 50);
+  },
+  openEdit(album) {
+    if (!AlbumsView.canManage(album)) return;
+    this.editing = album;
+    const fm = $('#album-form');
+    fm.reset();
+    fm.title.value = album.title || '';
+    fm.event_date.value = album.event_date || '';
+    fm.description.value = album.description || '';
+    $('#album-error').hidden = true;
+    $('#album-modal-title').textContent = 'Edit album';
+    $('#album-submit').textContent = 'Save changes';
+    this.open();
+  },
+  open()  { const el = $('#album-modal'); el.setAttribute('aria-hidden', 'false'); el.classList.add('is-open'); },
+  close() { const el = $('#album-modal'); el.setAttribute('aria-hidden', 'true');  el.classList.remove('is-open'); this.editing = null; },
+  async save() {
+    const fm = $('#album-form');
+    const title = (fm.title.value || '').trim();
+    if (!title) { $('#album-error').textContent = 'A title is required.'; $('#album-error').hidden = false; return; }
+    const payload = { title, description: (fm.description.value || '').trim(), event_date: fm.event_date.value || null };
+    if (this.editing) {
+      const res = await AlbumsApi.updateAlbum(this.editing.id, payload);
+      if (!res.ok) { $('#album-error').textContent = res.reason || 'Could not save.'; $('#album-error').hidden = false; return; }
+      this.close();
+      await AlbumsView.openAlbum(this.editing.id);
+      toast('Album updated.');
+    } else {
+      const res = await AlbumsApi.createAlbum(payload);
+      if (!res.ok) { $('#album-error').textContent = res.reason || 'Could not create album.'; $('#album-error').hidden = false; return; }
+      this.close();
+      await AlbumsView.openAlbum(res.id);   // jump into the new album to add photos
+      toast('Album created — now add some photos.');
+    }
   },
 };
 

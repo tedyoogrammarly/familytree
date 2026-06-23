@@ -106,6 +106,7 @@
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
           <button class="nav-tab" data-view="memories" role="tab">Memories</button>
+          <button class="nav-tab" data-view="albums" role="tab">Albums</button>
           <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
           <button class="nav-tab" data-view="recipes" role="tab">Recipes</button>
           <button class="nav-tab" data-view="timecapsule" role="tab" hidden>Time Capsule</button>
@@ -705,6 +706,32 @@
       </div>
     </main>
 
+    <!-- ===== ALBUMS VIEW (v4.58) — owned photo collections, open to all -->
+    <main id="view-albums" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="albums"></span>Albums</h2>
+            <p>Photo collections — trips, birthdays, everyday moments. Make an album, add your photos.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-album-add">+ New album</button>
+          </div>
+        </div>
+        <!-- Gallery (list of albums) -->
+        <section id="albums-gallery" class="albums-gallery"></section>
+        <div id="albums-empty" class="tree-empty" hidden>
+          <div class="tree-empty-card">
+            <h3>No albums yet</h3>
+            <p>Start the first one — give it a name and add a few photos.</p>
+            <button class="btn btn-primary" id="btn-album-add-first">+ Create the first album</button>
+          </div>
+        </div>
+        <!-- Album detail (hidden until an album is opened) -->
+        <section id="album-detail" class="album-detail" hidden></section>
+      </div>
+    </main>
+
     <!-- ===== MEMORY POST MODAL (v4.45) -->
     <div id="memory-modal" class="modal" aria-hidden="true">
       <div class="modal-backdrop" data-close></div>
@@ -752,6 +779,29 @@
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit" id="memory-submit">Save post</button>
             <button class="btn btn-danger-ghost" type="button" id="memory-delete" hidden>Delete post</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== ALBUM MODAL (v4.58) -->
+    <div id="album-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="album-modal-title">
+        <header class="modal-head">
+          <h3 id="album-modal-title">New album</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="album-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" type="text" maxlength="120" required placeholder="e.g. Summer 2025 Trip" /></label>
+          <label class="field"><span>Date <span class="muted small">(optional)</span></span><input name="event_date" type="date" /></label>
+          <label class="field"><span>Description <span class="muted small">(optional)</span></span><textarea name="description" rows="3" maxlength="2000" placeholder="A sentence about this album."></textarea></label>
+          <p class="form-error" id="album-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="album-submit">Create album</button>
             <button class="btn btn-ghost" type="button" data-close>Cancel</button>
           </div>
         </form>
