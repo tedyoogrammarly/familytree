@@ -47,15 +47,20 @@ on conflict (id) do update set
 -- Drop-then-create so re-running this migration is idempotent.
 
 -- ---- family-photos ----
+-- v4.58: uploads opened to all authenticated users (Albums + open Memories
+-- feed). A user can delete their OWN uploads (storage.objects.owner); admins
+-- delete any. See migrations/2026-06-22-storage-authenticated-upload.sql.
 drop policy if exists "family-photos admin insert" on storage.objects;
+drop policy if exists "family-photos auth insert"  on storage.objects;
 drop policy if exists "family-photos auth select"  on storage.objects;
 drop policy if exists "family-photos admin delete" on storage.objects;
-create policy "family-photos admin insert" on storage.objects
-  for insert with check (bucket_id = 'family-photos' and public.is_admin());
+drop policy if exists "family-photos owner delete" on storage.objects;
+create policy "family-photos auth insert" on storage.objects
+  for insert with check (bucket_id = 'family-photos' and auth.role() = 'authenticated');
 create policy "family-photos auth select"  on storage.objects
   for select using (bucket_id = 'family-photos' and auth.role() = 'authenticated');
-create policy "family-photos admin delete" on storage.objects
-  for delete using (bucket_id = 'family-photos' and public.is_admin());
+create policy "family-photos owner delete" on storage.objects
+  for delete using (bucket_id = 'family-photos' and (owner = auth.uid() or public.is_admin()));
 
 -- ---- family-audio ----
 drop policy if exists "family-audio admin insert" on storage.objects;
