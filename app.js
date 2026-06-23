@@ -10296,6 +10296,16 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.64',
+    date: '2026-06-23',
+    title: 'Memories: who posted & who reacted · Recipes now family-only',
+    changes: [
+      'Memory posts now show who posted them (the author’s name next to the date).',
+      'Reactions now show who reacted — each post lists the names under the emoji (e.g. “❤️ Mom, Dad · 🎉 Ted”), and hovering a reaction chip shows the same.',
+      'The Recipes tab is now visible to Family and Admins only (previously any signed-in account could see it), matching how the Calendar tab is gated.',
+    ],
+  },
+  {
     version: '4.63',
     date: '2026-06-22',
     title: 'Drag & drop photos into new posts too',
@@ -16027,7 +16037,10 @@ const MemoriesView = {
     return `
       <article class="memory-post" data-id="${escape(m.id)}">
         <header class="memory-head">
-          <time class="memory-date">${m.date ? formatDate(m.date) : '—'}</time>
+          <div class="memory-byline">
+            <strong class="memory-author">${escape(AuthorNames.nameFor(m.createdBy))}</strong>
+            <time class="memory-date">${m.date ? formatDate(m.date) : '—'}</time>
+          </div>
           ${actions}
         </header>
         ${bodyHTML}
@@ -16046,13 +16059,20 @@ const MemoriesView = {
     if (!this.canEngage() && !(m.reactions || []).length) return '';
     const rolled = this.reactionsRolledUp(m);
     const mine = this.myReactionEmojis(m);
+    const namesFor = (list) => list.map(r => AuthorNames.nameFor(r.userId)).filter(Boolean);
     const chips = [...rolled.entries()]
       .sort((a, z) => z[1].length - a[1].length)
       .map(([emoji, list]) => `
-        <button type="button" class="memory-reaction-chip ${mine.has(emoji) ? 'is-mine' : ''} ${this.canEngage() ? '' : 'is-readonly'}" data-react="${escape(emoji)}" data-mem-id="${escape(m.id)}" ${this.canEngage() ? '' : 'disabled'} title="${list.length} reaction${list.length === 1 ? '' : 's'}">
+        <button type="button" class="memory-reaction-chip ${mine.has(emoji) ? 'is-mine' : ''} ${this.canEngage() ? '' : 'is-readonly'}" data-react="${escape(emoji)}" data-mem-id="${escape(m.id)}" ${this.canEngage() ? '' : 'disabled'} title="${escape(namesFor(list).join(', '))}">
           <span class="memory-reaction-emoji">${emoji}</span>
           <span class="memory-reaction-count">${list.length}</span>
         </button>`).join('');
+    // v4.64: visibly show who reacted with which emoji.
+    const whoLine = rolled.size ? `
+      <div class="memory-reaction-who">
+        ${[...rolled.entries()].sort((a, z) => z[1].length - a[1].length).map(([emoji, list]) =>
+          `<span class="mrw-item"><span class="mrw-emoji">${emoji}</span> ${escape(namesFor(list).join(', '))}</span>`).join('')}
+      </div>` : '';
     const quickPicks = this.canEngage() ? `
       <div class="memory-react-picks">
         ${this.QUICK_REACTIONS.map(e => `
@@ -16063,6 +16083,7 @@ const MemoriesView = {
     return `
       <div class="memory-reactions">
         ${chips ? `<div class="memory-reaction-chips">${chips}</div>` : ''}
+        ${whoLine}
         ${quickPicks}
       </div>`;
   },

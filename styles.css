@@ -5114,6 +5114,10 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   color: var(--ink-500);
   font-weight: 500;
 }
+/* v4.64: post author byline */
+.memory-byline { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.memory-author { font-size: 14px; font-weight: 600; color: var(--brand-900); }
+.memory-byline .memory-date::before { content: '·'; margin-right: 8px; color: var(--ink-300); }
 .memory-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .memory-body {
   font-size: 15px;
@@ -5255,6 +5259,14 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   flex-wrap: wrap;
   gap: 6px;
 }
+/* v4.64: who reacted (names), shown on its own line under the chips */
+.memory-reaction-who {
+  flex-basis: 100%;
+  display: flex; flex-wrap: wrap; gap: 6px 16px;
+  font-size: 12px; color: var(--ink-400); margin-top: 2px;
+}
+.mrw-item { display: inline-flex; align-items: baseline; gap: 5px; }
+.mrw-emoji { font-size: 13px; }
 .memory-reaction-chip {
   display: inline-flex;
   align-items: center;
