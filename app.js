@@ -468,13 +468,25 @@ const MemoriesApi = {
     const rxBy = new Map(), cmBy = new Map();
     for (const r of (rx.data || [])) { if (!rxBy.has(r.memory_id)) rxBy.set(r.memory_id, []); rxBy.get(r.memory_id).push(r); }
     for (const c of (cm.data || [])) { if (!cmBy.has(c.memory_id)) cmBy.set(c.memory_id, []); cmBy.get(c.memory_id).push(c); }
+    // v4.65: comment reactions (degrades gracefully if the table isn't there yet).
+    const commentIds = (cm.data || []).map(c => c.id);
+    const crBy = new Map();
+    if (commentIds.length) {
+      const cr = await Backend.client.from('memory_comment_reactions').select('comment_id, user_id, emoji').in('comment_id', commentIds);
+      if (cr.error) { this._warn('list(comment reactions)', cr.error); }
+      for (const r of (cr.data || [])) { if (!crBy.has(r.comment_id)) crBy.set(r.comment_id, []); crBy.get(r.comment_id).push(r); }
+    }
     return memories.map(m => ({
       id: m.id, date: m.date, body: m.body || '', tags: m.tags || [], photos: m.photos || [],
       createdAt: new Date(m.created_at).getTime(), createdBy: m.author,
       reactions: (rxBy.get(m.id) || []).map(r => ({ emoji: r.emoji, userId: r.user_id, createdAt: new Date(r.created_at).getTime() })),
       comments: (cmBy.get(m.id) || [])
         .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-        .map(c => ({ id: c.id, body: c.body, authorId: c.author, authorName: AuthorNames.nameFor(c.author), createdAt: new Date(c.created_at).getTime() })),
+        .map(c => ({
+          id: c.id, body: c.body, authorId: c.author, authorName: AuthorNames.nameFor(c.author),
+          createdAt: new Date(c.created_at).getTime(),
+          reactions: (crBy.get(c.id) || []).map(r => ({ emoji: r.emoji, userId: r.user_id })),
+        })),
     }));
   },
 
@@ -522,6 +534,19 @@ const MemoriesApi = {
     if (!Backend.client) return { ok: false };
     const { error } = await Backend.client.from('memory_comments').delete().eq('id', commentId);
     if (error) { this._warn('deleteComment', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async addCommentReaction(commentId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_comment_reactions').insert({ comment_id: commentId, emoji });
+    if (error) { this._warn('addCommentReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async removeCommentReaction(commentId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_comment_reactions').delete()
+      .eq('comment_id', commentId).eq('user_id', Backend.user?.id).eq('emoji', emoji);
+    if (error) { this._warn('removeCommentReaction', error); return { ok: false }; }
     return { ok: true };
   },
 };
@@ -10296,6 +10321,14 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.65',
+    date: '2026-06-23',
+    title: 'React to comments with emojis',
+    changes: [
+      'You can now react to individual comments on a Memories post — tap the “☺ +” button under a comment to pick an emoji, or tap an existing reaction to add/remove yours. Counts and who-reacted (on hover) work just like post reactions.',
+    ],
+  },
+  {
     version: '4.64',
     date: '2026-06-23',
     title: 'Memories: who posted & who reacted · Recipes now family-only',
@@ -15888,6 +15921,13 @@ const MemoriesView = {
     feed.querySelectorAll('[data-comment-delete]').forEach(btn => {
       on(btn, 'click', () => this.deleteComment(btn.dataset.memId, btn.dataset.commentDelete));
     });
+    // v4.65: comment reactions
+    feed.querySelectorAll('[data-creact]').forEach(btn => {
+      on(btn, 'click', () => this.toggleCommentReaction(btn.dataset.memId, btn.dataset.commentId, btn.dataset.creact));
+    });
+    feed.querySelectorAll('[data-creact-more]').forEach(btn => {
+      on(btn, 'click', () => this.openCommentReactionPicker(btn));
+    });
   },
 
   // ---------- Permission helpers (v4.46) ----------
@@ -15978,6 +16018,48 @@ const MemoriesView = {
       });
     }
     proxy.dataset.memId = memId;
+    EmojiPicker.open(proxy, btn);
+  },
+
+  // ---------- Comment reactions (v4.65) ----------
+  async toggleCommentReaction(memId, commentId, emoji) {
+    if (!this.canEngage()) { toast('Sign in to react.', 'warn'); return; }
+    const m = this.list().find(x => x.id === memId); if (!m) return;
+    const c = (m.comments || []).find(x => x.id === commentId); if (!c) return;
+    const me = this.currentUserId(); if (!me) return;
+    if (!Array.isArray(c.reactions)) c.reactions = [];
+    const idx = c.reactions.findIndex(r => r.userId === me && r.emoji === emoji);
+    if (idx >= 0) {
+      c.reactions.splice(idx, 1);                    // optimistic
+      this.render();
+      const res = await MemoriesApi.removeCommentReaction(commentId, emoji);
+      if (!res.ok) this.refresh();
+    } else {
+      c.reactions.push({ emoji, userId: me });        // optimistic
+      this.render();
+      const res = await MemoriesApi.addCommentReaction(commentId, emoji);
+      if (!res.ok) this.refresh();
+    }
+  },
+
+  // Open the shared EmojiPicker for a comment; picked emoji toggles via the proxy.
+  openCommentReactionPicker(btn) {
+    if (!this.canEngage()) { toast('Sign in to react.', 'warn'); return; }
+    let proxy = $('#memory-creaction-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.type = 'hidden';
+      proxy.id = 'memory-creaction-proxy';
+      document.body.appendChild(proxy);
+      proxy.addEventListener('change', () => {
+        const ch = proxy.value;
+        if (!ch) return;
+        proxy.value = '';
+        this.toggleCommentReaction(proxy.dataset.memId, proxy.dataset.commentId, ch);
+      });
+    }
+    proxy.dataset.memId = btn.dataset.memId;
+    proxy.dataset.commentId = btn.dataset.commentId;
     EmojiPicker.open(proxy, btn);
   },
 
@@ -16100,6 +16182,7 @@ const MemoriesView = {
           ${canDelete(c) ? `<button type="button" class="memory-comment-x" data-comment-delete="${escape(c.id)}" data-mem-id="${escape(m.id)}" aria-label="Delete comment">×</button>` : ''}
         </div>
         <div class="memory-comment-body">${escape(c.body).replace(/\n/g, '<br>')}</div>
+        ${this.commentReactionsHTML(m, c)}
       </li>`).join('');
     const composer = this.canEngage()
       ? `<form class="memory-comment-add" data-comment-submit="${escape(m.id)}">
@@ -16113,6 +16196,31 @@ const MemoriesView = {
         ${items ? `<ul class="memory-comment-list">${items}</ul>` : ''}
         ${composer}
       </section>`;
+  },
+
+  // v4.65: emoji reactions on an individual comment — existing reaction chips
+  // (with who-reacted in the tooltip) + a "react" button that opens the picker.
+  commentReactionsHTML(m, c) {
+    const me = this.currentUserId();
+    const rolled = new Map();
+    for (const r of (c.reactions || [])) {
+      if (!r || !r.emoji) continue;
+      if (!rolled.has(r.emoji)) rolled.set(r.emoji, []);
+      rolled.get(r.emoji).push(r);
+    }
+    const mine = new Set((c.reactions || []).filter(r => r.userId === me).map(r => r.emoji));
+    const namesFor = (list) => list.map(r => AuthorNames.nameFor(r.userId)).filter(Boolean);
+    const chips = [...rolled.entries()]
+      .sort((a, z) => z[1].length - a[1].length)
+      .map(([emoji, list]) => `
+        <button type="button" class="memory-creaction-chip ${mine.has(emoji) ? 'is-mine' : ''}" data-creact="${escape(emoji)}" data-comment-id="${escape(c.id)}" data-mem-id="${escape(m.id)}" ${this.canEngage() ? '' : 'disabled'} title="${escape(namesFor(list).join(', '))}">
+          <span>${emoji}</span><span class="memory-creaction-count">${list.length}</span>
+        </button>`).join('');
+    const reactBtn = this.canEngage()
+      ? `<button type="button" class="memory-creaction-more" data-creact-more data-comment-id="${escape(c.id)}" data-mem-id="${escape(m.id)}" data-emoji-trigger title="React to this comment">☺ +</button>`
+      : '';
+    if (!chips && !reactBtn) return '';
+    return `<div class="memory-creactions">${chips}${reactBtn}</div>`;
   },
 
   async resolvePhotoSrc(el) {
