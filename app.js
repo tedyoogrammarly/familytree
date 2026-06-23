@@ -10296,6 +10296,16 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.60',
+    date: '2026-06-22',
+    title: 'Albums polish — pick a cover, upload progress, smaller banner',
+    changes: [
+      'You can now choose an album’s cover photo: open an album and click “Set as cover” on any photo (the current cover shows a ★ Cover badge). That photo becomes the album’s showcase tile on the Albums gallery.',
+      'Adding photos to an album now shows a live progress bar (“Uploading 3 of 5…”) so you can see the upload working instead of wondering whether anything happened.',
+      'The album cover banner on the gallery is smaller — it no longer fills the screen, so more albums are visible at a glance.',
+    ],
+  },
+  {
     version: '4.59',
     date: '2026-06-22',
     title: 'Memories + Albums combined into one page',
@@ -16510,10 +16520,15 @@ const AlbumsView = {
     const { album, photos } = this.current;
     const albumComments = this.current.comments.filter(c => !c.photo_id);
     const manage = this.canManage(album);
-    const photosHTML = photos.map((p, i) => `
-      <div class="album-photo" data-album-photo data-bucket="${escape(p.bucket)}" data-path="${escape(p.path)}" data-photo-idx="${i}" data-photo-id="${escape(p.id)}" tabindex="0" role="button" aria-label="Photo ${i + 1}">
+    const photosHTML = photos.map((p, i) => {
+      const isCover = album.cover_photo_id === p.id;
+      return `
+      <div class="album-photo ${isCover ? 'is-cover' : ''}" data-album-photo data-bucket="${escape(p.bucket)}" data-path="${escape(p.path)}" data-photo-idx="${i}" data-photo-id="${escape(p.id)}" tabindex="0" role="button" aria-label="Photo ${i + 1}${isCover ? ' (album cover)' : ''}">
+        ${isCover ? '<span class="album-photo-coverbadge">★ Cover</span>' : ''}
         ${manage ? `<button type="button" class="album-photo-x" data-remove-photo="${escape(p.id)}" aria-label="Remove photo">×</button>` : ''}
-      </div>`).join('');
+        ${manage && !isCover ? `<button type="button" class="album-photo-setcover" data-set-cover="${escape(p.id)}">Set as cover</button>` : ''}
+      </div>`;
+    }).join('');
     wrap.hidden = false;
     wrap.innerHTML = `
       <button type="button" class="btn btn-ghost btn-sm album-back" id="album-back">← All albums</button>
@@ -16532,6 +16547,10 @@ const AlbumsView = {
             <button class="btn btn-danger-ghost btn-sm" type="button" id="album-delete">Delete album</button>
           </div>` : ''}
       </header>
+      <div id="album-upload-progress" class="album-upload-progress" hidden>
+        <div class="aup-bar"><div class="aup-fill"></div></div>
+        <span class="aup-label"></span>
+      </div>
       ${photos.length ? `<div class="album-photo-grid">${photosHTML}</div>`
                       : `<p class="muted" style="padding:24px;text-align:center;">No photos yet${manage ? ' — add the first one.' : '.'}</p>`}
       ${this.commentsHTML(album, null, albumComments)}
@@ -16544,6 +16563,8 @@ const AlbumsView = {
       on($('#album-delete'), 'click', () => this.deleteAlbum());
       wrap.querySelectorAll('[data-remove-photo]').forEach(btn =>
         on(btn, 'click', (e) => { e.stopPropagation(); this.removePhoto(btn.dataset.removePhoto); }));
+      wrap.querySelectorAll('[data-set-cover]').forEach(btn =>
+        on(btn, 'click', (e) => { e.stopPropagation(); this.setCover(btn.dataset.setCover); }));
     }
     wrap.querySelectorAll('[data-album-photo]').forEach(el => this.resolvePhotoSrc(el));
     wrap.querySelectorAll('[data-album-photo]').forEach(tile => {
@@ -16563,12 +16584,27 @@ const AlbumsView = {
     this._renderPhotoComments();
   },
 
+  // Show/update the inline upload progress bar. done = files finished so far.
+  _setUploadProgress(done, total) {
+    const prog = $('#album-upload-progress');
+    if (!prog) return;
+    prog.hidden = false;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const fill = prog.querySelector('.aup-fill');
+    const label = prog.querySelector('.aup-label');
+    if (fill) fill.style.width = pct + '%';
+    if (label) label.textContent = done < total ? `Uploading ${done + 1} of ${total}…` : `Saving ${total} photo${total === 1 ? '' : 's'}…`;
+  },
+  _hideUploadProgress() { const p = $('#album-upload-progress'); if (p) p.hidden = true; },
+
   async onPhotoPick(e) {
     const files = [...(e.target.files || [])];
     e.target.value = '';
     if (!files.length || !this.current) return;
     const album = this.current.album;
     const uploaded = [];
+    let done = 0;
+    this._setUploadProgress(0, files.length);   // immediate feedback
     for (const file of files) {
       try {
         const blob = await downscaleImageToBlob(file, 2400, 0.85);
@@ -16577,14 +16613,30 @@ const AlbumsView = {
         if (!r.ok) throw new Error(r.reason);
         uploaded.push({ bucket: r.bucket, path: r.path });
       } catch (err) { toast(`Photo upload failed: ${err.message || err}`, 'warn'); }
+      done++;
+      this._setUploadProgress(done, files.length);
     }
     if (uploaded.length) {
       const res = await AlbumsApi.addPhotos(album.id, uploaded);
-      if (!res.ok) { toast('Could not save photos.', 'warn'); return; }
+      if (!res.ok) { this._hideUploadProgress(); toast('Could not save photos.', 'warn'); return; }
       this.coverByAlbum.delete(album.id);   // cover may have changed
-      await this.openAlbum(album.id);        // re-fetch + re-render
+      await this.openAlbum(album.id);        // re-fetch + re-render (rebuilds the panel, clearing the bar)
       toast(`${uploaded.length} photo${uploaded.length === 1 ? '' : 's'} added.`);
+    } else {
+      this._hideUploadProgress();
     }
+  },
+
+  // Set which photo is the album's showcase cover (used on the gallery card).
+  async setCover(photoId) {
+    if (!this.current) return;
+    const album = this.current.album;
+    const res = await AlbumsApi.updateAlbum(album.id, { cover_photo_id: photoId });
+    if (!res.ok) { toast('Could not set the cover.', 'warn'); return; }
+    this.current.album.cover_photo_id = photoId;
+    this.coverByAlbum.delete(album.id);   // gallery re-resolves the cover next render
+    toast('Cover photo updated.');
+    this.renderDetail();
   },
 
   async removePhoto(photoId) {
