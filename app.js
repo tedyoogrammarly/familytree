@@ -328,6 +328,204 @@ const Backend = {
   },
 };
 
+// -------------------- ALBUMS DATA ACCESS (v4.58) --------------------
+// CRUD against the dedicated albums/* tables. RLS enforces permissions
+// server-side; callers also gate UI on ownership. Every method degrades
+// gracefully (returns empty/null) if the tables aren't there yet, so the
+// front-end is safe to ship before the SQL migration is applied.
+const AlbumsApi = {
+  _warn(where, error) { if (error) console.warn(`AlbumsApi.${where}:`, error.message); },
+
+  async listAlbums() {
+    if (!Backend.client) return [];
+    const { data, error } = await Backend.client
+      .from('albums')
+      .select('id, title, description, event_date, cover_photo_id, created_by, created_at')
+      .order('created_at', { ascending: false });
+    if (error) { this._warn('listAlbums', error); return []; }
+    return data || [];
+  },
+
+  // One album with its photos + comments. Returns { album, photos, comments } or null.
+  async getAlbum(id) {
+    if (!Backend.client || !id) return null;
+    const a = await Backend.client.from('albums').select('*').eq('id', id).maybeSingle();
+    if (a.error || !a.data) { this._warn('getAlbum', a.error); return null; }
+    const p = await Backend.client.from('album_photos')
+      .select('id, bucket, path, uploaded_by, sort_order, created_at')
+      .eq('album_id', id).order('sort_order', { ascending: true }).order('created_at', { ascending: true });
+    const c = await Backend.client.from('album_comments')
+      .select('id, photo_id, author, body, created_at')
+      .eq('album_id', id).order('created_at', { ascending: true });
+    return { album: a.data, photos: p.data || [], comments: c.data || [] };
+  },
+
+  async createAlbum({ title, description, event_date }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await Backend.client.from('albums')
+      .insert({ title, description: description || null, event_date: event_date || null })
+      .select('id').single();
+    if (error) { this._warn('createAlbum', error); return { ok: false, reason: error.message }; }
+    return { ok: true, id: data.id };
+  },
+
+  async updateAlbum(id, { title, description, event_date, cover_photo_id }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const patch = { updated_at: new Date().toISOString() };
+    if (title !== undefined)          patch.title = title;
+    if (description !== undefined)    patch.description = description || null;
+    if (event_date !== undefined)     patch.event_date = event_date || null;
+    if (cover_photo_id !== undefined) patch.cover_photo_id = cover_photo_id;
+    const { error } = await Backend.client.from('albums').update(patch).eq('id', id);
+    if (error) { this._warn('updateAlbum', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  async deleteAlbum(id) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('albums').delete().eq('id', id);
+    if (error) { this._warn('deleteAlbum', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  // photos: array of { bucket, path }. Returns { ok }.
+  async addPhotos(albumId, photos) {
+    if (!Backend.client || !photos.length) return { ok: true };
+    const rows = photos.map((p, i) => ({ album_id: albumId, bucket: p.bucket, path: p.path, sort_order: i }));
+    const { error } = await Backend.client.from('album_photos').insert(rows);
+    if (error) { this._warn('addPhotos', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  async removePhoto(photoId) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('album_photos').delete().eq('id', photoId);
+    if (error) { this._warn('removePhoto', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  async addComment(albumId, photoId, body) {
+    if (!Backend.client) return { ok: false };
+    const { data, error } = await Backend.client.from('album_comments')
+      .insert({ album_id: albumId, photo_id: photoId || null, body })
+      .select('id, photo_id, author, body, created_at').single();
+    if (error) { this._warn('addComment', error); return { ok: false, reason: error.message }; }
+    return { ok: true, comment: data };
+  },
+
+  async deleteComment(commentId) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('album_comments').delete().eq('id', commentId);
+    if (error) { this._warn('deleteComment', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+};
+
+// Resolve an auth user id to a display name via member_accounts → members.
+// Cached in-session. Falls back to "Family member". Async warm-up: call
+// AuthorNames.warm() once on login so the synchronous nameFor() has data.
+const AuthorNames = {
+  _byUser: new Map(),   // user_id -> displayName
+  async warm() {
+    if (!Backend.client) return;
+    const { data } = await Backend.client.from('member_accounts').select('user_id, member_id');
+    for (const row of (data || [])) {
+      const m = Store.byId(row.member_id);
+      if (m) this._byUser.set(row.user_id, displayName(m));
+    }
+    // include myself even if my member record is the bootstrap admin
+    if (Backend.user?.id && !this._byUser.has(Backend.user.id)) {
+      this._byUser.set(Backend.user.id, MemoriesView.currentAuthorName?.() || 'Admin');
+    }
+  },
+  nameFor(userId) {
+    if (!userId) return 'Family member';
+    return this._byUser.get(userId) || 'Family member';
+  },
+};
+
+// -------------------- MEMORIES DATA ACCESS (v4.58) --------------------
+// CRUD against the dedicated memories/* tables (open feed). Returns objects
+// shaped like the legacy blob so MemoriesView renders unchanged. Degrades
+// gracefully (returns []/false) if the tables aren't there yet.
+const MemoriesApi = {
+  _warn(w, e) { if (e) console.warn(`MemoriesApi.${w}:`, e.message); },
+
+  // Returns array shaped like the legacy blob memory objects:
+  // { id, date, body, tags, photos, createdAt, createdBy,
+  //   reactions:[{emoji,userId,createdAt}], comments:[{id,body,authorId,authorName,createdAt}] }
+  async list() {
+    if (!Backend.client) return [];
+    const mem = await Backend.client.from('memories')
+      .select('id, author, date, body, tags, photos, created_at')
+      .order('date', { ascending: false }).order('created_at', { ascending: false });
+    if (mem.error) { this._warn('list', mem.error); return []; }
+    const memories = mem.data || [];
+    if (!memories.length) return [];
+    const ids = memories.map(m => m.id);
+    const rx = await Backend.client.from('memory_reactions').select('memory_id, user_id, emoji, created_at').in('memory_id', ids);
+    const cm = await Backend.client.from('memory_comments').select('id, memory_id, author, body, created_at').in('memory_id', ids);
+    const rxBy = new Map(), cmBy = new Map();
+    for (const r of (rx.data || [])) { if (!rxBy.has(r.memory_id)) rxBy.set(r.memory_id, []); rxBy.get(r.memory_id).push(r); }
+    for (const c of (cm.data || [])) { if (!cmBy.has(c.memory_id)) cmBy.set(c.memory_id, []); cmBy.get(c.memory_id).push(c); }
+    return memories.map(m => ({
+      id: m.id, date: m.date, body: m.body || '', tags: m.tags || [], photos: m.photos || [],
+      createdAt: new Date(m.created_at).getTime(), createdBy: m.author,
+      reactions: (rxBy.get(m.id) || []).map(r => ({ emoji: r.emoji, userId: r.user_id, createdAt: new Date(r.created_at).getTime() })),
+      comments: (cmBy.get(m.id) || [])
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+        .map(c => ({ id: c.id, body: c.body, authorId: c.author, authorName: AuthorNames.nameFor(c.author), createdAt: new Date(c.created_at).getTime() })),
+    }));
+  },
+
+  async create({ date, body, tags, photos }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await Backend.client.from('memories')
+      .insert({ date, body: body || null, tags: tags || [], photos: photos || [] }).select('id').single();
+    if (error) { this._warn('create', error); return { ok: false, reason: error.message }; }
+    return { ok: true, id: data.id };
+  },
+  async update(id, { date, body, tags, photos }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { error } = await Backend.client.from('memories')
+      .update({ date, body: body || null, tags: tags || [], photos: photos || [] }).eq('id', id);
+    if (error) { this._warn('update', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+  async remove(id) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memories').delete().eq('id', id);
+    if (error) { this._warn('remove', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+  async addReaction(memoryId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_reactions').insert({ memory_id: memoryId, emoji });
+    if (error) { this._warn('addReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async removeReaction(memoryId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_reactions').delete()
+      .eq('memory_id', memoryId).eq('user_id', Backend.user?.id).eq('emoji', emoji);
+    if (error) { this._warn('removeReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async addComment(memoryId, body) {
+    if (!Backend.client) return { ok: false };
+    const { data, error } = await Backend.client.from('memory_comments')
+      .insert({ memory_id: memoryId, body }).select('id, author, body, created_at').single();
+    if (error) { this._warn('addComment', error); return { ok: false }; }
+    return { ok: true, comment: data };
+  },
+  async deleteComment(commentId) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('memory_comments').delete().eq('id', commentId);
+    if (error) { this._warn('deleteComment', error); return { ok: false }; }
+    return { ok: true };
+  },
+};
+
 // -------------------- ethnicities --------------------
 // Common ethnicities + ISO 3166 country code → flag emoji (regional indicators).
 const ETHNICITIES = [
@@ -3479,6 +3677,7 @@ const Views = {
     $('#view-mykids').hidden       = name !== 'mykids';
     $('#view-recipes').hidden      = name !== 'recipes';
     $('#view-memories').hidden     = name !== 'memories';
+    $('#view-albums').hidden       = name !== 'albums';
     $('#view-timecapsule').hidden  = name !== 'timecapsule';
     $('#view-stories').hidden      = name !== 'stories';
     $('#view-admin').hidden        = name !== 'admin';
@@ -3512,7 +3711,8 @@ const Views = {
       if (name === 'myfamily')  MyFamilyView.render();
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
-      if (name === 'memories')  MemoriesView.render();
+      if (name === 'memories')  MemoriesView.refresh();
+      if (name === 'albums')    AlbumsView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
       if (name === 'tree')      Canvas.renderAll();
@@ -8683,6 +8883,9 @@ async function onSignedIn() {
   try { Backend.lastSavedHash = hashStringFast(JSON.stringify(Store.state)); } catch {}
 
   Auth.applyAccount();
+  // v4.58: warm the auth-id → display-name cache for Albums/Memories author
+  // labels. Fire-and-forget; views re-render with names once it resolves.
+  AuthorNames.warm().catch(e => console.warn('AuthorNames.warm:', e.message || e));
   if (typeof TreeFilters !== 'undefined' && TreeFilters.refreshGroupOptions) {
     TreeFilters.refreshGroupOptions();
   }
@@ -9425,6 +9628,7 @@ async function init() {
   MyKidsView.init();
   RecipesView.init();
   MemoriesView.init();
+  AlbumsView.init();
   TimeCapsuleView.init();
   StoriesView.init();
   NewsletterView.init();
@@ -15520,9 +15724,13 @@ const MemoriesView = {
     MemoryModal.init();
   },
 
-  list() {
-    return Array.isArray(Store.state.memories) ? Store.state.memories : [];
-  },
+  // v4.58: memories now live in dedicated tables (open feed). The view holds
+  // a cache loaded from MemoriesApi; render() draws from it. Mutations call
+  // refresh() (load + render); the search box calls render() (no refetch).
+  _items: [],
+  list() { return this._items; },
+  async load() { this._items = await MemoriesApi.list(); },
+  async refresh() { await this.load(); this.render(); },
 
   // Filter + sort. Sort by date descending (newest first), falling back
   // to createdAt for posts that share a date.
@@ -15604,8 +15812,9 @@ const MemoriesView = {
   // Per design decision: Family + Admin can react and comment; User role
   // can view but not engage. Bootstrap admin (no member record) still
   // passes because isAdmin() handles that case.
+  // v4.58: open feed — any signed-in user can react & comment (was Admin+Family).
   canEngage() {
-    return Auth.isAdmin() || Auth.isFamily();
+    return !!Backend.user;
   },
   currentUserId() {
     return Backend.user?.id || null;
@@ -15639,9 +15848,9 @@ const MemoriesView = {
     return new Set((m.reactions || []).filter(r => r.userId === me).map(r => r.emoji));
   },
 
-  toggleReaction(memId, emoji) {
+  async toggleReaction(memId, emoji) {
     if (!this.canEngage()) {
-      toast('Sign in with a Family or Admin role to react.', 'warn');
+      toast('Sign in to react.', 'warn');
       return;
     }
     const m = this.list().find(x => x.id === memId); if (!m) return;
@@ -15650,12 +15859,16 @@ const MemoriesView = {
     if (!Array.isArray(m.reactions)) m.reactions = [];
     const existingIdx = m.reactions.findIndex(r => r.userId === me && r.emoji === emoji);
     if (existingIdx >= 0) {
-      m.reactions.splice(existingIdx, 1);
+      m.reactions.splice(existingIdx, 1);          // optimistic
+      this.render();
+      const res = await MemoriesApi.removeReaction(memId, emoji);
+      if (!res.ok) this.refresh();                 // reconcile on failure
     } else {
-      m.reactions.push({ emoji, userId: me, createdAt: Date.now() });
+      m.reactions.push({ emoji, userId: me, createdAt: Date.now() });  // optimistic
+      this.render();
+      const res = await MemoriesApi.addReaction(memId, emoji);
+      if (!res.ok) this.refresh();
     }
-    Store.save();
-    this.render();
   },
 
   // Open the shared EmojiPicker. Picked emoji goes through toggleReaction
@@ -15664,7 +15877,7 @@ const MemoriesView = {
   // doesn't close it instantly.
   openReactionPicker(btn) {
     if (!this.canEngage()) {
-      toast('Sign in with a Family or Admin role to react.', 'warn');
+      toast('Sign in to react.', 'warn');
       return;
     }
     const memId = btn.dataset.memId;
@@ -15686,38 +15899,30 @@ const MemoriesView = {
     EmojiPicker.open(proxy, btn);
   },
 
-  // ---------- Comments (v4.46) ----------
-  addComment(memId) {
+  // ---------- Comments (v4.46; tables in v4.58) ----------
+  async addComment(memId) {
     if (!this.canEngage()) return;
     const form = document.querySelector(`form[data-comment-submit="${memId}"]`);
     if (!form) return;
     const textarea = form.querySelector('textarea');
     const body = (textarea.value || '').trim();
     if (!body) return;
-    const m = this.list().find(x => x.id === memId); if (!m) return;
-    if (!Array.isArray(m.comments)) m.comments = [];
-    m.comments.push({
-      id: uid('cmt'),
-      body,
-      authorId:   this.currentUserId(),
-      authorName: this.currentAuthorName(),
-      createdAt:  Date.now(),
-    });
-    Store.save();
+    const res = await MemoriesApi.addComment(memId, body);
+    if (!res.ok) { toast('Could not post comment.', 'warn'); return; }
     textarea.value = '';
-    this.render();
+    await this.refresh();
   },
 
-  deleteComment(memId, commentId) {
+  async deleteComment(memId, commentId) {
     const m = this.list().find(x => x.id === memId); if (!m) return;
     const c = (m.comments || []).find(x => x.id === commentId); if (!c) return;
     const me = this.currentUserId();
     const isOwn = c.authorId && me && c.authorId === me;
     if (!isOwn && !Auth.isAdmin()) return;
     if (!confirm('Delete this comment?')) return;
-    m.comments = m.comments.filter(x => x.id !== commentId);
-    Store.save();
-    this.render();
+    const res = await MemoriesApi.deleteComment(commentId);
+    if (!res.ok) { toast('Could not delete comment.', 'warn'); return; }
+    await this.refresh();
   },
 
   postHTML(m) {
@@ -15735,7 +15940,10 @@ const MemoriesView = {
           return label ? `<span class="memory-tag">${escape(label)}</span>` : '';
         }).join('')}</div>`
       : '';
-    const actions = Auth.isAdmin() ? `
+    // v4.58: a post's author can edit/delete their own; admin can manage any.
+    const meId = this.currentUserId();
+    const canManage = (m.createdBy && meId && m.createdBy === meId) || Auth.isAdmin();
+    const actions = canManage ? `
       <div class="memory-actions">
         <button class="btn btn-ghost btn-sm"        type="button" data-mem-edit="${escape(m.id)}">Edit</button>
         <button class="btn btn-danger-ghost btn-sm" type="button" data-mem-delete="${escape(m.id)}">Delete</button>
@@ -15840,16 +16048,18 @@ const MemoriesView = {
   },
 
   async deletePost(id) {
-    if (!Auth.isAdmin()) return;
     const m = this.list().find(x => x.id === id); if (!m) return;
+    const me = this.currentUserId();
+    const canManage = (m.createdBy && me && m.createdBy === me) || Auth.isAdmin();
+    if (!canManage) return;
     if (!confirm('Delete this post? Photos attached to it are also removed from storage.')) return;
     for (const p of (m.photos || [])) {
       await Backend.deleteMedia(p.bucket, p.path);
     }
-    Store.state.memories = this.list().filter(x => x.id !== id);
-    Store.save();
+    const res = await MemoriesApi.remove(id);
+    if (!res.ok) { toast('Could not delete post.', 'warn'); return; }
     toast('Post deleted.');
-    this.render();
+    await this.refresh();
   },
 };
 
@@ -15966,7 +16176,7 @@ const MemoryModal = {
   },
 
   openAdd() {
-    if (!Auth.isAdmin()) return;
+    if (!Backend.user) { toast('Sign in to post.', 'warn'); return; }   // v4.58: open to all
     this.editingId = null;
     this.pendingPhotos = [];
     this.workingTags = [];
@@ -15984,8 +16194,10 @@ const MemoryModal = {
   },
 
   openEdit(id) {
-    if (!Auth.isAdmin()) return;
-    const m = (Store.state.memories || []).find(x => x.id === id); if (!m) return;
+    const m = MemoriesView.list().find(x => x.id === id); if (!m) return;
+    const me = Backend.user?.id;
+    const canManage = (m.createdBy && me && m.createdBy === me) || Auth.isAdmin();
+    if (!canManage) return;   // v4.58: author or admin only
     this.editingId = id;
     this.pendingPhotos = (m.photos || []).map(p => ({ status: 'saved', bucket: p.bucket, path: p.path }));
     this.workingTags = (m.tags || []).slice();
@@ -16083,7 +16295,7 @@ const MemoryModal = {
   },
 
   async save() {
-    if (!Auth.isAdmin()) return;
+    if (!Backend.user) return;   // v4.58: any signed-in user
     if (this.uploading > 0) {
       $('#memory-error').textContent = 'Wait for photos to finish uploading.';
       $('#memory-error').hidden = false;
@@ -16106,30 +16318,19 @@ const MemoryModal = {
       $('#memory-error').hidden = false;
       return;
     }
-    if (!Array.isArray(Store.state.memories)) Store.state.memories = [];
-    const existing = this.editingId
-      ? Store.state.memories.find(m => m.id === this.editingId)
-      : null;
-    const record = {
-      ...(existing || {}),
-      id: this.editingId || uid('mem'),
-      date,
-      body,
-      photos,
-      tags: this.workingTags.slice(),
-      createdAt: existing?.createdAt || Date.now(),
-      createdBy: existing?.createdBy || Backend.user?.id || null,
-    };
-    if (existing) {
-      const idx = Store.state.memories.findIndex(m => m.id === this.editingId);
-      Store.state.memories[idx] = record;
-    } else {
-      Store.state.memories.push(record);
+    // v4.58: persist via the memories tables (RLS enforces author/admin).
+    const payload = { date, body, tags: this.workingTags.slice(), photos };
+    const res = this.editingId
+      ? await MemoriesApi.update(this.editingId, payload)
+      : await MemoriesApi.create(payload);
+    if (!res.ok) {
+      $('#memory-error').textContent = res.reason || 'Could not save your post.';
+      $('#memory-error').hidden = false;
+      return;
     }
-    Store.save();
     toast(this.editingId ? 'Post saved.' : 'Post added.');
     this.close();
-    MemoriesView.render();
+    await MemoriesView.refresh();
   },
 
   async deleteCurrent() {
@@ -16137,6 +16338,377 @@ const MemoryModal = {
     const id = this.editingId;
     this.close();
     MemoriesView.deletePost(id);
+  },
+};
+
+// -------------------- ALBUMS VIEW (v4.58) --------------------
+// Owned photo collections, open to every signed-in user. Gallery = newest
+// album as a hero banner + a cover-card grid below (layout B). Detail = a
+// photo grid with the shared lightbox, plus album- and photo-level comments.
+// Data lives in the albums/* tables via AlbumsApi; photos in family-photos.
+const AlbumsView = {
+  signedUrlCache: new Map(),   // bucket|path -> { url, expiresAt }
+  albums: [],                   // cached list for the gallery
+  coverByAlbum: new Map(),      // album_id -> { bucket, path } | null
+  current: null,                // { album, photos, comments } when a detail is open
+  _activePhotoId: null,
+
+  init() {
+    on($('#btn-album-add'),       'click', () => AlbumModal.openAdd());
+    on($('#btn-album-add-first'), 'click', () => AlbumModal.openAdd());
+    AlbumModal.init();
+  },
+
+  canCreate() { return !!Backend.user; },          // any logged-in user
+  isOwner(album) { return album && Backend.user && album.created_by === Backend.user.id; },
+  canManage(album) { return this.isOwner(album) || Auth.isAdmin(); },
+
+  // ---------- Gallery (layout B: hero + grid) ----------
+  async render() {
+    // Always return to the gallery (not a stale detail view) on tab entry.
+    this.current = null;
+    this._activePhotoId = null;
+    const detail = $('#album-detail');
+    if (detail) { detail.hidden = true; detail.innerHTML = ''; }
+    const gallery = $('#albums-gallery');
+    const empty   = $('#albums-empty');
+    if (!gallery) return;
+    this.albums = await AlbumsApi.listAlbums();
+    await this._resolveCovers();
+    if (!this.albums.length) { gallery.innerHTML = ''; if (empty) empty.hidden = false; return; }
+    if (empty) empty.hidden = true;
+    const [hero, ...rest] = this.albums;
+    gallery.innerHTML = `
+      ${this.heroHTML(hero)}
+      ${rest.length ? `<div class="albums-grid">${rest.map(a => this.cardHTML(a)).join('')}</div>` : ''}
+    `;
+    gallery.querySelectorAll('[data-album-open]').forEach(el => {
+      on(el, 'click', () => this.openAlbum(el.dataset.albumOpen));
+      on(el, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openAlbum(el.dataset.albumOpen); } });
+    });
+    gallery.querySelectorAll('[data-album-cover]').forEach(el => this.resolvePhotoSrc(el));
+  },
+
+  // For each album, resolve a cover ref (explicit cover_photo_id, else newest
+  // photo). One light query per album; albums are few. Cached across renders.
+  async _resolveCovers() {
+    for (const a of this.albums) {
+      if (this.coverByAlbum.has(a.id)) continue;
+      let ref = null;
+      if (Backend.client) {
+        let q = Backend.client.from('album_photos').select('bucket, path').eq('album_id', a.id);
+        q = a.cover_photo_id ? q.eq('id', a.cover_photo_id) : q.order('created_at', { ascending: false }).limit(1);
+        const { data } = await q;
+        if (data && data[0]) ref = { bucket: data[0].bucket, path: data[0].path };
+      }
+      this.coverByAlbum.set(a.id, ref);
+    }
+  },
+
+  metaLine(a) {
+    const by = AuthorNames.nameFor(a.created_by);
+    const date = a.event_date ? formatDate(a.event_date) : '';
+    return `by ${escape(by)}${date ? ' · ' + escape(date) : ''}`;
+  },
+
+  coverAttrs(a) {
+    const ref = this.coverByAlbum.get(a.id);
+    return ref
+      ? `data-album-cover data-bucket="${escape(ref.bucket)}" data-path="${escape(ref.path)}"`
+      : 'data-album-cover'; // no photo → placeholder via CSS .is-missing
+  },
+
+  heroHTML(a) {
+    return `
+      <article class="album-hero" data-album-open="${escape(a.id)}" tabindex="0" role="button" aria-label="Open album ${escape(a.title)}">
+        <div class="album-hero-cover" ${this.coverAttrs(a)}></div>
+        <div class="album-hero-cap">
+          <h3 class="album-hero-title">${escape(a.title)}</h3>
+          <p class="album-hero-meta">${this.metaLine(a)}</p>
+        </div>
+      </article>`;
+  },
+
+  cardHTML(a) {
+    return `
+      <article class="album-card" data-album-open="${escape(a.id)}" tabindex="0" role="button" aria-label="Open album ${escape(a.title)}">
+        <div class="album-card-cover" ${this.coverAttrs(a)}></div>
+        <div class="album-card-body">
+          <h4 class="album-card-title">${escape(a.title)}</h4>
+          <p class="album-card-meta">${this.metaLine(a)}</p>
+        </div>
+      </article>`;
+  },
+
+  // Shared signed-URL resolver (same shape as MemoriesView.resolvePhotoSrc).
+  async resolvePhotoSrc(el) {
+    const bucket = el.dataset.bucket, path = el.dataset.path;
+    if (!bucket || !path) { el.classList.add('is-missing'); return; }
+    const key = `${bucket}|${path}`, now = Date.now();
+    const cached = this.signedUrlCache.get(key);
+    if (cached && cached.expiresAt > now) { el.style.backgroundImage = `url('${cssUrl(cached.url)}')`; return; }
+    const url = await Backend.getMediaUrl(bucket, path, 3600);
+    if (!url) { el.classList.add('is-missing'); return; }
+    this.signedUrlCache.set(key, { url, expiresAt: now + 50 * 60 * 1000 });
+    el.style.backgroundImage = `url('${cssUrl(url)}')`;
+  },
+
+  // ---------- Detail ----------
+  async openAlbum(id) {
+    const data = await AlbumsApi.getAlbum(id);
+    if (!data) { toast("Couldn't open that album.", 'warn'); return; }
+    this.current = data;
+    this._activePhotoId = null;
+    $('#albums-gallery').innerHTML = '';
+    const empty = $('#albums-empty'); if (empty) empty.hidden = true;
+    this.renderDetail();
+  },
+
+  backToGallery() { this.current = null; this._activePhotoId = null; this.render(); },
+
+  renderDetail() {
+    const wrap = $('#album-detail');
+    if (!wrap || !this.current) return;
+    const { album, photos } = this.current;
+    const albumComments = this.current.comments.filter(c => !c.photo_id);
+    const manage = this.canManage(album);
+    const photosHTML = photos.map((p, i) => `
+      <div class="album-photo" data-album-photo data-bucket="${escape(p.bucket)}" data-path="${escape(p.path)}" data-photo-idx="${i}" data-photo-id="${escape(p.id)}" tabindex="0" role="button" aria-label="Photo ${i + 1}">
+        ${manage ? `<button type="button" class="album-photo-x" data-remove-photo="${escape(p.id)}" aria-label="Remove photo">×</button>` : ''}
+      </div>`).join('');
+    wrap.hidden = false;
+    wrap.innerHTML = `
+      <button type="button" class="btn btn-ghost btn-sm album-back" id="album-back">← All albums</button>
+      <header class="album-detail-head">
+        <div>
+          <h3 class="album-detail-title">${escape(album.title)}</h3>
+          <p class="album-detail-meta">${this.metaLine(album)}</p>
+          ${album.description ? `<p class="album-detail-desc">${escape(album.description).replace(/\n/g, '<br>')}</p>` : ''}
+        </div>
+        ${manage ? `
+          <div class="album-detail-actions">
+            <label class="btn btn-secondary btn-sm" id="album-photo-add-label">+ Add photos
+              <input type="file" accept="image/*" id="album-photo-input" hidden multiple />
+            </label>
+            <button class="btn btn-ghost btn-sm"        type="button" id="album-edit">Edit</button>
+            <button class="btn btn-danger-ghost btn-sm" type="button" id="album-delete">Delete album</button>
+          </div>` : ''}
+      </header>
+      ${photos.length ? `<div class="album-photo-grid">${photosHTML}</div>`
+                      : `<p class="muted" style="padding:24px;text-align:center;">No photos yet${manage ? ' — add the first one.' : '.'}</p>`}
+      ${this.commentsHTML(album, null, albumComments)}
+      <div id="album-photo-comments"></div>
+    `;
+    on($('#album-back'), 'click', () => this.backToGallery());
+    if (manage) {
+      on($('#album-photo-input'), 'change', (e) => this.onPhotoPick(e));
+      on($('#album-edit'),   'click', () => AlbumModal.openEdit(album));
+      on($('#album-delete'), 'click', () => this.deleteAlbum());
+      wrap.querySelectorAll('[data-remove-photo]').forEach(btn =>
+        on(btn, 'click', (e) => { e.stopPropagation(); this.removePhoto(btn.dataset.removePhoto); }));
+    }
+    wrap.querySelectorAll('[data-album-photo]').forEach(el => this.resolvePhotoSrc(el));
+    wrap.querySelectorAll('[data-album-photo]').forEach(tile => {
+      on(tile, 'click', () => this.openLightbox(Number(tile.dataset.photoIdx)));
+      on(tile, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openLightbox(Number(tile.dataset.photoIdx)); } });
+    });
+    this.wireComments(album);
+    this._renderPhotoComments();
+  },
+
+  openLightbox(idx) {
+    const photos = (this.current?.photos || []);
+    if (!photos.length) return;
+    MyKidsLightbox.open(photos.map(p => ({ bucket: p.bucket, path: p.path })), idx || 0);
+    // Surface the selected photo's comment thread beneath the grid.
+    this._activePhotoId = photos[idx]?.id || null;
+    this._renderPhotoComments();
+  },
+
+  async onPhotoPick(e) {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (!files.length || !this.current) return;
+    const album = this.current.album;
+    const uploaded = [];
+    for (const file of files) {
+      try {
+        const blob = await downscaleImageToBlob(file, 2400, 0.85);
+        const r = await Backend.uploadMedia(new File([blob], file.name, { type: 'image/jpeg' }),
+          { bucket: 'family-photos', folder: 'albums', maxBytes: 10 * 1024 * 1024 });
+        if (!r.ok) throw new Error(r.reason);
+        uploaded.push({ bucket: r.bucket, path: r.path });
+      } catch (err) { toast(`Photo upload failed: ${err.message || err}`, 'warn'); }
+    }
+    if (uploaded.length) {
+      const res = await AlbumsApi.addPhotos(album.id, uploaded);
+      if (!res.ok) { toast('Could not save photos.', 'warn'); return; }
+      this.coverByAlbum.delete(album.id);   // cover may have changed
+      await this.openAlbum(album.id);        // re-fetch + re-render
+      toast(`${uploaded.length} photo${uploaded.length === 1 ? '' : 's'} added.`);
+    }
+  },
+
+  async removePhoto(photoId) {
+    if (!this.current) return;
+    if (!confirm('Remove this photo from the album?')) return;
+    const photo = this.current.photos.find(p => p.id === photoId);
+    const res = await AlbumsApi.removePhoto(photoId);
+    if (!res.ok) { toast('Could not remove photo.', 'warn'); return; }
+    if (photo) await Backend.deleteMedia(photo.bucket, photo.path);  // best-effort storage cleanup
+    this.coverByAlbum.delete(this.current.album.id);
+    await this.openAlbum(this.current.album.id);
+  },
+
+  async deleteAlbum() {
+    if (!this.current) return;
+    const album = this.current.album;
+    if (!confirm('Delete this whole album and its photos? This cannot be undone.')) return;
+    for (const p of this.current.photos) await Backend.deleteMedia(p.bucket, p.path); // best-effort
+    const res = await AlbumsApi.deleteAlbum(album.id);
+    if (!res.ok) { toast('Could not delete album.', 'warn'); return; }
+    this.coverByAlbum.delete(album.id);
+    toast('Album deleted.');
+    this.backToGallery();
+  },
+
+  // ---------- Comments (album-level + per-photo) ----------
+  canComment() { return !!Backend.user; },
+  canDeleteComment(c, album) {
+    const me = Backend.user?.id;
+    return (c.author && me && c.author === me) || this.isOwner(album) || Auth.isAdmin();
+  },
+
+  // photoId null → album-level comments. `list` is the pre-filtered subset.
+  commentsHTML(album, photoId, list) {
+    const items = (list || []).slice()
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).map(c => `
+      <li class="album-comment">
+        <div class="album-comment-head">
+          <strong class="album-comment-author">${escape(AuthorNames.nameFor(c.author))}</strong>
+          <time class="album-comment-date muted small">${relativeTime(new Date(c.created_at).getTime())}</time>
+          ${this.canDeleteComment(c, album) ? `<button type="button" class="album-comment-x" data-del-comment="${escape(c.id)}" aria-label="Delete comment">×</button>` : ''}
+        </div>
+        <div class="album-comment-body">${escape(c.body).replace(/\n/g, '<br>')}</div>
+      </li>`).join('');
+    const composer = this.canComment()
+      ? `<form class="album-comment-add" data-comment-submit="${photoId ? escape(photoId) : 'album'}">
+           <textarea rows="2" placeholder="Write a comment…" maxlength="2000"></textarea>
+           <button type="submit" class="btn btn-secondary btn-sm">Post</button>
+         </form>`
+      : '';
+    return `<section class="album-comments">
+        <h4 class="album-comments-title">Comments</h4>
+        ${items ? `<ul class="album-comment-list">${items}</ul>` : '<p class="muted small">No comments yet.</p>'}
+        ${composer}
+      </section>`;
+  },
+
+  wireComments(album) {
+    const wrap = $('#album-detail');
+    if (!wrap) return;
+    wrap.querySelectorAll('form[data-comment-submit]').forEach(form => {
+      on(form, 'submit', (e) => {
+        e.preventDefault();
+        const target = form.dataset.commentSubmit;          // 'album' or a photo id
+        const photoId = target === 'album' ? null : target;
+        this.addComment(album, photoId, form.querySelector('textarea'));
+      });
+    });
+    wrap.querySelectorAll('[data-del-comment]').forEach(btn =>
+      on(btn, 'click', () => this.deleteComment(album, btn.dataset.delComment)));
+  },
+
+  // Render the active photo's comment thread (if a photo is selected) into the
+  // dedicated host beneath the grid.
+  _renderPhotoComments() {
+    const host = $('#album-photo-comments');
+    if (!host || !this.current) return;
+    if (!this._activePhotoId) { host.innerHTML = ''; return; }
+    const album = this.current.album;
+    const list = this.current.comments.filter(c => c.photo_id === this._activePhotoId);
+    const inner = this.commentsHTML(album, this._activePhotoId, list)
+      .replace('<h4 class="album-comments-title">Comments</h4>', '<h4 class="album-comments-title">Comments on the selected photo</h4>');
+    host.innerHTML = `<div class="album-photo-comments-inner">${inner}</div>`;
+    this.wireComments(album);
+  },
+
+  async addComment(album, photoId, textarea) {
+    if (!this.canComment()) { toast('Sign in to comment.', 'warn'); return; }
+    const body = (textarea.value || '').trim();
+    if (!body) return;
+    const res = await AlbumsApi.addComment(album.id, photoId, body);
+    if (!res.ok) { toast('Could not post comment.', 'warn'); return; }
+    this.current.comments.push(res.comment);
+    textarea.value = '';
+    this.renderDetail();
+  },
+
+  async deleteComment(album, commentId) {
+    const c = this.current.comments.find(x => x.id === commentId);
+    if (!c || !this.canDeleteComment(c, album)) return;
+    if (!confirm('Delete this comment?')) return;
+    const res = await AlbumsApi.deleteComment(commentId);
+    if (!res.ok) { toast('Could not delete comment.', 'warn'); return; }
+    this.current.comments = this.current.comments.filter(x => x.id !== commentId);
+    this.renderDetail();
+  },
+};
+
+// -------------------- ALBUM MODAL (v4.58) --------------------
+// Create / edit album metadata (title, date, description). Photos are added
+// from the detail view, so creating an album drops you straight into it.
+const AlbumModal = {
+  editing: null,   // album object when editing, else null
+  init() {
+    const fm = $('#album-form');
+    if (fm) on(fm, 'submit', (e) => { e.preventDefault(); this.save(); });
+    const modal = $('#album-modal');
+    if (modal) modal.querySelectorAll('[data-close]').forEach(el => on(el, 'click', () => this.close()));
+  },
+  openAdd() {
+    if (!AlbumsView.canCreate()) { toast('Sign in to create an album.', 'warn'); return; }
+    this.editing = null;
+    $('#album-form').reset();
+    $('#album-error').hidden = true;
+    $('#album-modal-title').textContent = 'New album';
+    $('#album-submit').textContent = 'Create album';
+    this.open();
+    setTimeout(() => $('#album-form').title.focus(), 50);
+  },
+  openEdit(album) {
+    if (!AlbumsView.canManage(album)) return;
+    this.editing = album;
+    const fm = $('#album-form');
+    fm.reset();
+    fm.title.value = album.title || '';
+    fm.event_date.value = album.event_date || '';
+    fm.description.value = album.description || '';
+    $('#album-error').hidden = true;
+    $('#album-modal-title').textContent = 'Edit album';
+    $('#album-submit').textContent = 'Save changes';
+    this.open();
+  },
+  open()  { const el = $('#album-modal'); el.setAttribute('aria-hidden', 'false'); el.classList.add('is-open'); },
+  close() { const el = $('#album-modal'); el.setAttribute('aria-hidden', 'true');  el.classList.remove('is-open'); this.editing = null; },
+  async save() {
+    const fm = $('#album-form');
+    const title = (fm.title.value || '').trim();
+    if (!title) { $('#album-error').textContent = 'A title is required.'; $('#album-error').hidden = false; return; }
+    const payload = { title, description: (fm.description.value || '').trim(), event_date: fm.event_date.value || null };
+    if (this.editing) {
+      const res = await AlbumsApi.updateAlbum(this.editing.id, payload);
+      if (!res.ok) { $('#album-error').textContent = res.reason || 'Could not save.'; $('#album-error').hidden = false; return; }
+      this.close();
+      await AlbumsView.openAlbum(this.editing.id);
+      toast('Album updated.');
+    } else {
+      const res = await AlbumsApi.createAlbum(payload);
+      if (!res.ok) { $('#album-error').textContent = res.reason || 'Could not create album.'; $('#album-error').hidden = false; return; }
+      this.close();
+      await AlbumsView.openAlbum(res.id);   // jump into the new album to add photos
+      toast('Album created — now add some photos.');
+    }
   },
 };
 
@@ -17663,14 +18235,17 @@ const NewsletterView = {
       return;
     }
     this.ensureDefaults();
-    const data = this.compile();
     const host = $('#newsletter-preview');
     if (!host) return;
-    host.innerHTML = this.renderHTML(data);
-    // Resolve image signed URLs on the next tick so the preview shows
-    // the actual photos. Each section that includes photos uses the
-    // same data-newsletter-photo placeholder pattern.
-    host.querySelectorAll('[data-newsletter-photo]').forEach(el => this.resolvePhotoSrc(el));
+    // v4.58: warm the memories cache (now table-backed) before compiling.
+    MemoriesView.load().then(() => {
+      const data = this.compile();
+      host.innerHTML = this.renderHTML(data);
+      // Resolve image signed URLs on the next tick so the preview shows
+      // the actual photos. Each section that includes photos uses the
+      // same data-newsletter-photo placeholder pattern.
+      host.querySelectorAll('[data-newsletter-photo]').forEach(el => this.resolvePhotoSrc(el));
+    });
   },
 
   // Compile: pull all sources, filter by date range, return a structured
@@ -17682,7 +18257,9 @@ const NewsletterView = {
     const inRange = (iso) => !!iso && iso >= from && iso <= to;
 
     // --- Memory posts (date field) ---
-    const memories = (Store.state.memories || [])
+    // v4.58: memories live in tables now; read MemoriesView's loaded cache
+    // (warmed by render()/copyAsText() before compile()).
+    const memories = (MemoriesView.list() || [])
       .filter(m => inRange(m.date))
       .sort((a, z) => (z.date || '').localeCompare(a.date || ''));
 
@@ -17956,6 +18533,7 @@ const NewsletterView = {
   // Plain-text version for "Copy as email." Photos and rich markup are
   // omitted; only the words. Each section becomes a labeled block.
   async copyAsText() {
+    await MemoriesView.load();   // v4.58: ensure table-backed memories are loaded
     const data = this.compile();
     const stripHtml = (html) => (html || '')
       .replace(/<br\s*\/?>/gi, '\n')

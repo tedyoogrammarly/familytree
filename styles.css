@@ -5903,3 +5903,86 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   letter-spacing: 0.04em;
   color: var(--muted);
 }
+
+/* =====================================================================
+   v4.58  ALBUMS — owned photo collections (gallery layout B + detail)
+   ===================================================================== */
+.albums-gallery { display: block; }
+
+/* Hero: newest album as a wide banner */
+.album-hero {
+  position: relative; display: block; width: 100%; aspect-ratio: 16 / 7;
+  border-radius: var(--radius-lg); overflow: hidden; cursor: pointer;
+  margin-bottom: var(--space-5); box-shadow: var(--shadow-lift);
+}
+.album-hero-cover, .album-card-cover {
+  position: absolute; inset: 0; background-size: cover; background-position: center;
+  background-color: var(--paper-veil); transition: transform .4s var(--ease-out);
+}
+.album-hero-cover.is-missing, .album-card-cover.is-missing {
+  background: linear-gradient(135deg, var(--brand-300), var(--brand-500));
+}
+.album-hero:hover .album-hero-cover { transform: scale(1.03); }
+.album-hero:focus-visible { outline: none; box-shadow: var(--ring-brand), var(--shadow-lift); }
+.album-hero-cap {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
+  padding: var(--space-6); color: #fff;
+  background: linear-gradient(to top, rgba(23, 48, 40, .78), transparent 55%);
+}
+.album-hero-title { font-family: var(--font-display); font-size: 28px; margin: 0; color: #fff; letter-spacing: -0.01em; }
+.album-hero-meta { margin: 4px 0 0; color: rgba(255, 255, 255, .85); font-size: 13px; }
+
+/* Grid of remaining albums */
+.albums-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-4); }
+.album-card {
+  background: var(--paper-soft); border: 1px solid var(--hairline); border-radius: var(--radius);
+  overflow: hidden; cursor: pointer; box-shadow: var(--shadow-soft);
+  transition: transform .2s var(--ease-out), box-shadow .2s var(--ease-out);
+}
+.album-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
+.album-card:focus-visible { outline: none; box-shadow: var(--ring-brand); }
+.album-card-cover { position: relative; aspect-ratio: 4 / 3; }
+.album-card-body { padding: var(--space-3) var(--space-4) var(--space-4); }
+.album-card-title { font-family: var(--font-display); font-size: 16px; margin: 0; color: var(--brand-900); }
+.album-card-meta { margin: 2px 0 0; font-size: 12px; color: var(--ink-400); }
+
+/* Album detail */
+.album-back { margin-bottom: var(--space-3); }
+.album-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
+.album-detail-title { font-family: var(--font-display); font-size: 24px; margin: 0; color: var(--brand-900); }
+.album-detail-meta { margin: 2px 0 0; color: var(--ink-400); font-size: 13px; }
+.album-detail-desc { margin: var(--space-3) 0 0; max-width: 60ch; line-height: 1.7; }
+.album-detail-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.album-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-3); }
+.album-photo {
+  position: relative; aspect-ratio: 1; border-radius: var(--radius-sm); overflow: hidden;
+  background-size: cover; background-position: center; background-color: var(--paper-veil); cursor: pointer;
+  transition: transform .2s var(--ease-out);
+}
+.album-photo:hover { transform: scale(1.02); }
+.album-photo:focus-visible { outline: none; box-shadow: var(--ring-brand); }
+.album-photo.is-missing { background: var(--paper-veil); }
+.album-photo-x {
+  position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border: none; border-radius: 50%;
+  background: rgba(23, 48, 40, .6); color: #fff; cursor: pointer; line-height: 1; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+.album-photo-x:hover { background: var(--danger); }
+
+/* Comments (album-level + per-photo) */
+.album-comments, .album-photo-comments-inner { margin-top: var(--space-6); border-top: 1px solid var(--hairline); padding-top: var(--space-4); }
+.album-comments-title { font-size: 14px; margin: 0 0 var(--space-3); color: var(--brand-700); text-transform: uppercase; letter-spacing: 0.04em; }
+.album-comment-list { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.album-comment-head { display: flex; align-items: center; gap: var(--space-2); }
+.album-comment-author { font-size: 13px; color: var(--brand-900); }
+.album-comment-body { margin-top: 2px; line-height: 1.6; }
+.album-comment-x { border: none; background: transparent; color: var(--ink-400); cursor: pointer; font-size: 14px; line-height: 1; margin-left: auto; }
+.album-comment-x:hover { color: var(--danger); }
+.album-comment-add { display: flex; gap: var(--space-2); align-items: flex-start; }
+.album-comment-add textarea { flex: 1; }
+
+@media (max-width: 640px) {
+  .album-hero { aspect-ratio: 16 / 10; }
+  .album-hero-title { font-size: 22px; }
+  .album-detail-head { flex-direction: column; }
+}
