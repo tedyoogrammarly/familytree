@@ -10298,6 +10298,16 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.58',
+    date: '2026-06-22',
+    title: 'Albums + Memories opened to everyone',
+    changes: [
+      'New “Albums” tab: photo collections anyone signed in can create. Each album is owned by its creator — the owner (and admins) add photos, edit, and delete; everyone else can browse and comment. The gallery shows the newest album as a banner with the rest in a cover grid; opening one shows a photo grid with the same tap-to-enlarge lightbox the rest of the app uses. Comments are open on each album and on individual photos.',
+      'Memories is now an open feed: anyone signed in can create posts, upload photos, react, and comment — previously only admins could post. You can edit and delete your own posts and comments; admins can still manage any.',
+      'Under the hood: posts, albums, photos, reactions, and comments moved out of the single shared archive record into dedicated tables with per-person permissions, so many people can contribute at once without overwriting each other — and the family-tree data stays admin-only and protected. Photo uploads to the family-photos store are now open to any signed-in user (you can remove your own; admins can remove any). Existing Memories posts were migrated over without loss.',
+    ],
+  },
+  {
     version: '4.57',
     date: '2026-06-13',
     title: 'Vault: Blood type always visible on Family cards',
