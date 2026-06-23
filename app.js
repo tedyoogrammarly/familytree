@@ -10296,6 +10296,14 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.61',
+    date: '2026-06-22',
+    title: 'Albums gallery — uniform square covers',
+    changes: [
+      'The Albums gallery is now a clean grid of equal, square album covers — with a “Create album” tile up front and the photo count under each — instead of one large banner across the top. Covers no longer get awkwardly cropped, and more albums fit on screen at once.',
+    ],
+  },
+  {
     version: '4.60',
     date: '2026-06-22',
     title: 'Albums polish — pick a cover, upload progress, smaller banner',
@@ -16398,8 +16406,12 @@ const AlbumsView = {
   signedUrlCache: new Map(),   // bucket|path -> { url, expiresAt }
   albums: [],                   // cached list for the gallery
   coverByAlbum: new Map(),      // album_id -> { bucket, path } | null
+  countByAlbum: new Map(),      // album_id -> photo count
   current: null,                // { album, photos, comments } when a detail is open
   _activePhotoId: null,
+
+  // Drop cached cover + count for an album so the gallery re-resolves them.
+  _invalidateAlbum(id) { this.coverByAlbum.delete(id); this.countByAlbum.delete(id); },
 
   init() {
     on($('#btn-album-add'),       'click', () => AlbumModal.openAdd());
@@ -16423,13 +16435,14 @@ const AlbumsView = {
     if (!gallery) return;
     this.albums = await AlbumsApi.listAlbums();
     await this._resolveCovers();
-    if (!this.albums.length) { gallery.innerHTML = ''; if (empty) empty.hidden = false; return; }
+    const canCreate = this.canCreate();
+    // Uniform square-cover grid (Meta-style), with a "Create album" tile first.
+    if (!this.albums.length && !canCreate) { gallery.innerHTML = ''; if (empty) empty.hidden = false; return; }
     if (empty) empty.hidden = true;
-    const [hero, ...rest] = this.albums;
-    gallery.innerHTML = `
-      ${this.heroHTML(hero)}
-      ${rest.length ? `<div class="albums-grid">${rest.map(a => this.cardHTML(a)).join('')}</div>` : ''}
-    `;
+    const createTile = canCreate ? this.createTileHTML() : '';
+    gallery.innerHTML = `<div class="albums-grid">${createTile}${this.albums.map(a => this.cardHTML(a)).join('')}</div>`;
+    const ct = gallery.querySelector('[data-album-create]');
+    if (ct) on(ct, 'click', () => AlbumModal.openAdd());
     gallery.querySelectorAll('[data-album-open]').forEach(el => {
       on(el, 'click', () => this.openAlbum(el.dataset.albumOpen));
       on(el, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openAlbum(el.dataset.albumOpen); } });
@@ -16442,21 +16455,26 @@ const AlbumsView = {
   async _resolveCovers() {
     for (const a of this.albums) {
       if (this.coverByAlbum.has(a.id)) continue;
-      let ref = null;
+      let ref = null, count = 0;
       if (Backend.client) {
+        // photo count (light head query — failure here doesn't hide the album)
+        const cnt = await Backend.client.from('album_photos').select('id', { count: 'exact', head: true }).eq('album_id', a.id);
+        count = cnt.count || 0;
+        // cover ref: explicit cover_photo_id, else newest photo
         let q = Backend.client.from('album_photos').select('bucket, path').eq('album_id', a.id);
         q = a.cover_photo_id ? q.eq('id', a.cover_photo_id) : q.order('created_at', { ascending: false }).limit(1);
         const { data } = await q;
         if (data && data[0]) ref = { bucket: data[0].bucket, path: data[0].path };
       }
       this.coverByAlbum.set(a.id, ref);
+      this.countByAlbum.set(a.id, count);
     }
   },
 
   metaLine(a) {
+    const count = this.countByAlbum.get(a.id) || 0;
     const by = AuthorNames.nameFor(a.created_by);
-    const date = a.event_date ? formatDate(a.event_date) : '';
-    return `by ${escape(by)}${date ? ' · ' + escape(date) : ''}`;
+    return `${count} photo${count === 1 ? '' : 's'} · by ${escape(by)}`;
   },
 
   coverAttrs(a) {
@@ -16466,15 +16484,13 @@ const AlbumsView = {
       : 'data-album-cover'; // no photo → placeholder via CSS .is-missing
   },
 
-  heroHTML(a) {
+  // First grid tile: create a new album (Meta-style).
+  createTileHTML() {
     return `
-      <article class="album-hero" data-album-open="${escape(a.id)}" tabindex="0" role="button" aria-label="Open album ${escape(a.title)}">
-        <div class="album-hero-cover" ${this.coverAttrs(a)}></div>
-        <div class="album-hero-cap">
-          <h3 class="album-hero-title">${escape(a.title)}</h3>
-          <p class="album-hero-meta">${this.metaLine(a)}</p>
-        </div>
-      </article>`;
+      <button type="button" class="album-card album-create-tile" data-album-create aria-label="Create a new album">
+        <div class="album-create-box"><span class="album-create-plus" aria-hidden="true">+</span></div>
+        <div class="album-card-body"><h4 class="album-card-title">Create album</h4></div>
+      </button>`;
   },
 
   cardHTML(a) {
@@ -16619,7 +16635,7 @@ const AlbumsView = {
     if (uploaded.length) {
       const res = await AlbumsApi.addPhotos(album.id, uploaded);
       if (!res.ok) { this._hideUploadProgress(); toast('Could not save photos.', 'warn'); return; }
-      this.coverByAlbum.delete(album.id);   // cover may have changed
+      this._invalidateAlbum(album.id);   // cover may have changed
       await this.openAlbum(album.id);        // re-fetch + re-render (rebuilds the panel, clearing the bar)
       toast(`${uploaded.length} photo${uploaded.length === 1 ? '' : 's'} added.`);
     } else {
@@ -16634,7 +16650,7 @@ const AlbumsView = {
     const res = await AlbumsApi.updateAlbum(album.id, { cover_photo_id: photoId });
     if (!res.ok) { toast('Could not set the cover.', 'warn'); return; }
     this.current.album.cover_photo_id = photoId;
-    this.coverByAlbum.delete(album.id);   // gallery re-resolves the cover next render
+    this._invalidateAlbum(album.id);   // gallery re-resolves the cover next render
     toast('Cover photo updated.');
     this.renderDetail();
   },
@@ -16646,7 +16662,7 @@ const AlbumsView = {
     const res = await AlbumsApi.removePhoto(photoId);
     if (!res.ok) { toast('Could not remove photo.', 'warn'); return; }
     if (photo) await Backend.deleteMedia(photo.bucket, photo.path);  // best-effort storage cleanup
-    this.coverByAlbum.delete(this.current.album.id);
+    this._invalidateAlbum(this.current.album.id);
     await this.openAlbum(this.current.album.id);
   },
 
@@ -16657,7 +16673,7 @@ const AlbumsView = {
     for (const p of this.current.photos) await Backend.deleteMedia(p.bucket, p.path); // best-effort
     const res = await AlbumsApi.deleteAlbum(album.id);
     if (!res.ok) { toast('Could not delete album.', 'warn'); return; }
-    this.coverByAlbum.delete(album.id);
+    this._invalidateAlbum(album.id);
     toast('Album deleted.');
     this.backToGallery();
   },
