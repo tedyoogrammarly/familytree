@@ -5909,43 +5909,37 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
    ===================================================================== */
 .albums-gallery { display: block; }
 
-/* Hero: newest album as a wide banner */
-.album-hero {
-  position: relative; display: block; width: 100%; aspect-ratio: 21 / 9;
-  max-height: 300px;   /* v4.60: cap height so the cover doesn't dominate the page */
-  border-radius: var(--radius-lg); overflow: hidden; cursor: pointer;
-  margin-bottom: var(--space-5); box-shadow: var(--shadow-lift);
-}
-.album-hero-cover, .album-card-cover {
-  position: absolute; inset: 0; background-size: cover; background-position: center;
-  background-color: var(--paper-veil); transition: transform .4s var(--ease-out);
-}
-.album-hero-cover.is-missing, .album-card-cover.is-missing {
-  background: linear-gradient(135deg, var(--brand-300), var(--brand-500));
-}
-.album-hero:hover .album-hero-cover { transform: scale(1.03); }
-.album-hero:focus-visible { outline: none; box-shadow: var(--ring-brand), var(--shadow-lift); }
-.album-hero-cap {
-  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
-  padding: var(--space-6); color: #fff;
-  background: linear-gradient(to top, rgba(23, 48, 40, .78), transparent 55%);
-}
-.album-hero-title { font-family: var(--font-display); font-size: 28px; margin: 0; color: #fff; letter-spacing: -0.01em; }
-.album-hero-meta { margin: 4px 0 0; color: rgba(255, 255, 255, .85); font-size: 13px; }
-
-/* Grid of remaining albums */
-.albums-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-4); }
+/* v4.61: uniform square-cover grid (Meta-style) — no hero banner */
+.albums-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-4); }
 .album-card {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
   background: var(--paper-soft); border: 1px solid var(--hairline); border-radius: var(--radius);
   overflow: hidden; cursor: pointer; box-shadow: var(--shadow-soft);
   transition: transform .2s var(--ease-out), box-shadow .2s var(--ease-out);
 }
 .album-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
 .album-card:focus-visible { outline: none; box-shadow: var(--ring-brand); }
-.album-card-cover { position: relative; aspect-ratio: 4 / 3; }
+.album-card-cover {
+  position: relative; aspect-ratio: 1 / 1;
+  background-size: cover; background-position: center; background-color: var(--paper-veil);
+  transition: transform .4s var(--ease-out);
+}
+.album-card-cover.is-missing { background: linear-gradient(135deg, var(--brand-300), var(--brand-500)); }
 .album-card-body { padding: var(--space-3) var(--space-4) var(--space-4); }
 .album-card-title { font-family: var(--font-display); font-size: 16px; margin: 0; color: var(--brand-900); }
 .album-card-meta { margin: 2px 0 0; font-size: 12px; color: var(--ink-400); }
+
+/* "Create album" tile (first grid cell) */
+.album-create-tile { background: transparent; border: none; box-shadow: none; padding: 0; }
+.album-create-tile:hover { box-shadow: none; }
+.album-create-box {
+  aspect-ratio: 1 / 1; border: 1.5px dashed var(--ink-200); border-radius: var(--radius);
+  display: flex; align-items: center; justify-content: center; background: var(--paper);
+  transition: border-color .2s var(--ease-out), background .2s var(--ease-out);
+}
+.album-create-tile:hover .album-create-box { border-color: var(--brand-300); background: var(--tint-50); }
+.album-create-plus { font-size: 40px; line-height: 1; font-weight: 300; color: var(--brand-500); }
+.album-create-tile .album-card-title { color: var(--brand-700); }
 
 /* Album detail */
 .album-back { margin-bottom: var(--space-3); }
@@ -6012,7 +6006,5 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .album-comment-add textarea { flex: 1; }
 
 @media (max-width: 640px) {
-  .album-hero { aspect-ratio: 16 / 10; }
-  .album-hero-title { font-size: 22px; }
   .album-detail-head { flex-direction: column; }
 }
