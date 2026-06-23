@@ -10296,6 +10296,14 @@ function expandReminder(r, today, horizon) {
 // current version chip.
 const CHANGELOG = [
   {
+    version: '4.62',
+    date: '2026-06-22',
+    title: 'Drag & drop photos into albums',
+    changes: [
+      'Adding photos to an album now supports drag and drop: open an album and drag image files onto the “Drag photos here” zone (or click it to pick files, same as before). The upload progress bar shows while they save, and non-image files are skipped automatically.',
+    ],
+  },
+  {
     version: '4.61',
     date: '2026-06-22',
     title: 'Albums gallery — uniform square covers',
@@ -16551,18 +16559,23 @@ const AlbumsView = {
       <header class="album-detail-head">
         <div>
           <h3 class="album-detail-title">${escape(album.title)}</h3>
-          <p class="album-detail-meta">${this.metaLine(album)}</p>
+          <p class="album-detail-meta">${photos.length} photo${photos.length === 1 ? '' : 's'} · by ${escape(AuthorNames.nameFor(album.created_by))}</p>
           ${album.description ? `<p class="album-detail-desc">${escape(album.description).replace(/\n/g, '<br>')}</p>` : ''}
         </div>
         ${manage ? `
           <div class="album-detail-actions">
-            <label class="btn btn-secondary btn-sm" id="album-photo-add-label">+ Add photos
-              <input type="file" accept="image/*" id="album-photo-input" hidden multiple />
-            </label>
             <button class="btn btn-ghost btn-sm"        type="button" id="album-edit">Edit</button>
             <button class="btn btn-danger-ghost btn-sm" type="button" id="album-delete">Delete album</button>
           </div>` : ''}
       </header>
+      ${manage ? `
+        <label class="album-dropzone" id="album-dropzone">
+          <input type="file" accept="image/*" id="album-photo-input" hidden multiple />
+          <span class="album-dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/></svg>
+          </span>
+          <span class="album-dropzone-text">Drag photos here, or <span class="album-dropzone-link">click to choose</span></span>
+        </label>` : ''}
       <div id="album-upload-progress" class="album-upload-progress" hidden>
         <div class="aup-bar"><div class="aup-fill"></div></div>
         <span class="aup-label"></span>
@@ -16575,6 +16588,14 @@ const AlbumsView = {
     on($('#album-back'), 'click', () => this.backToGallery());
     if (manage) {
       on($('#album-photo-input'), 'change', (e) => this.onPhotoPick(e));
+      const dz = $('#album-dropzone');
+      if (dz) {
+        const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+        on(dz, 'dragenter', (e) => { stop(e); dz.classList.add('is-dragover'); });
+        on(dz, 'dragover',  (e) => { stop(e); dz.classList.add('is-dragover'); });
+        on(dz, 'dragleave', (e) => { if (e.target === dz) dz.classList.remove('is-dragover'); });
+        on(dz, 'drop',      (e) => { stop(e); dz.classList.remove('is-dragover'); this.uploadFiles(e.dataTransfer && e.dataTransfer.files); });
+      }
       on($('#album-edit'),   'click', () => AlbumModal.openEdit(album));
       on($('#album-delete'), 'click', () => this.deleteAlbum());
       wrap.querySelectorAll('[data-remove-photo]').forEach(btn =>
@@ -16614,9 +16635,19 @@ const AlbumsView = {
   _hideUploadProgress() { const p = $('#album-upload-progress'); if (p) p.hidden = true; },
 
   async onPhotoPick(e) {
-    const files = [...(e.target.files || [])];
+    const list = e.target.files;
     e.target.value = '';
-    if (!files.length || !this.current) return;
+    await this.uploadFiles(list);
+  },
+
+  // Shared by the file picker and drag-and-drop. Images only.
+  async uploadFiles(fileList) {
+    if (!this.current) return;
+    const all = [...(fileList || [])];
+    if (!all.length) return;   // nothing selected (e.g. picker cancelled)
+    const files = all.filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!files.length) { toast('Only image files can be added to an album.', 'warn'); return; }
+    if (files.length < all.length) toast(`Skipped ${all.length - files.length} non-image file(s).`, 'warn');
     const album = this.current.album;
     const uploaded = [];
     let done = 0;
