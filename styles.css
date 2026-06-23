@@ -5369,6 +5369,19 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   color: var(--ink-900);
   white-space: pre-wrap;
 }
+/* v4.65: emoji reactions on a comment */
+.memory-creactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; }
+.memory-creaction-chip, .memory-creaction-more {
+  display: inline-flex; align-items: center; gap: 3px;
+  border: 1px solid var(--ink-200); background: var(--paper-soft); color: var(--ink-700);
+  border-radius: 999px; padding: 1px 8px; font-size: 12px; line-height: 1.7; cursor: pointer;
+  transition: background .15s var(--ease-out), border-color .15s var(--ease-out);
+}
+.memory-creaction-chip:hover, .memory-creaction-more:hover { border-color: var(--brand-300); background: var(--tint-50); }
+.memory-creaction-chip.is-mine { border-color: var(--brand-500); background: var(--tint-100); color: var(--brand-900); font-weight: 600; }
+.memory-creaction-count { font-variant-numeric: tabular-nums; }
+.memory-creaction-more { color: var(--ink-400); }
+.memory-creaction-chip[disabled] { cursor: default; opacity: .7; }
 .memory-comment-add {
   display: flex;
   gap: 8px;
