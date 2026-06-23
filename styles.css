@@ -5911,7 +5911,8 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 
 /* Hero: newest album as a wide banner */
 .album-hero {
-  position: relative; display: block; width: 100%; aspect-ratio: 16 / 7;
+  position: relative; display: block; width: 100%; aspect-ratio: 21 / 9;
+  max-height: 300px;   /* v4.60: cap height so the cover doesn't dominate the page */
   border-radius: var(--radius-lg); overflow: hidden; cursor: pointer;
   margin-bottom: var(--space-5); box-shadow: var(--shadow-lift);
 }
@@ -5968,6 +5969,35 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   display: flex; align-items: center; justify-content: center;
 }
 .album-photo-x:hover { background: var(--danger); }
+
+/* v4.60: cover badge + "set as cover" button on photo tiles */
+.album-photo.is-cover { outline: 2px solid var(--accent-500); outline-offset: -2px; }
+.album-photo-coverbadge {
+  position: absolute; top: 6px; left: 6px; z-index: 1;
+  background: var(--accent-700); color: #fff; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .02em; padding: 2px 7px; border-radius: 999px; pointer-events: none;
+}
+.album-photo-setcover {
+  position: absolute; left: 6px; bottom: 6px; z-index: 1;
+  border: none; border-radius: 999px; cursor: pointer;
+  background: rgba(23, 48, 40, .62); color: #fff; font-size: 11px; font-weight: 600;
+  padding: 3px 9px; opacity: .92; transition: background .15s var(--ease-out), opacity .15s var(--ease-out);
+}
+.album-photo:hover .album-photo-setcover { opacity: 1; }
+.album-photo-setcover:hover { background: var(--accent-700); }
+
+/* v4.60: inline upload progress bar */
+.album-upload-progress { display: flex; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.album-upload-progress .aup-bar {
+  flex: 1; height: 8px; border-radius: 999px; overflow: hidden;
+  background: var(--paper-veil); border: 1px solid var(--hairline);
+}
+.album-upload-progress .aup-fill {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand-500), var(--accent-500));
+  transition: width .25s var(--ease-out);
+}
+.album-upload-progress .aup-label { font-size: 12.5px; color: var(--ink-400); white-space: nowrap; }
 
 /* Comments (album-level + per-photo) */
 .album-comments, .album-photo-comments-inner { margin-top: var(--space-6); border-top: 1px solid var(--hairline); padding-top: var(--space-4); }
