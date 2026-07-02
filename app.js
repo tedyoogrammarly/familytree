@@ -8810,6 +8810,11 @@ function setLoginMode(mode) {
   _loginMode = mode;
   $('#btn-login-submit').textContent = (mode === 'signin') ? 'Sign in' : 'Create account';
   $('#btn-login-toggle').textContent = (mode === 'signin') ? 'Need an account? Sign up' : 'Have an account? Sign in';
+  // v4.66: match the password field's autocomplete to the mode so password
+  // managers fill the existing login when signing in, and only offer a
+  // suggested (new) password when actually creating an account.
+  const pwd = $('#login-form [name="password"]');
+  if (pwd) pwd.setAttribute('autocomplete', mode === 'signup' ? 'new-password' : 'current-password');
   $('#login-error').textContent = '';
 }
 
@@ -10320,6 +10325,14 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.66',
+    date: '2026-07-01',
+    title: 'Sign-in no longer offers to create a new password',
+    changes: [
+      'Fixed the login screen prompting your password manager to “Use Suggested Password” (create a new one) even when you already have a saved login. The email field is now tagged as the account username so 1Password/Safari can match your existing login and offer to fill it, and the strong-password suggestion now appears only when you switch to “Sign up”.',
+    ],
+  },
   {
     version: '4.65',
     date: '2026-06-23',

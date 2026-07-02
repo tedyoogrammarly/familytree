@@ -58,15 +58,21 @@
       <form id="login-form" class="auth-form" autocomplete="on" novalidate>
         <label class="field">
           <span>Email</span>
-          <input name="email" type="email" autocomplete="email" required />
+          <!-- v4.66: autocomplete="username" (not "email"). Password managers
+               (1Password/Safari) pair a login on a USERNAME field — with only
+               "email" here they couldn't match the saved login to the password
+               field, so they fell back to offering "Use Suggested Password"
+               (create new). "username" lets them fill the existing login.
+               type="email" still drives validation + the email keyboard. -->
+          <input name="email" type="email" autocomplete="username" required />
         </label>
         <label class="field">
           <span>Password</span>
           <!-- v4.38: minlength="6" removed. Safari/iOS treats minlength on
-               a password field as a strong hint that the form is a SIGN-UP,
-               not a sign-in, and offers the "Use Suggested Password" prompt
-               on top of the existing autofill. autocomplete="current-password"
-               alone is the right signal for "fill from password manager." -->
+               a password field as a strong hint that the form is a SIGN-UP.
+               v4.66: this stays "current-password" for sign-in; setLoginMode()
+               flips it to "new-password" only in sign-up mode, so the strong-
+               password prompt shows when creating an account — not signing in. -->
           <input name="password" type="password" autocomplete="current-password" required />
         </label>
         <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
