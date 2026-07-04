@@ -690,6 +690,61 @@ code {
   shape-rendering: auto;
   opacity: .75;
 }
+/* ---- Relationship spotlight (v4.69) ----
+   Hovering a card (or opening a profile drawer) lights every connector that
+   touches that person and dims the rest of the tree, so a single person's
+   place in the family reads instantly. Only opacity + stroke-width animate. */
+.tree-edges .edge,
+.tree-edges .spouse-heart,
+.tree-edges .sibling-badge,
+.tree-edges .spouse-years {
+  transition: opacity .22s var(--ease-out);
+}
+.tree-canvas.spotlight-on .tree-edges .is-dim { opacity: .08; }
+.tree-canvas.spotlight-on .tree-edges .edge.is-hot { opacity: 1; }
+.tree-canvas.spotlight-on .tree-edges .edge.family.is-hot { stroke-width: 3.6; }
+.tree-canvas.spotlight-on .tree-edges .edge.spouse.is-hot { stroke-width: 3; }
+.tree-canvas.spotlight-on .tree-edges .edge.sibling.is-hot { stroke-width: 2.6; }
+.tree-canvas.spotlight-on .node { transition: opacity .22s var(--ease-out), transform .25s var(--ease-spring), box-shadow .25s var(--ease-out), border-color .2s var(--ease-out); }
+.tree-canvas.spotlight-on .node.is-backstage { opacity: .28; }
+.tree-canvas.spotlight-on .node.is-kin { opacity: 1; }
+
+/* Connection legend + hover hint — bottom-left of the canvas. */
+.tree-legend {
+  position: absolute;
+  left: 16px; bottom: 16px;
+  z-index: 5;
+  padding: 10px 14px 11px;
+  background: rgba(251, 248, 242, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+  pointer-events: none;
+}
+.tree-legend-hint {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--accent-700);
+  margin-bottom: 7px;
+}
+.tree-legend-rows { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.tree-legend-item {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 11.5px;
+  color: var(--ink-500);
+}
+.tree-legend-item svg { flex-shrink: 0; }
+.tree-legend-item path { fill: none; stroke-linecap: round; }
+.tll-family  { stroke: var(--brand-600); stroke-width: 2.6; }
+.tll-spouse  { stroke: var(--accent-700); stroke-width: 2; }
+.tll-ex      { stroke: var(--accent-700); stroke-width: 2; stroke-dasharray: 1 5; opacity: .6; }
+.tll-sibling { stroke: var(--ink-400); stroke-width: 1.8; stroke-dasharray: 7 4; }
+@media (max-width: 700px) { .tree-legend { display: none; } }
+
 .tree-edges .spouse-heart .heart-fill {
   fill: #dc2626;
 }
@@ -1881,6 +1936,36 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 
 /* v4.37: bank / utility account numbers — monospace + tabular numerals so
    the bullets line up cleanly, with a subtle reminder color. */
+/* v4.69: sensitive-number widget — masked value + peek/copy icon buttons.
+   Peek auto re-masks after 12s (see sensitiveNumberHTML in app.js). */
+.secret-num {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.secret-num-value { font-variant-numeric: tabular-nums; }
+.secret-num.is-revealed .secret-num-value {
+  color: var(--brand-700);
+  font-weight: 600;
+}
+.secret-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xs);
+  background: var(--paper-soft);
+  color: var(--ink-500);
+  cursor: pointer;
+  transition: transform .14s var(--ease-out), opacity .14s var(--ease-out);
+}
+.secret-btn:hover { color: var(--ink-900); transform: translateY(-1px); }
+.secret-btn:active { transform: translateY(0) scale(.94); }
+.secret-btn:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
+.secret-num.is-revealed [data-secret-reveal] {
+  background: var(--tint-100);
+  border-color: var(--tint-200);
+  color: var(--brand-700);
+}
+
 .masked-number {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
@@ -5236,6 +5321,62 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   gap: 14px;
   padding: 14px 18px 22px;
 }
+/* v4.69: person filter chips — same quiet pill + dot language as the
+   dashboard's upcoming filters. */
+.mem-people-filter {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 14px 18px 0;
+}
+.mem-person-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  font: inherit;
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--paper-soft);
+  color: var(--ink-500);
+  cursor: pointer;
+  transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out);
+}
+.mem-person-chip:hover { transform: translateY(-1px); color: var(--ink-900); }
+.mem-person-chip:active { transform: translateY(0); }
+.mem-person-chip:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
+.mem-person-chip.is-active {
+  background: var(--brand-800);
+  border-color: var(--brand-800);
+  color: var(--paper);
+}
+.mem-person-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(19, 24, 38, 0.07);
+}
+.mem-person-chip.is-active .mem-person-count { background: rgba(247, 243, 236, 0.2); }
+
+/* v4.69: month headers — a serif date with a hairline rule, so the feed
+   reads as a timeline rather than an undifferentiated stack. */
+.mem-month-head {
+  display: flex; align-items: center; gap: 14px;
+  margin: 26px 2px 2px;
+}
+.mem-month-head:first-child { margin-top: 4px; }
+.mem-month-head span {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--ink-700);
+  white-space: nowrap;
+}
+.mem-month-head::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--hairline);
+}
+
 .memory-post {
   background: #fff;
   border: 1px solid var(--hairline);

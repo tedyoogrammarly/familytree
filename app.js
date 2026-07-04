@@ -2239,26 +2239,50 @@ function hexToHue(hex) {
 }
 
 // SVG heart at (x, y). Solid for married, broken (with crack) for divorced.
-function heartMarker(x, y, divorced) {
+function heartMarker(x, y, divorced, ids = '') {
   // v4.21: bumped visual size — the heart now reads at a glance against the
   // spouse line. Halo grows proportionally so the paper-soft background
   // still cleanly contrasts with the underlying connector.
+  // v4.69: optional `ids` ("idA idB") lets the relationship spotlight treat
+  // the heart like the spouse edge it decorates.
   const w = 30, h = 27;
+  const dataAttr = ids ? ` data-m="${ids}"` : '';
   // Heart path centered roughly on (0,0)
   const path = 'M 0 6 C 0 -1, -10 -1, -10 6 C -10 12, 0 16, 0 18 C 0 16, 10 12, 10 6 C 10 -1, 0 -1, 0 6 Z';
   const halo = `<rect x="${x - w/2}" y="${y - h/2}" width="${w}" height="${h}" rx="5" fill="var(--paper-soft)" opacity=".95"/>`;
   if (!divorced) {
-    return `<g class="spouse-heart" transform="translate(${x} ${y - 2}) scale(1.1)">
+    return `<g class="spouse-heart"${dataAttr} transform="translate(${x} ${y - 2}) scale(1.1)">
       ${halo}
       <path d="${path}" class="heart-fill"/>
     </g>`;
   }
   // broken: heart fill + a jagged white line down the middle
-  return `<g class="spouse-heart broken" transform="translate(${x} ${y - 2}) scale(1.1)">
+  return `<g class="spouse-heart broken"${dataAttr} transform="translate(${x} ${y - 2}) scale(1.1)">
     ${halo}
     <path d="${path}" class="heart-fill"/>
     <path d="M -1.4 -0.5 L 1 4 L -1 8 L 1.4 13 L -0.5 17" class="heart-crack"/>
   </g>`;
+}
+
+// The people the relationship spotlight considers "kin" of a member:
+// self, parents, current + past spouses, children, and siblings (linked
+// explicitly or via a shared parent). Used by Canvas.spotlight (v4.69).
+function relatedIdsFor(id) {
+  const rel = new Set([id]);
+  const m = Store.byId(id);
+  if (!m) return rel;
+  (m.parentIds || []).forEach(p => rel.add(p));
+  if (m.spouseId) rel.add(m.spouseId);
+  (m.exSpouseIds || []).forEach(e => rel.add(e));
+  (m.siblingLinkIds || []).forEach(s => rel.add(s));
+  const myParents = m.parentIds || [];
+  Store.membersList().forEach(o => {
+    if (o.id === id) return;
+    const oParents = o.parentIds || [];
+    if (oParents.includes(id)) rel.add(o.id);                          // child
+    else if (myParents.length && oParents.some(p => myParents.includes(p))) rel.add(o.id); // sibling
+  });
+  return rel;
 }
 
 // -------------------- LAYOUT --------------------
@@ -2588,6 +2612,47 @@ const Canvas = {
     this.renderEdges();
     this.renderNodes();
     $('#tree-empty').toggleAttribute('hidden', Store.membersList().length > 0);
+    // v4.69: a full re-render rebuilds nodes + edges, wiping any spotlight
+    // classes. Re-apply the pinned spotlight (drawer open) or clear it.
+    this._spotlightId = null;
+    this.spotlight(this._pinnedId || null);
+  },
+
+  // ---- Relationship spotlight (v4.69) ----
+  // Hovering a card (or opening someone's drawer) lights up every connector
+  // that touches that person — descent lines, marriage lines, sibling
+  // brackets — and gently dims everyone else, so you can trace exactly how
+  // one person links into the family. `_pinnedId` keeps the spotlight held
+  // while the profile drawer is open; hover previews take over temporarily
+  // and fall back to the pin on pointerleave.
+  _spotlightId: null,
+  _pinnedId: null,
+  spotlight(id) {
+    id = id || null;
+    if (this._spotlightId === id) return;
+    this._spotlightId = id;
+    if (!this.el || !this.edges || !this.nodes) return;
+    this.el.classList.toggle('spotlight-on', !!id);
+    if (!id) {
+      this.edges.querySelectorAll('.is-hot, .is-dim').forEach(el => el.classList.remove('is-hot', 'is-dim'));
+      this.nodes.querySelectorAll('.is-kin, .is-backstage').forEach(el => el.classList.remove('is-kin', 'is-backstage'));
+      return;
+    }
+    const rel = relatedIdsFor(id);
+    this.edges.querySelectorAll('[data-m]').forEach(el => {
+      const ids = (el.getAttribute('data-m') || '').split(' ');
+      // Hot when the edge touches the person directly, or when it connects
+      // exclusively people in their inner circle (e.g. the marriage line
+      // between someone's own parents).
+      const hot = ids.includes(id) || ids.every(x => rel.has(x));
+      el.classList.toggle('is-hot', hot);
+      el.classList.toggle('is-dim', !hot);
+    });
+    this.nodes.querySelectorAll('.node').forEach(n => {
+      const kin = rel.has(n.dataset.id);
+      n.classList.toggle('is-kin', kin);
+      n.classList.toggle('is-backstage', !kin);
+    });
   },
   renderEdges() {
     const visibleIds = computeVisibleIds();
@@ -2678,7 +2743,12 @@ const Canvas = {
       const areSpouses = ps.length === 2 && ps[0].spouseId === ps[1].id;
       const hue = hueMap.get(_key) ?? 0;
       const stroke = `hsl(${hue} 60% 38%)`;
-      const styleAttr = `style="stroke: ${stroke}"`;
+      // v4.69: every edge carries the member ids it connects (data-m) so the
+      // relationship spotlight (Canvas.spotlight) can light exactly the paths
+      // that touch the hovered / selected person and dim the rest.
+      const famIds = [...parentIds, ...children.map(c => c.id)].join(' ');
+      const styleAttr = `style="stroke: ${stroke}" data-m="${famIds}"`;
+      const childAttr = (c) => `style="stroke: ${stroke}" data-m="${[...parentIds, c.id].join(' ')}"`;
       const fLane = (_lane % 3) * LANE_OFFSET;   // 0, 14, 28 → break visual continuity
       let anchorX, anchorY;
 
@@ -2700,7 +2770,7 @@ const Canvas = {
         const xs = [anchorX, ...children.map(cx)];
         const trunkL = Math.min(...xs), trunkR = Math.max(...xs);
         if (trunkR - trunkL > 0.5) lines.push(`<path class="edge family" ${styleAttr} d="M ${trunkL} ${trunkY} H ${trunkR}"/>`);
-        children.forEach(c => lines.push(`<path class="edge family" ${styleAttr} d="M ${cx(c)} ${trunkY} V ${c.y}"/>`));
+        children.forEach(c => lines.push(`<path class="edge family" ${childAttr(c)} d="M ${cx(c)} ${trunkY} V ${c.y}"/>`));
       } else {
         if (ps.length === 1) {
           anchorX = ps[0].x + NODE_W; anchorY = cy(ps[0]);
@@ -2719,7 +2789,7 @@ const Canvas = {
         const ys = [anchorY, ...children.map(cy)];
         const trunkT = Math.min(...ys), trunkB = Math.max(...ys);
         if (trunkB - trunkT > 0.5) lines.push(`<path class="edge family" ${styleAttr} d="M ${trunkX} ${trunkT} V ${trunkB}"/>`);
-        children.forEach(c => lines.push(`<path class="edge family" ${styleAttr} d="M ${trunkX} ${cy(c)} H ${c.x}"/>`));
+        children.forEach(c => lines.push(`<path class="edge family" ${childAttr(c)} d="M ${trunkX} ${cy(c)} H ${c.x}"/>`));
       }
     });
 
@@ -2742,23 +2812,24 @@ const Canvas = {
       }
       if (sharesParent) { groupIds.forEach(id => handled.add(id)); return; }
 
+      const sibAttr = `data-m="${groupIds.join(' ')}"`;
       if (orientation === 'vertical') {
         const sorted = groupMembers.slice().sort((a, b) => a.x - b.x);
         const y = Math.min(...sorted.map(s => s.y)) - 26;
         const xs = sorted.map(s => s.x + NODE_W / 2);
         const xMin = Math.min(...xs), xMax = Math.max(...xs);
-        if (xMax - xMin > 0.5) lines.push(`<path class="edge sibling" d="M ${xMin} ${y} H ${xMax}"/>`);
-        sorted.forEach(s => lines.push(`<path class="edge sibling" d="M ${s.x + NODE_W / 2} ${y} V ${s.y}"/>`));
+        if (xMax - xMin > 0.5) lines.push(`<path class="edge sibling" ${sibAttr} d="M ${xMin} ${y} H ${xMax}"/>`);
+        sorted.forEach(s => lines.push(`<path class="edge sibling" ${sibAttr} d="M ${s.x + NODE_W / 2} ${y} V ${s.y}"/>`));
         // small "siblings" tick at midpoint
         const midX = (xMin + xMax) / 2;
-        lines.push(`<g class="sibling-badge" transform="translate(${midX} ${y - 10})"><rect x="-22" y="-9" width="44" height="18" rx="9" fill="var(--paper-soft)" stroke="var(--ink-300)" stroke-width="1"/><text x="0" y="3.5" font-family="Inter, system-ui" font-size="9" font-weight="600" fill="var(--ink-500)" text-anchor="middle" letter-spacing=".06em">SIBLINGS</text></g>`);
+        lines.push(`<g class="sibling-badge" ${sibAttr} transform="translate(${midX} ${y - 10})"><rect x="-22" y="-9" width="44" height="18" rx="9" fill="var(--paper-soft)" stroke="var(--ink-300)" stroke-width="1"/><text x="0" y="3.5" font-family="Inter, system-ui" font-size="9" font-weight="600" fill="var(--ink-500)" text-anchor="middle" letter-spacing=".06em">SIBLINGS</text></g>`);
       } else {
         const sorted = groupMembers.slice().sort((a, b) => a.y - b.y);
         const x = Math.min(...sorted.map(s => s.x)) - 26;
         const ys = sorted.map(s => s.y + NODE_H / 2);
         const yMin = Math.min(...ys), yMax = Math.max(...ys);
-        if (yMax - yMin > 0.5) lines.push(`<path class="edge sibling" d="M ${x} ${yMin} V ${yMax}"/>`);
-        sorted.forEach(s => lines.push(`<path class="edge sibling" d="M ${x} ${s.y + NODE_H / 2} H ${s.x}"/>`));
+        if (yMax - yMin > 0.5) lines.push(`<path class="edge sibling" ${sibAttr} d="M ${x} ${yMin} V ${yMax}"/>`);
+        sorted.forEach(s => lines.push(`<path class="edge sibling" ${sibAttr} d="M ${x} ${s.y + NODE_H / 2} H ${s.x}"/>`));
       }
       groupIds.forEach(id => handled.add(id));
     });
@@ -2769,22 +2840,23 @@ const Canvas = {
     const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
     const drawPair = (m, s, divorced) => {
       let mx, my;
+      const pairAttr = `data-m="${m.id} ${s.id}"`;
       if (orientation === 'vertical') {
         const left = m.x < s.x ? m : s, right = m.x < s.x ? s : m;
         const y = Math.max(left.y, right.y) + NODE_H * 0.5;
         const cls = divorced ? 'edge spouse ex' : 'edge spouse';
-        lines.push(`<path class="${cls}" d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
+        lines.push(`<path class="${cls}" ${pairAttr} d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
         mx = (left.x + NODE_W + right.x) / 2;
         my = y;
       } else {
         const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
         const x = Math.max(top.x, bot.x) + NODE_W * 0.5;
         const cls = divorced ? 'edge spouse ex' : 'edge spouse';
-        lines.push(`<path class="${cls}" d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
+        lines.push(`<path class="${cls}" ${pairAttr} d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
         mx = x;
         my = (top.y + NODE_H + bot.y) / 2;
       }
-      lines.push(heartMarker(mx, my, divorced));
+      lines.push(heartMarker(mx, my, divorced, `${m.id} ${s.id}`));
       return { mx, my };
     };
 
@@ -2806,7 +2878,7 @@ const Canvas = {
               const ly = isVertical ? my + 4  : my + 22;
               const anchor = isVertical ? 'start' : 'middle';
               lines.push(
-                `<text class="spouse-years" x="${lx}" y="${ly}" text-anchor="${anchor}">${yrs} yr${yrs === 1 ? '' : 's'}</text>`
+                `<text class="spouse-years" data-m="${m.id} ${s.id}" x="${lx}" y="${ly}" text-anchor="${anchor}">${yrs} yr${yrs === 1 ? '' : 's'}</text>`
               );
             }
           }
@@ -2902,6 +2974,17 @@ const Canvas = {
       // Expose pointer-move tracking to the drag module so it can flip
       // the local `moved` flag for the click guard above.
       node._markMoved = () => { moved = true; };
+
+      // Relationship spotlight (v4.69): hover previews a member's
+      // connections; leaving falls back to whoever is pinned (drawer open)
+      // or clears. Skipped while dragging cards in edit-layout mode.
+      node.addEventListener('pointerenter', () => {
+        if (Store.state.editLayout) return;
+        Canvas.spotlight(id);
+      });
+      node.addEventListener('pointerleave', () => {
+        Canvas.spotlight(Canvas._pinnedId || null);
+      });
     });
   },
 };
@@ -3158,6 +3241,12 @@ const Drawer = {
     this.editing = false;
     $('#drawer-view').hidden = false;
     $('#drawer-edit').hidden = true;
+    // Release the relationship spotlight pin (v4.69).
+    document.querySelectorAll('.node.is-selected').forEach(n => n.classList.remove('is-selected'));
+    if (typeof Canvas !== 'undefined') {
+      Canvas._pinnedId = null;
+      Canvas.spotlight(null);
+    }
   },
   renderView() {
     const m = Store.byId(this.currentId); if (!m) return;
@@ -3317,6 +3406,9 @@ const Drawer = {
     // node selection state
     document.querySelectorAll('.node.is-selected').forEach(n => n.classList.remove('is-selected'));
     document.querySelector(`.node[data-id="${m.id}"]`)?.classList.add('is-selected');
+    // Pin the relationship spotlight on the open profile (v4.69).
+    Canvas._pinnedId = m.id;
+    Canvas.spotlight(m.id);
   },
   startEdit() {
     const m = Store.byId(this.currentId); if (!m) return;
@@ -9418,6 +9510,52 @@ function maskAccountHint(value) {
   return `Current ends in ${s.slice(-4)} — type a new number to replace, or leave blank to keep.`;
 }
 
+// v4.69: sensitive number widget — masked by default, with a peek toggle and
+// a one-click copy. Peek auto re-masks after 12s so a number never lingers
+// on a shared screen. Copy always copies the FULL number (no reveal needed).
+// One delegated listener serves every instance across re-renders.
+function sensitiveNumberHTML(raw) {
+  if (!raw) return '';
+  return `<span class="secret-num" data-raw="${escape(String(raw))}">
+    <span class="secret-num-value masked-number" data-secret-value>${escape(maskAccountNumber(raw))}</span>
+    <button type="button" class="secret-btn" data-secret-reveal title="Show full number" aria-label="Show full number" aria-pressed="false">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+    <button type="button" class="secret-btn" data-secret-copy title="Copy full number" aria-label="Copy full number">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V4a1.5 1.5 0 0 0-1.5-1.5h-5A1.5 1.5 0 0 0 3 4v5A1.5 1.5 0 0 0 4.5 10.5H5" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+  </span>`;
+}
+document.addEventListener('click', async (e) => {
+  const wrap = e.target.closest?.('.secret-num');
+  if (!wrap) return;
+  const raw = wrap.dataset.raw || '';
+  const valueEl = wrap.querySelector('[data-secret-value]');
+  const revealBtn = e.target.closest('[data-secret-reveal]');
+  if (revealBtn && valueEl) {
+    const showing = wrap.classList.toggle('is-revealed');
+    valueEl.textContent = showing ? raw : maskAccountNumber(raw);
+    revealBtn.setAttribute('aria-pressed', showing ? 'true' : 'false');
+    revealBtn.title = showing ? 'Hide number' : 'Show full number';
+    clearTimeout(wrap._remaskTimer);
+    if (showing) {
+      wrap._remaskTimer = setTimeout(() => {
+        wrap.classList.remove('is-revealed');
+        valueEl.textContent = maskAccountNumber(raw);
+        revealBtn.setAttribute('aria-pressed', 'false');
+        revealBtn.title = 'Show full number';
+      }, 12000);
+    }
+    return;
+  }
+  if (e.target.closest('[data-secret-copy]')) {
+    try {
+      await navigator.clipboard.writeText(raw);
+      toast('Number copied.');
+    } catch { toast('Copy failed.', 'warn'); }
+  }
+});
+
 // Compose a single-line postal address from the new split fields, falling back
 // gracefully when only some are present (or only the legacy `address` field).
 function formatPostalAddress(m) {
@@ -10325,6 +10463,16 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.69',
+    date: '2026-07-03',
+    title: 'Trace connections on the tree · filter Memories by person · peek & copy Vault numbers',
+    changes: [
+      'Family Tree: hover any card (or open a profile) and every line that touches that person lights up and thickens — their parents, marriage, siblings, and children — while everyone unrelated gently fades back. A new legend in the corner explains each line type.',
+      'Memories: the feed now reads as a timeline with serif month headers, and a chip row lets you filter posts by a tagged family member (each chip shows how many posts).',
+      'Vault: account and routing numbers now have an eye button to peek (it re-hides automatically after 12 seconds) and a copy button that copies the full number without ever showing it on screen.',
+    ],
+  },
   {
     version: '4.66',
     date: '2026-07-01',
@@ -11603,8 +11751,8 @@ const VaultView = {
             <div class="vault-row-title vault-bank-title">${escape(title)}</div>
             ${b.accountType ? `<div class="vault-bank-type"><span class="bank-type-pill ${b.accountType}">${capitalize(b.accountType)}</span></div>` : ''}
             <dl class="vault-bank-details">
-              ${b.accountNumber ? `<div><dt><span class="kv-emoji">#️⃣</span>Account number</dt><dd class="masked-number" title="Only the last 4 digits are shown for security.">${escape(maskAccountNumber(b.accountNumber))}</dd></div>` : ''}
-              ${b.routingNumber ? `<div><dt><span class="kv-emoji">🏦</span>Routing number</dt><dd class="masked-number" title="Only the last 4 digits are shown for security.">${escape(maskAccountNumber(b.routingNumber))}</dd></div>` : ''}
+              ${b.accountNumber ? `<div><dt><span class="kv-emoji">#️⃣</span>Account number</dt><dd>${sensitiveNumberHTML(b.accountNumber)}</dd></div>` : ''}
+              ${b.routingNumber ? `<div><dt><span class="kv-emoji">🏦</span>Routing number</dt><dd>${sensitiveNumberHTML(b.routingNumber)}</dd></div>` : ''}
               ${holderNames.length ? `<div><dt><span class="kv-emoji">👥</span>Account holder${holderNames.length > 1 ? 's' : ''}</dt><dd>${escape(holderNames.join(', '))}</dd></div>` : ''}
             </dl>
             ${b.notes ? `<div class="vault-bank-notes muted">📝 ${escape(b.notes)}</div>` : ''}
@@ -12266,7 +12414,7 @@ const VaultView = {
             <div class="vault-info-grid muted small" style="margin-top:6px;">
               ${u.website       ? `<div>🌐 <a href="${escape(websiteHref)}" target="_blank" rel="noopener">${escape(u.website)}</a></div>` : ''}
               ${u.phone         ? `<div>📞 ${escape(u.phone)}</div>` : ''}
-              ${u.accountNumber ? `<div>#️⃣ <strong>Account:</strong> <span class="masked-number" title="Only the last 4 digits are shown for security.">${escape(maskAccountNumber(u.accountNumber))}</span></div>` : ''}
+              ${u.accountNumber ? `<div>#️⃣ <strong>Account:</strong> ${sensitiveNumberHTML(u.accountNumber)}</div>` : ''}
             </div>
             ${u.notes ? `<div class="muted small" style="margin-top:6px;">${escape(u.notes)}</div>` : ''}
           </div>
@@ -15815,6 +15963,7 @@ const RecipeModal = {
 // friend household person consistently across the app.
 const MemoriesView = {
   searchQuery: '',
+  personFilter: '',                // v4.69: '' = everyone | person ref ('m:id' …)
   signedUrlCache: new Map(),
   subtab: 'posts',                 // v4.58: 'posts' (feed) | 'albums' (gallery)
 
@@ -15865,6 +16014,10 @@ const MemoriesView = {
   filtered() {
     const q = this.searchQuery;
     let list = this.list();
+    // v4.69: person filter — only posts that tag the selected family member.
+    if (this.personFilter) {
+      list = list.filter(m => (m.tags || []).includes(this.personFilter));
+    }
     if (q) {
       list = list.filter(m => {
         const hay = [
@@ -15882,16 +16035,52 @@ const MemoriesView = {
     });
   },
 
+  // v4.69: chips for every person tagged anywhere in the feed. Clicking one
+  // filters the feed to their moments; "Everyone" clears it. Hidden when
+  // nobody is tagged yet.
+  renderPeopleFilter() {
+    const host = $('#memories-people-filter');
+    if (!host) return;
+    const counts = new Map();
+    this.list().forEach(m => (m.tags || []).forEach(t => counts.set(t, (counts.get(t) || 0) + 1)));
+    if (!counts.size) { host.hidden = true; host.innerHTML = ''; return; }
+    const people = [...counts.entries()]
+      .map(([ref, n]) => ({ ref, n, label: resolvePersonRefLabel(ref) }))
+      .filter(p => p.label)
+      .sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+    if (!people.length) { host.hidden = true; host.innerHTML = ''; return; }
+    // Filtered person may have been untagged by an edit — reset quietly.
+    if (this.personFilter && !counts.has(this.personFilter)) this.personFilter = '';
+    host.hidden = false;
+    host.innerHTML = [
+      `<button type="button" class="mem-person-chip${this.personFilter ? '' : ' is-active'}" data-person="">Everyone</button>`,
+      ...people.map(p => `
+        <button type="button" class="mem-person-chip${this.personFilter === p.ref ? ' is-active' : ''}" data-person="${escape(p.ref)}">
+          ${escape(p.label)}<span class="mem-person-count">${p.n}</span>
+        </button>`),
+    ].join('');
+    host.querySelectorAll('.mem-person-chip').forEach(chip => {
+      on(chip, 'click', () => {
+        this.personFilter = chip.dataset.person || '';
+        this.render();
+      });
+    });
+  },
+
   render() {
     const feed  = $('#memories-feed');
     const empty = $('#memories-empty');
     if (!feed || !empty) return;
+    this.renderPeopleFilter();
     const list = this.filtered();
     const title = $('#memories-list-title');
     if (title) {
+      const person = this.personFilter ? resolvePersonRefLabel(this.personFilter) : '';
       title.textContent = this.searchQuery
         ? `Matches for "${this.searchQuery}" (${list.length})`
-        : `All memories (${list.length})`;
+        : person
+          ? `${person}'s moments (${list.length})`
+          : `All memories (${list.length})`;
     }
     const totalUnfiltered = this.list().length;
     if (!totalUnfiltered) {
@@ -15901,10 +16090,22 @@ const MemoriesView = {
     }
     empty.hidden = true;
     if (!list.length) {
-      feed.innerHTML = `<p class="muted" style="padding:24px; text-align:center;">No posts matching "${escape(this.searchQuery)}".</p>`;
+      feed.innerHTML = `<p class="muted" style="padding:24px; text-align:center;">No matching posts.</p>`;
       return;
     }
-    feed.innerHTML = list.map(m => this.postHTML(m)).join('');
+    // v4.69: month headers give the reverse-chrono feed a timeline rhythm.
+    // Recomputed inline while mapping so a single pass builds the HTML.
+    let lastMonth = '';
+    feed.innerHTML = list.map(m => {
+      const monthKey = (m.date || '').slice(0, 7);
+      let head = '';
+      if (monthKey && monthKey !== lastMonth) {
+        lastMonth = monthKey;
+        const d = new Date(m.date + 'T12:00:00');
+        head = `<div class="mem-month-head"><span>${d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span></div>`;
+      }
+      return head + this.postHTML(m);
+    }).join('');
     feed.querySelectorAll('[data-mem-edit]').forEach(btn => {
       on(btn, 'click', () => MemoryModal.openEdit(btn.dataset.memEdit));
     });
