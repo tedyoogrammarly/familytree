@@ -394,6 +394,17 @@
             <button class="btn btn-primary" id="btn-add-first" data-admin-only>+ Add the first member</button>
           </div>
         </div>
+        <!-- v4.69: connection legend + spotlight hint. Pure presentation — the
+             lines mirror the .tree-edges stroke styles exactly. -->
+        <div class="tree-legend" aria-hidden="true">
+          <div class="tree-legend-hint">Hover a card to trace their connections</div>
+          <div class="tree-legend-rows">
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-family"/></svg>Parent → child</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-spouse"/></svg>Married</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-ex"/></svg>Past marriage</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-sibling"/></svg>Siblings</span>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -709,6 +720,10 @@
               <input id="memories-search" class="input" type="search" placeholder="Search posts…" autocomplete="off" />
             </div>
           </header>
+          <!-- v4.69: filter the feed by tagged family member. Chips are built
+               from whoever is actually tagged in posts, so it never shows
+               people with nothing to see. -->
+          <div id="memories-people-filter" class="mem-people-filter" hidden></div>
           <div id="memories-feed" class="memories-feed"></div>
           <div id="memories-empty" class="tree-empty" hidden>
             <div class="tree-empty-card">
