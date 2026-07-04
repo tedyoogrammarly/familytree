@@ -5,3 +5,6 @@ temporary screenshots/
 .env
 .env.*
 !.env.example
+
+# Brainstorming visual companion mockups
+.superpowers/
