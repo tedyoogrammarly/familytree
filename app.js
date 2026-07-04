@@ -8897,21 +8897,27 @@ function bindCredsModal() {
 // -------------------- LOGIN BIND --------------------
 // Toggle the login form between "sign in" and "sign up" modes. Sign-up uses
 // the same email + password fields; we just flip the submit handler.
-let _loginMode = 'signin';
-function setLoginMode(mode) {
-  _loginMode = mode;
-  $('#btn-login-submit').textContent = (mode === 'signin') ? 'Sign in' : 'Create account';
-  $('#btn-login-toggle').textContent = (mode === 'signin') ? 'Need an account? Sign up' : 'Have an account? Sign in';
-  // v4.66: match the password field's autocomplete to the mode so password
-  // managers fill the existing login when signing in, and only offer a
-  // suggested (new) password when actually creating an account.
-  const pwd = $('#login-form [name="password"]');
-  if (pwd) pwd.setAttribute('autocomplete', mode === 'signup' ? 'new-password' : 'current-password');
-  $('#login-error').textContent = '';
-}
-
+// v4.70: sign-in and sign-up are separate <form>s (see index.html). Only one
+// is visible at a time. Keeping account-creation out of the sign-in form is
+// what stops password managers from offering "Use Suggested Password" on
+// sign-in. showLogin()/showSignup() just swap which form is shown.
 function bindLogin() {
-  on($('#login-form'), 'submit', async (e) => {
+  const loginForm = $('#login-form');
+  const signupForm = $('#signup-form');
+  const showSignup = () => {
+    loginForm.hidden = true; signupForm.hidden = false;
+    $('#login-error').textContent = ''; $('#signup-error').textContent = '';
+    const el = signupForm.querySelector('[name="email"]'); if (el) el.focus();
+  };
+  const showLogin = () => {
+    signupForm.hidden = true; loginForm.hidden = false;
+    $('#login-error').textContent = ''; $('#signup-error').textContent = '';
+    const el = loginForm.querySelector('[name="email"]'); if (el) el.focus();
+  };
+  on($('#btn-show-signup'), 'click', showSignup);
+  on($('#btn-show-login'), 'click', showLogin);
+
+  on(loginForm, 'submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const email = (fd.get('email') || '').toString().trim();
@@ -8920,21 +8926,32 @@ function bindLogin() {
     errEl.textContent = '';
     const submitBtn = $('#btn-login-submit');
     submitBtn.disabled = true;
-    const result = (_loginMode === 'signup')
-      ? await Backend.signUp(email, password)
-      : await Backend.signIn(email, password);
+    const result = await Backend.signIn(email, password);
     submitBtn.disabled = false;
     if (!result.ok) { errEl.textContent = result.reason; return; }
-    if (_loginMode === 'signup' && !result.session) {
-      errEl.textContent = 'Account created. Check your inbox to confirm before signing in.';
-      setLoginMode('signin');
+    await onSignedIn();
+  });
+
+  on(signupForm, 'submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = (fd.get('email') || '').toString().trim();
+    const password = (fd.get('password') || '').toString();
+    const errEl = $('#signup-error');
+    errEl.textContent = '';
+    const submitBtn = $('#btn-signup-submit');
+    submitBtn.disabled = true;
+    const result = await Backend.signUp(email, password);
+    submitBtn.disabled = false;
+    if (!result.ok) { errEl.textContent = result.reason; return; }
+    if (!result.session) {
+      showLogin();
+      $('#login-error').textContent = 'Account created. Check your inbox to confirm, then sign in.';
       return;
     }
     await onSignedIn();
   });
-  on($('#btn-login-toggle'), 'click', () => {
-    setLoginMode(_loginMode === 'signin' ? 'signup' : 'signin');
-  });
+
   on($('#btn-import-local'), 'click', async () => {
     if (!confirm('Copy the family data already saved in this browser into the database? This overwrites anything currently in the database.')) return;
     try {
@@ -9802,7 +9819,6 @@ async function init() {
   bindLogin();
   bindTreeToolbar();
   bindCredsModal();
-  setLoginMode('signin');
 
   // Show the "Import data from this browser" button only when localStorage
   // has data to import.
@@ -10463,6 +10479,14 @@ function expandReminder(r, today, horizon) {
 // from changelog.json) so deploys with caching weirdness still show the
 // current version chip.
 const CHANGELOG = [
+  {
+    version: '4.70',
+    date: '2026-07-03',
+    title: 'Sign-in and sign-up are now separate — no more “create password” prompt when logging in',
+    changes: [
+      'Split the login screen into two separate forms. Previously one combined form handled both sign-in and sign-up, which made password managers (1Password/Safari) treat the password box as account creation and offer “Use Suggested Password” even when you had a saved login. Now the sign-in form contains only sign-in, so your manager offers to fill your existing password; the suggested-password prompt appears only on the separate “Create account” form.',
+    ],
+  },
   {
     version: '4.69',
     date: '2026-07-03',
