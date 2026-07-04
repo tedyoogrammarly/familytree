@@ -77,6 +77,10 @@
   /* Forest-tinted neutrals + a brand focus ring, available for row hovers,
      weekend cells, tonal fills, and focus states. */
   --brand-600:  #285c4c;
+  /* v4.68: these two were referenced (hero gradient, active "All" chip,
+     line 532) but never defined, so those declarations silently failed. */
+  --brand-800:  #1b3d33;
+  --brand-100:  #dde9e2;
   --tint-50:    hsl(158 26% 96%);
   --tint-100:   hsl(158 28% 92%);
   --tint-200:   hsl(158 30% 85%);
@@ -466,6 +470,20 @@ code {
   line-height: 1.04;
   letter-spacing: -0.03em;
   margin: 0 0 6px;
+}
+/* v4.68: editorial eyebrow above every masthead — the same letterspaced
+   copper device the login panel and dashboard hero use, so each page opens
+   with the archive's letterhead. */
+.page-head h2::before {
+  content: 'The Family Archive';
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .24em;
+  text-transform: uppercase;
+  color: var(--accent-700);
+  margin-bottom: 12px;
 }
 .page-head p { margin: 0; color: var(--ink-500); }
 .dir-tools { display: flex; gap: 10px; }
@@ -1099,7 +1117,11 @@ body.is-admin .node.is-selected::after {
 .node-gen-bar {
   position: absolute; top: 0; left: 0; right: 0;
   height: 4px;
-  background: var(--gen, var(--brand-700));
+  /* Soft gradient run instead of a flat strip — reads as an inlay, not tape. */
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--gen, var(--brand-700)) 78%, #fff) 0%,
+    var(--gen, var(--brand-700)) 45%,
+    color-mix(in srgb, var(--gen, var(--brand-700)) 82%, #000) 100%);
   z-index: 2;
 }
 .node-photo {
@@ -1227,13 +1249,26 @@ body:not(.is-admin) .tree-nodes .node { cursor: default; }
 }
 .tree-empty-card {
   pointer-events: auto;
-  background: #fff;
-  border: 1px solid var(--ink-200);
-  padding: 28px 32px;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 140% at 12% 110%, rgba(230, 184, 142, 0.14), transparent 55%),
+    radial-gradient(100% 130% at 92% -15%, rgba(127, 165, 151, 0.14), transparent 55%),
+    #fff;
+  border: 1px solid var(--hairline);
+  padding: 30px 34px;
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-lift), var(--edge-highlight);
   text-align: center;
-  max-width: 360px;
+  max-width: 380px;
+}
+.tree-empty-card::after {
+  content: '';
+  position: absolute; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.55'/></svg>");
+  opacity: .06;
+  mix-blend-mode: multiply;
+  pointer-events: none;
 }
 .tree-empty-card h3 { font-family: var(--font-display); font-weight: 500; font-size: 22px; margin: 0 0 6px; letter-spacing: -.015em;}
 .tree-empty-card p { color: var(--ink-500); margin: 0 0 16px; }
@@ -2846,9 +2881,9 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 }
 .cal-toolbar .cal-label {
   font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 18px;
-  letter-spacing: -0.01em;
+  font-weight: 500;
+  font-size: 21px;
+  letter-spacing: -0.015em;
   color: var(--ink-900);
   min-width: 180px;
   text-align: center;
@@ -2912,13 +2947,15 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 .cal-cell:nth-child(7n-6), .cal-cell:nth-child(7n) { background: var(--paper-soft); }
 .cal-cell.is-other-month { background: rgba(19,24,38,.025); }
 .cal-cell.is-other-month .cal-day-num { color: var(--ink-300); }
+/* Today reads warm amber — the same "happening now" language as the
+   Dashboard's upcoming list, so today looks like today everywhere. */
 .cal-cell.is-today {
-  background: rgba(47, 107, 89, .07);
-  box-shadow: inset 0 0 0 2px var(--brand-700, hsl(163 38% 30%));
+  background: hsl(45 80% 95%);
+  box-shadow: inset 0 0 0 2px hsl(45 75% 64%);
 }
 .cal-cell.is-today .cal-day-num {
-  background: var(--brand-700, hsl(163 38% 30%));
-  color: #fff;
+  background: hsl(38 60% 30%);
+  color: hsl(45 80% 94%);
 }
 
 .cal-cell-head {
@@ -2930,8 +2967,10 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   min-width: 22px; height: 22px;
   padding: 0 6px;
   border-radius: 999px;
-  font-size: 12px;
+  font-family: var(--font-display);
+  font-size: 13px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-700, var(--ink-500));
 }
 
@@ -3290,74 +3329,105 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   .trip-itin-row { grid-template-columns: 1fr; }
 }
 
-/* ===== Dashboard view ===== */
+/* ===== Dashboard view (v4.68 elevated refresh) =====
+   The hero becomes an atmospheric forest-green panel — layered radial
+   gradients + grain pressed into the brand palette — while the working
+   panels below stay clean cream/white. Same DOM, same layout bones. */
 .view-dashboard { padding-top: 24px; }
 .dash-hero {
+  position: relative;
   display: flex; align-items: center; justify-content: space-between;
   gap: 24px;
-  padding: 22px 28px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--brand-100), #fff);
-  border: 1px solid var(--ink-100);
-  margin-bottom: 24px;
+  padding: 30px 36px 28px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--paper);
+  background:
+    radial-gradient(110% 160% at 6% 115%, rgba(230, 184, 142, 0.20), transparent 50%),
+    radial-gradient(95% 150% at 97% -25%, rgba(127, 165, 151, 0.28), transparent 56%),
+    linear-gradient(158deg, #2a5a4a 0%, var(--brand-800) 52%, #16302a 100%);
+  border: 1px solid rgba(23, 48, 40, 0.85);
+  box-shadow: var(--shadow-lift), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  margin-bottom: 26px;
+}
+/* Grain layer — same feTurbulence texture the login screen uses, blended
+   soft so the gradients read as atmosphere instead of vector fills. */
+.dash-hero::after {
+  content: '';
+  position: absolute; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.55'/></svg>");
+  opacity: .22;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+  z-index: -1;
 }
 .dash-hero-text { flex: 1; }
 .dash-eyebrow {
-  font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--brand-700); margin: 0 0 4px; font-weight: 600;
+  font-size: 12px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--accent-300); margin: 0 0 10px; font-weight: 600;
 }
 #dash-title {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: 26px;
-  letter-spacing: -0.01em;
+  font-size: clamp(28px, 3vw, 38px);
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+  color: var(--paper);
 }
+.dash-hero h2 { margin: 0; }
 .dash-clock { text-align: right; }
 .dash-time {
   font-family: var(--font-display);
-  font-size: 38px;
+  font-size: 44px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  color: var(--ink-900);
+  color: var(--paper);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.25);
 }
-.dash-date { color: var(--ink-500); font-size: 13px; margin-top: 4px; }
-/* 5-day forecast row beneath the clock. Each day reads day-of-week → icon
-   → high/low temp, vertically. Right-aligned to match the clock block. */
+.dash-date { color: rgba(247, 243, 236, 0.72); font-size: 13px; margin-top: 6px; }
+/* 5-day forecast row beneath the clock — translucent glass chips sitting
+   on the dark hero. Today's chip is brightened so the eye lands there. */
 .dash-forecast {
-  display: flex; gap: 14px;
+  display: flex; gap: 8px;
   justify-content: flex-end;
-  margin-top: 10px;
+  margin-top: 14px;
   font-size: 12px;
-  color: var(--ink-700);
+  color: var(--paper);
 }
-.dash-forecast-loading { padding: 4px 0; }
+.dash-forecast-loading { padding: 4px 0; color: rgba(247, 243, 236, 0.6); }
 .dash-forecast-day {
   display: flex; flex-direction: column; align-items: center;
-  gap: 2px;
-  min-width: 50px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: rgba(255,255,255,.5);
-  border: 1px solid var(--ink-100);
+  gap: 3px;
+  min-width: 54px;
+  padding: 8px 9px 7px;
+  border-radius: var(--radius-sm);
+  background: rgba(247, 243, 236, 0.08);
+  border: 1px solid rgba(247, 243, 236, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.dash-forecast-day:first-child {
+  background: rgba(247, 243, 236, 0.16);
+  border-color: rgba(247, 243, 236, 0.26);
 }
 .dash-forecast-label {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: .04em;
-  color: var(--ink-500);
+  letter-spacing: .08em;
+  color: rgba(247, 243, 236, 0.62);
   text-transform: uppercase;
 }
-.dash-forecast-icon { font-size: 22px; line-height: 1; }
+.dash-forecast-icon { font-size: 20px; line-height: 1.15; }
 .dash-forecast-temps {
-  display: flex; align-items: baseline; gap: 4px;
+  display: flex; align-items: baseline; gap: 3px;
   font-variant-numeric: tabular-nums;
-  font-size: 12.5px;
+  font-size: 12px;
 }
-.dash-forecast-hi { font-weight: 600; color: var(--ink-800); }
-.dash-forecast-sep { color: var(--ink-300); }
-.dash-forecast-lo { color: var(--ink-500); }
+.dash-forecast-hi { font-weight: 600; color: var(--paper); }
+.dash-forecast-sep { color: rgba(247, 243, 236, 0.35); }
+.dash-forecast-lo { color: rgba(247, 243, 236, 0.6); }
 
 .dash-grid {
   display: grid;
@@ -3369,58 +3439,93 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 .dash-gifts    { grid-column: 2; grid-row: 1; }
 .dash-grocery  { grid-column: 2; grid-row: 2; }
 
-.dash-panel { padding: 20px 22px; }
+.dash-panel { padding: 20px 24px 22px; border-radius: var(--radius-lg); }
 .dash-panel-head {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 14px;
 }
 .dash-panel-head h3 {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: 18px;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--ink-900);
+  white-space: nowrap;
+}
+/* The small "meta" span next to each panel title reads as a quiet caption. */
+.dash-panel-head .muted.small {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-400); font-weight: 500;
 }
 
-.dash-upcoming-list { display: flex; flex-direction: column; gap: 6px; }
+/* Upcoming rows: date-leaf tile + hairline separators instead of a wall of
+   boxed borders. Hover lifts the row onto a tonal wash; today gets a warm
+   amber leaf so "happening now" still pops without shouting. */
+.dash-upcoming-list { display: flex; flex-direction: column; }
 .dash-up-row {
   display: grid;
-  grid-template-columns: 48px 28px 1fr auto;
+  grid-template-columns: 46px 26px 1fr auto;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--ink-100);
-  border-radius: 10px;
-  background: #fff;
+  padding: 9px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   cursor: pointer;
   text-align: left;
   font: inherit;
   color: inherit;
+  position: relative;
+  transition: transform 160ms var(--ease-out);
 }
-.dash-up-row:hover { background: var(--paper-soft); border-color: var(--ink-200); }
-/* Today's items pop in light yellow so the "happening now" row reads
-   at-a-glance against the cream rows above and below. */
-.dash-up-row.is-today {
-  background: hsl(48 95% 92%);
-  border-color: hsl(45 85% 70%);
+.dash-up-row + .dash-up-row::before {
+  content: '';
+  position: absolute; top: 0; left: 70px; right: 10px;
+  border-top: 1px solid var(--hairline);
 }
-.dash-up-row.is-today:hover {
-  background: hsl(48 95% 88%);
-  border-color: hsl(45 85% 60%);
-}
+.dash-up-row:hover { background: var(--tint-50); }
+.dash-up-row:hover::before,
+.dash-up-row:hover + .dash-up-row::before { border-top-color: transparent; }
+.dash-up-row:active { transform: scale(0.995); }
+.dash-up-row:focus-visible { outline: 2px solid var(--accent-500); outline-offset: -2px; }
 .dash-up-date {
   text-align: center;
-  color: var(--ink-700);
+  color: var(--ink-800);
+  background: var(--paper-veil);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xs);
+  padding: 5px 2px 4px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
-.dash-up-day { display: block; font-size: 18px; font-weight: 600; line-height: 1; }
-.dash-up-mon { display: block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-500); margin-top: 3px; }
-.dash-up-icon { font-size: 20px; text-align: center; }
+.dash-up-day {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 19px; font-weight: 600; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.dash-up-mon { display: block; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-500); margin-top: 3px; font-weight: 600; }
+/* Today's items pop with a warm amber leaf + wash. */
+.dash-up-row.is-today { background: hsl(45 80% 95%); }
+.dash-up-row.is-today .dash-up-date {
+  background: hsl(46 90% 88%);
+  border-color: hsl(45 75% 72%);
+  color: hsl(38 65% 26%);
+}
+.dash-up-row.is-today .dash-up-mon { color: hsl(38 55% 38%); }
+.dash-up-row.is-today:hover { background: hsl(46 85% 92%); }
+.dash-up-row.is-today::before,
+.dash-up-row.is-today + .dash-up-row::before { border-top-color: transparent; }
+.dash-up-icon { font-size: 19px; text-align: center; }
 .dash-up-main { min-width: 0; }
 .dash-up-title { font-weight: 500; color: var(--ink-900); }
 .dash-up-sub { font-size: 12px; color: var(--ink-500); margin-top: 2px; }
 .dash-up-kind {
-  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  padding: 2px 8px; border-radius: 999px; font-weight: 600;
+  font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; font-weight: 600;
 }
 .dash-up-kind-birthday    { background: hsl(145 55% 94%); color: hsl(145 45% 28%); }
 .dash-up-kind-anniversary { background: hsl(282 50% 94%); color: hsl(282 38% 38%); }
@@ -3429,23 +3534,34 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 .dash-up-kind-holiday     { background: hsl(0 65% 94%);   color: hsl(0 55% 38%); }
 
 .dash-filter-chips {
-  display: flex; gap: 6px; flex-wrap: wrap;
+  display: flex; gap: 5px; flex-wrap: wrap;
   margin-top: 6px;
 }
 .dash-filter-chip {
+  display: inline-flex; align-items: center; gap: 6px;
   font: inherit;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: .04em;
-  padding: 4px 10px;
+  letter-spacing: .03em;
+  padding: 4px 11px;
   border-radius: 999px;
-  border: 1px solid var(--ink-200);
-  background: #fff;
-  color: var(--ink-600);
+  border: 1px solid var(--hairline);
+  background: var(--paper-soft);
+  color: var(--ink-500);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out);
 }
-.dash-filter-chip:hover { background: var(--paper-soft); }
+/* Colored dot marker replaces the old left-border stripe — quieter idle
+   state, same color story as the calendar legend. */
+.dash-filter-chip::before {
+  content: '';
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ink-300);
+}
+.dash-filter-chip[data-kind="all"]::before { display: none; }
+.dash-filter-chip:hover { transform: translateY(-1px); }
+.dash-filter-chip:active { transform: translateY(0); }
+.dash-filter-chip.is-active[data-kind]::before { background: rgba(255, 255, 255, 0.75); }
 /* Active state: match the Calendar legend hues so the chip color and the
    list row chip color tell the same story. Each kind picks its own palette. */
 .dash-filter-chip[data-kind="all"].is-active {
@@ -3466,13 +3582,13 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 .dash-filter-chip[data-kind="reminder"].is-active {
   background: hsl(35 80% 50%); color: #fff; border-color: hsl(35 80% 50%);
 }
-/* Idle chips also tint subtly so the filter row looks like part of the same
-   visual system without needing to be clicked. */
-.dash-filter-chip[data-kind="event"]       { border-left: 3px solid hsl(205 60% 48%); }
-.dash-filter-chip[data-kind="birthday"]    { border-left: 3px solid hsl(145 55% 42%); }
-.dash-filter-chip[data-kind="anniversary"] { border-left: 3px solid hsl(282 50% 52%); }
-.dash-filter-chip[data-kind="holiday"]     { border-left: 3px solid hsl(0 65% 52%); }
-.dash-filter-chip[data-kind="reminder"]    { border-left: 3px solid hsl(35 80% 50%); }
+/* Idle chips carry their kind color as the dot marker, so the filter row
+   reads as one visual system without the old border stripes. */
+.dash-filter-chip[data-kind="event"]::before       { background: hsl(205 60% 48%); }
+.dash-filter-chip[data-kind="birthday"]::before    { background: hsl(145 55% 42%); }
+.dash-filter-chip[data-kind="anniversary"]::before { background: hsl(282 50% 52%); }
+.dash-filter-chip[data-kind="holiday"]::before     { background: hsl(0 65% 52%); }
+.dash-filter-chip[data-kind="reminder"]::before    { background: hsl(35 80% 50%); }
 
 .dash-month-totals { grid-column: 2; grid-row: 2; }
 .dash-grocery     { grid-column: 2; grid-row: 3; }
@@ -3489,23 +3605,30 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 .dash-money-cell {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  padding: 14px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--ink-100);
-  background: #fff;
+  padding: 15px 8px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--paper-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
-.dash-money-cell.received { background: hsl(145 55% 96%); border-color: hsl(145 30% 82%); }
-.dash-money-cell.given    { background: hsl(35 80% 96%);  border-color: hsl(35 50% 82%); }
-.dash-money-cell.net      { background: var(--paper-soft); }
+.dash-money-cell.received { background: hsl(150 42% 95%); border-color: hsl(150 28% 84%); }
+.dash-money-cell.given    { background: hsl(33 68% 95%);  border-color: hsl(33 45% 84%); }
+.dash-money-cell.net      { background: var(--tint-50); border-color: var(--tint-200); }
 .dash-money-label {
-  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
   color: var(--ink-500); font-weight: 600;
 }
+.dash-money-cell.received .dash-money-label { color: hsl(150 35% 34%); }
+.dash-money-cell.given    .dash-money-label { color: hsl(33 55% 36%); }
+.dash-money-cell.net      .dash-money-label { color: var(--brand-600); }
 .dash-money-amount {
   font-family: var(--font-display);
-  font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums;
-  margin-top: 4px;
+  font-size: 23px; font-weight: 500; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  margin-top: 5px;
+  color: var(--ink-900);
 }
+.dash-money-cell.net .dash-money-amount { color: var(--brand-700); }
 
 @media (max-width: 960px) {
   .dash-month-totals, .dash-grocery, .dash-gifts {
@@ -3517,10 +3640,11 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 .dash-gift-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--ink-100);
-  border-radius: 10px;
-  background: #fff;
+  padding: 11px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--paper-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 .dash-gift-title { font-size: 14px; color: var(--ink-900); font-weight: 500; }
 .dash-gift-sub { font-size: 12px; color: var(--ink-500); margin-top: 2px; }
@@ -3528,38 +3652,58 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 .dash-gift-flag {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--ink-700);
+  cursor: pointer;
 }
+.dash-gift-flag input { accent-color: var(--brand-600); }
 
 .dash-grocery-add {
   display: flex; gap: 8px; margin-bottom: 12px;
 }
 .dash-grocery-add input {
   flex: 1;
-  padding: 9px 12px;
-  border-radius: 8px;
+  padding: 9px 13px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--ink-200);
+  background: var(--paper-soft);
   font-size: 14px;
+  color: var(--ink-900);
+}
+.dash-grocery-add input::placeholder { color: var(--ink-400); }
+.dash-grocery-add input:focus-visible {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: var(--ring-brand);
+  background: #fff;
 }
 .dash-grocery-list {
   list-style: none; margin: 0; padding: 0;
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column;
   max-height: 360px; overflow-y: auto;
 }
 .dash-grocery-item {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 4px;
-  border-bottom: 1px solid var(--ink-100);
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--hairline);
 }
-.dash-grocery-item.is-done .dash-grocery-check span { text-decoration: line-through; color: var(--ink-400); }
-.dash-grocery-check { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; font-size: 14px; }
-.dash-grocery-del {
-  width: 22px; height: 22px;
-  padding: 0; border: none; background: transparent;
+.dash-grocery-item:last-child { border-bottom: none; }
+.dash-grocery-item.is-done .dash-grocery-check span {
+  text-decoration: line-through;
   color: var(--ink-400);
+}
+.dash-grocery-item.is-done { opacity: .72; }
+.dash-grocery-check { display: flex; align-items: center; gap: 9px; flex: 1; cursor: pointer; font-size: 14px; }
+.dash-grocery-check input { accent-color: var(--brand-600); width: 15px; height: 15px; }
+.dash-grocery-del {
+  width: 24px; height: 24px;
+  padding: 0; border: none; background: transparent;
+  color: var(--ink-300);
   font-size: 18px; line-height: 1; cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
+  transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .dash-grocery-del:hover { background: hsl(0 65% 96%); color: hsl(0 65% 45%); }
+.dash-grocery-del:active { transform: scale(.92); }
+.dash-grocery-del:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
 
 @media (max-width: 960px) {
   .dash-grid { grid-template-columns: 1fr; }
@@ -5094,13 +5238,15 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 }
 .memory-post {
   background: #fff;
-  border: 1px solid var(--ink-200);
-  border-radius: 14px;
-  padding: 16px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-soft), var(--edge-highlight);
   transition: border-color .15s var(--ease-out), box-shadow .15s var(--ease-out);
 }
 .memory-post:hover {
   border-color: rgba(47, 107, 89, 0.25);
+  box-shadow: var(--shadow-lift), var(--edge-highlight);
 }
 .memory-head {
   display: flex;
