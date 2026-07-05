@@ -8,3 +8,12 @@ temporary screenshots/
 
 # Brainstorming visual companion mockups
 .superpowers/
+
+# Local working assets — big photo/scan folders and seed/debug material that
+# must never ship with the site (changelog.json + assets/ DO deploy; these don't).
+Life pictures/
+Recipes/
+backups/
+crop-debug/
+content/
+tools/_probe.mjs

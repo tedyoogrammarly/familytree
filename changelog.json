@@ -1,0 +1,838 @@
+[
+  {
+    "version": "4.71",
+    "date": "2026-07-05",
+    "title": "Cleaner family-tree connection lines · under-the-hood speedups",
+    "changes": [
+      "My Family: the connector lines were rebuilt to match how professional genealogy charts are drawn — lines now leave exactly at each card’s bottom, the horizontal buses never cross into cards, and a past-marriage line routes cleanly under the row instead of running through someone. Rounded, anti-aliased strokes and slightly softer color keep people in front of the connectors.",
+      "Under the hood: the History changelog now loads on demand (smaller initial download), the family tree does its layout math once per render instead of twice, list searches are debounced, and photo-URL caches are capped — smoother over long browsing sessions."
+    ]
+  },
+  {
+    "version": "4.70",
+    "date": "2026-07-03",
+    "title": "Sign-in and sign-up are now separate — no more “create password” prompt when logging in",
+    "changes": [
+      "Split the login screen into two separate forms. Previously one combined form handled both sign-in and sign-up, which made password managers (1Password/Safari) treat the password box as account creation and offer “Use Suggested Password” even when you had a saved login. Now the sign-in form contains only sign-in, so your manager offers to fill your existing password; the suggested-password prompt appears only on the separate “Create account” form."
+    ]
+  },
+  {
+    "version": "4.69",
+    "date": "2026-07-03",
+    "title": "Trace connections on the tree · filter Memories by person · peek & copy Vault numbers",
+    "changes": [
+      "Family Tree: hover any card (or open a profile) and every line that touches that person lights up and thickens — their parents, marriage, siblings, and children — while everyone unrelated gently fades back. A new legend in the corner explains each line type.",
+      "Memories: the feed now reads as a timeline with serif month headers, and a chip row lets you filter posts by a tagged family member (each chip shows how many posts).",
+      "Vault: account and routing numbers now have an eye button to peek (it re-hides automatically after 12 seconds) and a copy button that copies the full number without ever showing it on screen."
+    ]
+  },
+  {
+    "version": "4.66",
+    "date": "2026-07-01",
+    "title": "Sign-in no longer offers to create a new password",
+    "changes": [
+      "Fixed the login screen prompting your password manager to “Use Suggested Password” (create a new one) even when you already have a saved login. The email field is now tagged as the account username so 1Password/Safari can match your existing login and offer to fill it, and the strong-password suggestion now appears only when you switch to “Sign up”."
+    ]
+  },
+  {
+    "version": "4.65",
+    "date": "2026-06-23",
+    "title": "React to comments with emojis",
+    "changes": [
+      "You can now react to individual comments on a Memories post — tap the “☺ +” button under a comment to pick an emoji, or tap an existing reaction to add/remove yours. Counts and who-reacted (on hover) work just like post reactions."
+    ]
+  },
+  {
+    "version": "4.64",
+    "date": "2026-06-23",
+    "title": "Memories: who posted & who reacted · Recipes now family-only",
+    "changes": [
+      "Memory posts now show who posted them (the author’s name next to the date).",
+      "Reactions now show who reacted — each post lists the names under the emoji (e.g. “❤️ Mom, Dad · 🎉 Ted”), and hovering a reaction chip shows the same.",
+      "The Recipes tab is now visible to Family and Admins only (previously any signed-in account could see it), matching how the Calendar tab is gated."
+    ]
+  },
+  {
+    "version": "4.63",
+    "date": "2026-06-22",
+    "title": "Drag & drop photos into new posts too",
+    "changes": [
+      "The “New post” composer now has the same drag-and-drop photo upload as albums — drag image files onto the “Drag photos here” zone (or click to choose). Up to 6 photos per post; non-image files are skipped."
+    ]
+  },
+  {
+    "version": "4.62",
+    "date": "2026-06-22",
+    "title": "Drag & drop photos into albums",
+    "changes": [
+      "Adding photos to an album now supports drag and drop: open an album and drag image files onto the “Drag photos here” zone (or click it to pick files, same as before). The upload progress bar shows while they save, and non-image files are skipped automatically."
+    ]
+  },
+  {
+    "version": "4.61",
+    "date": "2026-06-22",
+    "title": "Albums gallery — uniform square covers",
+    "changes": [
+      "The Albums gallery is now a clean grid of equal, square album covers — with a “Create album” tile up front and the photo count under each — instead of one large banner across the top. Covers no longer get awkwardly cropped, and more albums fit on screen at once."
+    ]
+  },
+  {
+    "version": "4.60",
+    "date": "2026-06-22",
+    "title": "Albums polish — pick a cover, upload progress, smaller banner",
+    "changes": [
+      "You can now choose an album’s cover photo: open an album and click “Set as cover” on any photo (the current cover shows a ★ Cover badge). That photo becomes the album’s showcase tile on the Albums gallery.",
+      "Adding photos to an album now shows a live progress bar (“Uploading 3 of 5…”) so you can see the upload working instead of wondering whether anything happened.",
+      "The album cover banner on the gallery is smaller — it no longer fills the screen, so more albums are visible at a glance."
+    ]
+  },
+  {
+    "version": "4.59",
+    "date": "2026-06-22",
+    "title": "Memories + Albums combined into one page",
+    "changes": [
+      "Memories and Albums now live under a single “Memories” tab with two sub-tabs — “Posts” (the feed) and “Albums” (the gallery) — instead of two separate top-level tabs. Same features, one less tab in the bar; the “+ New post” / “+ New album” button swaps to match whichever sub-tab you’re on."
+    ]
+  },
+  {
+    "version": "4.58",
+    "date": "2026-06-22",
+    "title": "Albums + Memories opened to everyone",
+    "changes": [
+      "New “Albums” tab: photo collections anyone signed in can create. Each album is owned by its creator — the owner (and admins) add photos, edit, and delete; everyone else can browse and comment. The gallery shows the newest album as a banner with the rest in a cover grid; opening one shows a photo grid with the same tap-to-enlarge lightbox the rest of the app uses. Comments are open on each album and on individual photos.",
+      "Memories is now an open feed: anyone signed in can create posts, upload photos, react, and comment — previously only admins could post. You can edit and delete your own posts and comments; admins can still manage any.",
+      "Under the hood: posts, albums, photos, reactions, and comments moved out of the single shared archive record into dedicated tables with per-person permissions, so many people can contribute at once without overwriting each other — and the family-tree data stays admin-only and protected. Photo uploads to the family-photos store are now open to any signed-in user (you can remove your own; admins can remove any). Existing Memories posts were migrated over without loss."
+    ]
+  },
+  {
+    "version": "4.57",
+    "date": "2026-06-13",
+    "title": "Vault: Blood type always visible on Family cards",
+    "changes": [
+      "The 🩸 Blood type row now shows on every member’s Vault > Family card, displaying “—” when it hasn’t been set yet, so it’s discoverable instead of hidden. (It was already editable via Edit → Health & legacy since v4.49 — it just stayed hidden until a value was entered.) Set a value the same way: open a member → Edit → 🩸 Health & legacy → Blood type.",
+      "Side effect: the Health & legacy section header now appears on every Family card (previously hidden until some health field was filled). Allergies, medications, emergency contact, and primary doctor still only appear once they have a value."
+    ]
+  },
+  {
+    "version": "4.56",
+    "date": "2026-06-13",
+    "title": "Refresh + Harden — re-unify the design, add depth, fix correctness & security landmines",
+    "changes": [
+      "Visual re-unification: the indigo that had crept onto the newer pages (Recipes, Memories, My Kids, Stories, Documents — 26 occurrences) plus a stray blue on the 529-plan chips are gone, all replaced with the forest-green + copper brand. The app no longer looks like two products stitched together.",
+      "Depth + tactility: panels, tree cards, and vault cards now sit on a real elevation ladder (forest-tinted shadows + a pressed-paper top highlight) instead of flat outlines. Buttons lift on hover and press down on click.",
+      "Editorial typography: Fraunces optical sizing is now enabled (the font axis was already downloaded but unused), and each page gets one larger display masthead.",
+      "Data surfaces: the Members table finally has a tinted sticky header, quiet zebra striping, and a green row-hover with a copper edge; the Calendar gets weekend-column tinting on top of the existing today marker and colored chips.",
+      "Accessibility: added a global reduced-motion guard (animations were previously unconditional) and a keyboard focus-ring fallback across nav tabs, icon buttons, and chips.",
+      "Correctness: failure toasts now actually look like failures (the severity argument was ignored at 57 call sites, so a failed save looked identical to a success); the Time Capsule and Documents lists no longer blank out on a single bad date; media-upload modals can no longer get permanently wedged; event-attendee edits are keyed to a stable id instead of array position; and a runaway dashboard clock timer is cleared on navigation.",
+      "Security: the rich-text link sanitizer switched from a javascript:-only blocklist to a strict https/mailto/tel allowlist (closing vbscript:, data:, and tab-obfuscated bypasses); every photo background-image and every user-entered link (529, Google Drive, website, recipe/capsule/kid links) is now scheme-validated; and a Content-Security-Policy was added, with the public Supabase config moved into config.js so the policy can forbid inline scripts.",
+      "Deferred (written, not yet applied): a Supabase migration under supabase/migrations/ that splits the private Vault into an admin-only table — today the Vault is technically readable by any signed-in account. It ships with a README describing the paired app change.",
+      "CPU/memory: the visual work is almost entirely CSS tokens (no new render work) and the hardening adds only small per-render string helpers. Zero new SQL or realtime channels."
+    ]
+  },
+  {
+    "version": "4.55",
+    "date": "2026-05-15",
+    "title": "My Kids — bigger photos, reactions & comments",
+    "changes": [
+      "My Kids entries show larger photos and gained reactions + comments.",
+      "Removed the \"+ Add Member\" button from the top bar.",
+      "(Backfilled into this changelog in v4.56 — this release shipped before its History entry was written.)"
+    ]
+  },
+  {
+    "version": "4.54",
+    "date": "2026-05-15",
+    "title": "Family Tree — member ages visible to the User role",
+    "changes": [
+      "The User role can now see member ages on the Family Tree cards.",
+      "(Backfilled into this changelog in v4.56.)"
+    ]
+  },
+  {
+    "version": "4.53",
+    "date": "2026-05-15",
+    "title": "Dashboard regains its day-to-day panels",
+    "changes": [
+      "Dashboard got its day-to-day panels back (clock/weather, upcoming dates, gift totals, gift tracker, grocery list), with the family summary digest tucked underneath — without the date/print controls.",
+      "(Backfilled into this changelog in v4.56.)"
+    ]
+  },
+  {
+    "version": "4.52",
+    "date": "2026-05-15",
+    "title": "Hide the standalone Time Capsule nav tab",
+    "changes": [
+      "The standalone Time Capsule nav tab is hidden — capsules now live under My Kids.",
+      "(Backfilled into this changelog in v4.56.)"
+    ]
+  },
+  {
+    "version": "4.51",
+    "date": "2026-05-15",
+    "title": "Dashboard + Newsletter merge · Time Capsule moves under My Kids · Stories hidden",
+    "changes": [
+      "Dashboard now IS the family newsletter. The previous Dashboard panels (clock/weather, upcoming-60-days chips, monthly gift totals, gift tracker, grocery list) have been replaced by the live newsletter digest — same date controls, same 🖨️ Print / 📋 Copy as email / 📧 Copy family emails actions, same compile pipeline. The standalone \"Newsletter\" nav tab is gone; everything lives on Dashboard.",
+      "My Kids → new fifth tab per kid: \"Time Capsule.\" Shows every capsule whose recipient is that kid, split into Opened / Sealed groupings (same envelope cards as the global Time Capsule page). The \"+ Add capsule\" button pre-selects the kid as recipient. Non-admins (the kid themselves) see only their unlocked capsules; admins see everything plus Reveal Early / Edit / Delete controls. The global Time Capsule page still exists for capsules addressed to non-kid people.",
+      "Stories nav tab is hidden. The Stories view, data, and module remain — flipping a single attribute brings it back when needed.",
+      "Nav reorder: Memories now sits between My Family and My Kids (previously after Recipes).",
+      "Dead code: removed two unused dashboard-only helpers (nextOccurrenceInWindow + expandReminder) and ~350 lines of dashboard panel rendering. CalendarView keeps its own reminder logic via reminderOccursOn (still used).",
+      "CPU/memory: zero new SQL or realtime channels. Per-kid Time Capsule tab is a read-side filter over the same state.timeCapsules array. Newsletter compile is the same in-memory walk."
+    ]
+  },
+  {
+    "version": "4.50",
+    "date": "2026-05-15",
+    "title": "Family Newsletter (Wave 6 — final wave of the family-portal expansion)",
+    "changes": [
+      "New \"Newsletter\" admin-only top-level nav tab. Compiles a date-bounded HTML digest from every other family-portal data source: upcoming birthdays + anniversaries (next 30 days from the \"to\" date), recent My Kids entries, recent Memories Wall posts, new recipes, new stories, and time capsules that opened in the range.",
+      "Date range defaults to the last 90 days through today. Admin can edit From/To/Greeting on the fly and click Refresh preview.",
+      "Three output paths: 🖨️ Print / Save as PDF (uses window.print() — modern OS print dialogs include \"Save as PDF\" as a destination so zero extra deps), 📋 Copy as email (plain-text version on the clipboard ready to paste into Gmail/Apple Mail), 📧 Copy family emails (every member + friend email comma-joined for the To: line in one click).",
+      "Print-only CSS hides the toolbar/nav/chrome and lets the preview fill the page. Photos pre-resolve their signed URLs before render so the printed PDF actually includes the images.",
+      "CPU/memory: pure read-side work. Zero new SQL or realtime channels. The compiler iterates the in-memory archive once and renders inline."
+    ]
+  },
+  {
+    "version": "4.49",
+    "date": "2026-05-15",
+    "title": "Admin: Documents drawer + Health & Legacy locker (Wave 5)",
+    "changes": [
+      "New \"Documents\" tab on the Admin/vault page (peer to Family / Finance / Benefits / Home). Admin-only end-to-end: family-documents Storage bucket from Wave 1 already has admin-only RLS on insert / select / delete.",
+      "Each document: title (required), free-text category with auto-suggest from previously used values, optional member tag (or household-level), optional notes, and a file (PDF / images / Word / text). 25 MB cap matches the Wave 1 bucket file_size_limit.",
+      "Documents list with member filter, category filter, and live search. Click \"Open\" — images render in the existing lightbox; PDFs and other formats open in a new tab via a signed URL.",
+      "New Health & Legacy locker subsection inside each member's Family-tab card. Fields: blood type (select), allergies, medications, emergency contact (name + phone + relationship), primary doctor (name + practice + phone). Renders in the read view + the existing edit form; save handler updated to preserve the new fields.",
+      "Phones in the health locker (emergency contact, doctor) format to (XXX) XXX-XXXX on save, matching the rest of the app.",
+      "CPU/memory: zero new SQL or realtime channels. Documents live in state.documents as a flat list of refs; binaries are in Storage. Health fields are a nested object on each member's existing m.private record — negligible row growth."
+    ]
+  },
+  {
+    "version": "4.48",
+    "date": "2026-05-15",
+    "title": "Voice / Video Stories (Wave 4b of family-portal expansion)",
+    "changes": [
+      "New \"Stories\" top-level nav tab. Admin authors stories; everyone authenticated plays.",
+      "Four source modes in the editor (pills switch between them): 🎤 Record audio in-browser via MediaRecorder, 📁 Upload audio, 🎬 Upload video, 🔗 Embed link (YouTube/Vimeo auto-detected).",
+      "Recording: 5-minute cap (auto-stops at 5:00). Microphone permission requested the first time. Recorded blob preview lets you re-listen before saving. Upload bucket: family-audio.",
+      "Upload audio cap: 20 MB. Upload video cap: 100 MB. Bucket caps from Wave 1.",
+      "Embed URLs: YouTube short links (youtu.be), full watch URLs, embed URLs, and Shorts all parse to the same YouTube embed iframe. Vimeo too. Generic URLs render as a \"▶ Watch on external site\" button — we don't iframe arbitrary domains (XSS surface).",
+      "Each story has: title, optional description, optional recorded date, multi-tag of people (members + friend household persons), kind (audio/video), source (upload/embed), durationSec (auto-captured from MediaRecorder + file metadata).",
+      "Card grid: thumbnail + kind emoji + duration badge + title + tags. Click → opens player modal with the inline player (audio/video element for uploads, iframe for embeds, external link for generic).",
+      "CPU/memory: zero new SQL or realtime channels. Media binaries stay in Storage; the JSONB row only carries { bucket, path, mimeType } refs or { embedUrl, embedKind, embedId } embed metadata. Both shapes are small."
+    ]
+  },
+  {
+    "version": "4.47",
+    "date": "2026-05-15",
+    "title": "Time Capsule (Wave 4a of family-portal expansion)",
+    "changes": [
+      "New \"Time Capsule\" top-level nav tab. Admin writes letters addressed to one family member or friend household person, sealed until an unlock date.",
+      "Capsule shape: recipient (m:/f:/s:/k: ref) + unlock date + optional title + rich-text letter body + optional single photo + optional link. Author + sealed-on stamps auto-recorded.",
+      "Two sections on the page: Opened (full content, click photo for lightbox, link chip below body) and Sealed (envelope-card preview showing only the unlock date + an optional title — body never renders until unlock).",
+      "Lock check: capsule is locked when today's local date is before unlockDate. Once today catches up to the unlock date, the body becomes visible to the recipient automatically.",
+      "Admin override: an admin sees a \"Reveal early\" button on any sealed capsule. Clicking stamps the capsule with revealedBy = admin user id and immediately makes it visible. The opened card displays an \"(early reveal)\" tag so the recipient knows the unlock wasn't strict.",
+      "Permission: admin sees all capsules (locked + unlocked). A linked recipient sees only their own capsules; sealed ones show as a generic envelope (no \"To: name\" line for them — it's their letter). Non-admin, non-recipient viewers route back to Family Tree.",
+      "CPU/memory: zero new SQL or realtime channels. Each capsule lives as one row in state.timeCapsules on the JSONB blob; only photo { bucket, path } refs live there. Photo binaries stay in the family-photos Storage bucket from Wave 1."
+    ]
+  },
+  {
+    "version": "4.46",
+    "date": "2026-05-15",
+    "title": "Recipes + Memories polish — categories, bigger photos, reactions, comments",
+    "changes": [
+      "Recipes detail: hero photo shrunk from 480px → 320px max so it doesn't dominate the page. Click-to-lightbox still works for the full-size view.",
+      "Recipes grid: new category tab strip above the search box. \"All\" tab is always first; each unique category in your saved recipes becomes its own tab with a count chip. Click a tab → grid filters down. Modal Category field stays a free-text input (with datalist auto-suggest) so adding a new category is just typing a new word.",
+      "Memories feed: photo tiles bumped from 110px → 180px min so each photo carries more weight (and reads more like a scrapbook, less like a thumb grid).",
+      "Memories: emoji reactions on every post. 7 quick-pick chips (❤️ 😂 😮 😢 🎉 👍 🔥) plus a \"+\" button that opens the full emoji picker for one-off reactions. Tap a quick-pick or chip to react; tap the same emoji again to remove your reaction. Reactions roll up into per-emoji count chips above the picker.",
+      "Memories: comments on every post. Plain-text composer at the bottom of each post. Comment header shows author display name + a relative timestamp (\"5m ago\", \"2d ago\", date for older). Author can delete their own comment; admin can delete any. Replies are intentionally NOT included — kept simple.",
+      "Reactions + comments permission: Family + Admin roles can engage; User-role members see the counts + read comments but can't add. Matches the design decision to keep the wall family-curated.",
+      "CPU/memory: zero new SQL or realtime channels. Reactions are { emoji, userId, createdAt } objects; comments are { id, body, authorId, authorName, createdAt }. Both arrays live on each memory record inside the existing JSONB blob — negligible row-size impact."
+    ]
+  },
+  {
+    "version": "4.45",
+    "date": "2026-05-15",
+    "title": "Memories Wall (Wave 3b of family-portal expansion)",
+    "changes": [
+      "New \"Memories\" top-level nav tab — a reverse-chrono family feed. Admin-only post; everyone authenticated can view.",
+      "Post shape: date (required) + rich-text body (B/I/U/list/link/emoji) + up to 6 photos + multi-tag of people. Tags can be any family member or any friend household person (primary / spouse / kid).",
+      "Live search box filters posts across body, date, and tagged-people names.",
+      "Photos: same Wave 1 Storage pipeline as My Kids — 2400px downscale, uploaded to family-photos. The archive row only carries { bucket, path } refs per photo.",
+      "Photo click → reuses MyKidsLightbox for full-screen + prev/next nav.",
+      "CPU/memory: zero new SQL or realtime channels. Posts live as a flat JSONB list; photo binaries stay in Storage."
+    ]
+  },
+  {
+    "version": "4.44",
+    "date": "2026-05-15",
+    "title": "Family Recipes (Wave 3a of family-portal expansion)",
+    "changes": [
+      "New \"Recipes\" top-level nav tab. Admin-only CRUD; everyone authenticated can view — the family cookbook is meant to be read by everyone who can sign in.",
+      "Recipe shape: name (required), category (free-form with auto-suggested datalist of previously used values), optional \"from\" attribution (single tag, picks from any family member OR any friend household person — primary, spouse, or kid — same picker shape the events page uses), optional free-text \"from\" override (\"Korean cookbook\"), single cropped photo, ingredients (one per line), instructions (rich text), notes (rich text), optional external link.",
+      "Grid view: responsive recipe cards (auto-fill 220px). Cards show photo + name + category chip + \"from\" attribution.",
+      "Detail view: hero photo (click → opens in lightbox), two-column ingredients + instructions, notes section below. Admin sees Edit / Delete in the header.",
+      "Search box on the grid filters by name, category, attribution, and notes content.",
+      "Photo flow: square crop via CropModal (same as members), uploaded to family-photos bucket (Wave 1 storage), signed URLs cached in-session for grid + detail render.",
+      "CPU/memory: zero new SQL or realtime channels. Recipes live in the JSONB archive as a flat list — only the photo reference (32-ish bytes per record) lives in the row. Actual photo binaries are in Storage."
+    ]
+  },
+  {
+    "version": "4.43",
+    "date": "2026-05-15",
+    "title": "Bug fix: emoji buttons on My Kids entry modal",
+    "changes": [
+      "Title and Notes emoji buttons on the My Kids entry editor now actually open the picker. They were opening it and immediately closing it on the same click — the popover's document-level outside-click handler bails on elements marked [data-emoji-trigger], and the two new buttons were missing that attribute."
+    ]
+  },
+  {
+    "version": "4.42",
+    "date": "2026-05-15",
+    "title": "My Kids — manual picker for when parent links aren't set up",
+    "changes": [
+      "New \"Pick my kids\" picker on the My Kids page. The empty state now offers a clear primary action (a button) instead of pointing at the wrong page. Clicking it opens a checklist of every member — pick the ones whose growing-up archive should appear here.",
+      "Selected ids are saved to state.myKidsRoster. The roster resolver checks that array first; if it's non-empty it overrides the parent-link auto-walk. Empty array falls back to the auto-walk (so users who properly link kids in Family Tree don't need to touch the picker).",
+      "New \"Manage kids\" button in the My Kids page header (admin only) — lets you change the picks later from anywhere on the page.",
+      "Picker has live name search, member photos + age + group meta, deceased members filtered out automatically."
+    ]
+  },
+  {
+    "version": "4.41",
+    "date": "2026-05-15",
+    "title": "My Kids polish — nuclear-family roster + rich text + lightbox",
+    "changes": [
+      "My Kids roster now scopes to the *current admin's* nuclear-family kids only — walks the family tree (parentIds) and includes members whose parents are both the admin and the admin's spouse. Cousins / nieces / nephews no longer surface. Adapts to whichever admin is logged in.",
+      "Notes field is now a rich-text editor with a 6-button toolbar: Bold, Italic, Underline, Bulleted list, Link, Emoji insert. Output saved as sanitized HTML (whitelist: b/i/u/br/p/div/ul/ol/li/a; everything else stripped; <a> forced to target=_blank rel=noopener). Legacy plain-text bodies render unchanged.",
+      "Title field has a 😊 button next to it that opens the same emoji picker used by events. Picked emoji appends to the title with a space separator.",
+      "New optional Link field on Art + Letters entries — paste a Google Doc / Drive / album URL and the card renders a \"🔗 Open link\" chip below the body.",
+      "Photo downscale bumped from 1600px max → 2400px max. ~600–900 KB per photo, ~1100 photos in the 1 GB free Supabase tier. Crisper in the lightbox.",
+      "New full-screen photo lightbox: click any entry photo to open. Prev/Next arrow buttons (and keyboard Left/Right) cycle through that entry's photo set. Counter shows \"n / total\". Esc to close. Reuses the existing vault-lightbox overlay element with an .is-mykids flavor flag so the simpler single-image insurance-card flow stays intact.",
+      "CPU/memory: zero new SQL or realtime channels. The rich-text save path stores a (small) HTML string in the same body field. Lightbox uses cached signed URLs already populated by the entry grid renderer — no extra Storage round-trips per click."
+    ]
+  },
+  {
+    "version": "4.40",
+    "date": "2026-05-15",
+    "title": "My Kids + Annual Letters (Wave 2 of family-portal expansion)",
+    "changes": [
+      "New admin-only \"My Kids\" page in the top nav. Roster auto-populates with every family member whose age < 18 (deceased excluded). Click a kid card → opens their detail page with four tabs.",
+      "Per-kid tabs: Milestones (first steps, lost a tooth, etc.), School (year + grade + teacher + notes), Art (uploaded creations), Letters (one per year per kid).",
+      "Each entry has date + title + body + up to 6 photos. Letters skip photos (it's written prose). Each entry can be edited or deleted; deletes also clean up the photo objects in Supabase Storage so the bucket doesn't accumulate orphans.",
+      "Photos live in the family-photos bucket from Wave 1 (NOT inlined in the JSONB archive). Each photo downscaled to 1600px JPEG before upload — keeps Storage usage low while still high enough resolution to re-zoom later. The JSONB archive only stores { bucket, path } pointers per photo, so the row size stays bounded even with hundreds of entries.",
+      "Photo display uses signed URLs (1-hour expiry) cached in-memory per session. Re-renders within the same session don't re-hit the Supabase API.",
+      "Viewer access: admins always; the kid themselves once they have a linked Supabase login (auto-routes them to their own page, no roster). Other family roles are bounced to the Family Tree page.",
+      "CPU/memory: zero new SQL queries beyond the existing JSONB upsert + a few Storage signed-URL requests on render. Photos no longer bloat the archive row."
+    ]
+  },
+  {
+    "version": "4.39",
+    "date": "2026-05-15",
+    "title": "Storage foundation (Wave 1 of family-portal expansion)",
+    "changes": [
+      "New supabase/storage.sql migration creates four private buckets — family-photos, family-audio, family-video, family-documents — with per-file size limits and RLS policies. Admin can upload/delete in all four; authenticated users can view photos/audio/video; documents are admin-only end-to-end. Run it once from the Supabase SQL Editor (see supabase/SETUP.md step 2b).",
+      "Backend.uploadMedia() / getMediaUrl() / deleteMedia() helpers added. Uploads return { bucket, path } refs that get stored back in the JSONB archive; getMediaUrl resolves to a signed URL on display. Keeps the archive row small (the CPU pain point) while still letting features hold rich media.",
+      "No visible UI changes — this PR is pure infrastructure for the upcoming My Kids, Annual Letter, Recipes, Memories Wall, Time Capsule, Voice/Video Stories, Documents, Health Locker, and Newsletter features."
+    ]
+  },
+  {
+    "version": "4.38",
+    "date": "2026-05-15",
+    "title": "Login autofill fix + Members Event toggle + Friends address & photo crop",
+    "changes": [
+      "Login: removed minlength=\"6\" hint from the password field. Safari/iOS read minlength on a password input as a strong \"this is a sign-up\" signal and was offering \"Use Suggested Password\" on top of the real autofill. autocomplete=\"current-password\" alone is the right signal for \"fill from password manager.\"",
+      "Members table: Edit column removed — clicking the row already opens the editor. Added a new \"Event\" column with an inline checkbox that toggles the \"Do not show in events list\" flag without opening the profile.",
+      "Members → Last activity: app-side admin role is now auto-synced with the DB-side member_accounts.is_admin flag. The Last Activity column reads from a SECURITY DEFINER RPC gated on the DB flag, so promoting someone to admin in the UI now also gives them visibility into the column. Runs on every sign-in (bootstrap admin only) so existing admin-role members get backfilled automatically.",
+      "Friends → Address column: street prints on the first line, \"City, ST 90210\" on the second so the address stops getting mashed into a single squished cell.",
+      "Friends modal: photos for the primary friend, spouse, and every kid now route through the same square crop dialog that family members use (480px output, dedupes the visual language across the app)."
+    ]
+  },
+  {
+    "version": "4.37",
+    "date": "2026-05-14",
+    "title": "Friends list polish + bank masking + mobile responsive pass",
+    "changes": [
+      "Friends tab: name cell now shows ethnicity flag(s) + age in parens after the name when both are filled in. Example: \"Paul Cho 🇰🇷 (40)\". Adults render as bare years; kids/babies render as \"3\" or \"5mo\".",
+      "Friends tab: Edit column removed (clicking the row already opens the editor). Phone column locked to a single-line min-width so it stops wrapping into two rows; the Members page now uses a wider 1400px container so Address + Phone + 529 all fit comfortably on one line.",
+      "Friend modal: phone fields format to (XXX) XXX-XXXX on blur for both the primary and spouse, matching the family-side member form.",
+      "Friend modal: each kid row now has a Middle name field, consistent with the primary + spouse roster shape.",
+      "Ethnicity picker: clears the search input after a pick so the next tag search starts fresh. Previously you had to manually backspace the old query.",
+      "Family Tree: orientation toggle (horizontal/vertical) removed from the toolbar. The tree is always vertical now. Archives saved with the old \"horizontal\" preference are force-normalized on load.",
+      "Admin → Finance: bank Account # + Routing # always render as \"••••1234\" everywhere. Edit inputs start blank with a \"Current ends in 1234\" hint — type a new number to replace, or leave blank to preserve. Utilities Account # masked the same way. No reveal toggle, no full value in any UI surface.",
+      "Mobile (≤760px): top nav, Members tabs, and Vault tabs scroll horizontally; container padding shrinks; page heads stack; Dashboard / Events / admin-grid layouts collapse to a single column; modals + drawers go edge-to-edge; tables scroll horizontally inside their wrapper. Tighter pass at ≤480px hides the brand-name + user-chip text for max real-estate."
+    ]
+  },
+  {
+    "version": "4.36",
+    "date": "2026-05-14",
+    "title": "Friend household polish + cross-archive events picker",
+    "changes": [
+      "Friend modal: photo upload for spouse + each kid (kid photos use the same 720px @ 0.84 downscale as friend primaries — same archive footprint per face).",
+      "Friend kids automatically inherit the union of primary + spouse ethnicities on save, dedupe-merged with anything the kid had manually. Matches how family-side children inherit (line 1623). Saving a flag onto a parent later propagates to the kid the next time you save the household.",
+      "Friends tab UX: City column replaced by full Address (one-line postal). Address is shown only on the household primary row — spouse + kid sub-rows render em-dash there since they share the household address.",
+      "Friends tab UX: copy-to-clipboard buttons added to the Email + Address columns. One click copies the value with a toast confirmation.",
+      "Friends tab UX: bigger, more obvious expand caret (28px outlined button instead of 18px ghost icon). Default state is everyone-expanded so rosters are visible without clicking. New \"Collapse all / Expand all\" toggle in the panel header.",
+      "Friends tab: dedicated \"Export to Excel\" button on the panel header. Same content as the page-level export when the tab is active, but discoverable without switching tabs first.",
+      "New \"Do not show in events list\" flag on every member, friend primary, spouse, and kid. When checked, that person is filtered out of the events page \"+ Add member\" picker. Existing event rosters / RSVPs are untouched — this is a picker filter only, not a retroactive hide.",
+      "Events page: \"+ Add family member…\" picker renamed to \"+ Add member…\" and now offers Family members + every friend household person (primary, spouse, each kid) grouped under Family / Friends optgroups. Already-attending people drop out of the dropdown the same way members already did. Friend household picks are pushed as customName + email attendees with a personRef tag so the link to the friend record is preserved.",
+      "CPU/memory: zero new SQL queries, zero new realtime channels. The picker rebuilds in pure client-side JS once per renderDetail() (same as today). Sub-record photos add ~80–120 KB per kid to the friend JSONB blob — only when a photo is uploaded."
+    ]
+  },
+  {
+    "version": "4.35",
+    "date": "2026-05-14",
+    "title": "Friends folded into Members page + household roster",
+    "changes": [
+      "Removed the top-level \"Friend Tree\" nav tab and its card-grid view. Friends now live on the Members page as a sub-tab so they sit beside the family list and share the same list-row UI.",
+      "New tab layout on the Members page: Family / Friends / All. Family is the existing members table unchanged. Friends is the new household list. All is a flat union of every person (family + each friend household member) designed for scanning + Excel export.",
+      "Friends are now households. Each friend record can carry an optional spouse and a list of kids. In the Friends tab, a friend with family shows a caret in the leftmost cell — click to expand and see indented sub-rows for spouse + each child. Solo friends look like flat rows. Each household member carries their own 529 plan link, ethnicity (in the profile, not as a column), and birthday.",
+      "Friend address mirrors how members do it now: split into Street + City + State + Zip with the same zip-lookup auto-fill for city/state. Existing single-line addresses are preserved in the Street field (no re-entry required). The Friends list shows just the City column to keep rows scannable; the All-tab and CSV export show the full postal address.",
+      "New friend profile fields: 529 plan link (URL, surfaced as a chip in the 529 column), ethnicity (multi-select via the same picker used for members). These were already on the data schema but had no UI; they're now editable.",
+      "Context-aware \"Export to Excel\" button on the Members page: exports family / friends / all rows depending on which tab is active. The All-tab export includes Name, Email, Phone, Address, Birthday, Group, and Type — ready for any mailing-list workflow.",
+      "CPU/memory neutral: no new Supabase tables, queries, or realtime channels. Sub-records (spouse + kids) live inside the existing `friends` JSONB blob, so saves still go through the same debounced upsert and the same hashStringFast skip path. The only payload growth is a few hundred bytes per household — well below the noise floor on the archive row."
+    ]
+  },
+  {
+    "version": "4.34",
+    "date": "2026-05-14",
+    "title": "CPU-tuned Supabase diagnostics + system-storage SQL",
+    "changes": [
+      "After the user discovered that the Supabase pressure was CPU + system storage (WAL / replication slots / dead tuples) — not user-data size — both SQL helper files were reworked to be cheap to run on a constrained instance.",
+      "supabase/queries/storage-breakdown.sql: rewritten. Replaced every `octet_length(jsonb::text)` (which fully re-serializes the JSONB on each call) with `pg_column_size(jsonb)`. Materialized the archive row in a single CTE per query so we don't re-fetch from disk per metric. Coalesced the 5-way UNION ALL photo scan into one pass. Demoted the casual VACUUM FULL recommendation behind a warning + prefers plain VACUUM first.",
+      "New supabase/queries/system-storage-cpu.sql: ten ordered diagnostics — total DB split, top relations, WAL footprint, dead tuples + autovacuum freshness, the archive TOAST dead-tuple count, replication-slot lag (the usual smoking gun on Supabase free tier), pg_stat_statements top consumers, currently long-running queries, cache-hit ratios, and DDL to set aggressive per-table autovacuum + fillfactor=70 on public.archive and its TOAST partner.",
+      "No app behavior changes — diagnostics only."
+    ]
+  },
+  {
+    "version": "4.33",
+    "date": "2026-05-14",
+    "title": "Database storage diagnostic + one-click photo compression",
+    "changes": [
+      "New \"Database storage\" panel at the top of the History page (admin only). Shows the in-memory state size, a per-area byte breakdown (members / friends / vault / events / gifts / …), a vault sub-section breakdown, and a per-source photo footprint table so you can see at a glance which area is eating disk.",
+      "New \"Compress all photos\" button on the same panel. One click re-encodes every photo in the archive at smaller dimensions / lower quality (member 480px, friend 720px, insurance card 1000px, neighbor 800px). Skips photos that are already smaller than the recompressed result. Reports total bytes saved when it completes.",
+      "New upload defaults for vault photos: insurance cards 1000px @ 0.78 (was 1400 / 0.85), neighbor photos 800px @ 0.80 (was 1400 / 0.85). Cards still render readably in the lightbox; the archive shrinks meaningfully on the next upload.",
+      "Legacy passwordHash + mustChangePassword fields are now stripped from every member record on the next save. Supabase Auth has owned credentials since v4.16; carrying these around was dead weight (64 chars × N members).",
+      "New supabase/queries/storage-breakdown.sql — copy-paste SQL block for the Supabase SQL Editor that gives the authoritative on-disk breakdown (archive heap + TOAST size, per-area JSON sizes, photo footprint, autovacuum / bloat stats, and a VACUUM FULL at the end to reclaim TOAST bloat)."
+    ]
+  },
+  {
+    "version": "4.32",
+    "date": "2026-05-13",
+    "title": "Supabase CPU optimization — fewer / smaller archive writes",
+    "changes": [
+      "Bumped the archive save debounce from 500ms to 1500ms. Bursty interactions (typing in a form, dragging cards, rapid edits) now coalesce into one Supabase write instead of three. Trade-off: cross-device echo is ~1s slower, which nobody will notice on a family CRUD app.",
+      "No-op write skip: every save now hashes the serialized state and short-circuits if the hash matches the last successfully-written one. Code paths that defensively call Store.save() when nothing actually mutated (UI re-renders, idempotent normalization, no-move tree pans) no longer hit Postgres at all.",
+      "In-flight save coalescing: if a save is already mid-flight when the debounce fires, the next save waits for the in-flight one to complete before scheduling, instead of stacking overlapping writes against the same JSONB row.",
+      "Tree pan: clicking the canvas empty space (pointerdown→up with no movement) no longer fires a redundant save. Saves now only run when the view actually moved.",
+      "Net effect: a typical \"open the app, click around for a minute, close\" session now produces ~70-80% fewer database writes. Postgres CPU follows."
+    ]
+  },
+  {
+    "version": "4.31",
+    "date": "2026-05-13",
+    "title": "New Friend Tree page + nav re-order (Calendar after Dashboard)",
+    "changes": [
+      "New \"Friend Tree\" page (admin-only) for tracking people outside the family — neighbors, college friends, work, etc. Starts blank. Click \"+ Add Friend\" to add one. Each friend gets a card with name, photo, birthday, group, and notes; click into the card to edit. Same visual language as Family Tree cards.",
+      "Friends live in a separate dataset from Family Members (state.friends), so they never appear in Family Tree, My Family, Gifts, Events, or the Members admin page. The Friend Tree is intentionally its own world.",
+      "Nav re-ordered: Calendar now sits right after Dashboard. Family Tree → My Family → Friend Tree run as a group. The Events / Gifts / Members / Admin / History tabs follow.",
+      "Note: this is v1 of Friend Tree — friends render in a responsive card grid. The full pan/zoom canvas + relationship lines from Family Tree will come later as the dataset grows; that's a follow-up."
+    ]
+  },
+  {
+    "version": "4.29",
+    "date": "2026-05-13",
+    "title": "International name field — render names in another script under the Latin name",
+    "changes": [
+      "New optional \"International name\" field on every member profile (admin edit + add-member modal), placed directly under Display name. Useful for Korean / Vietnamese / Chinese / Japanese / Cyrillic / Arabic etc. — anything you'd want shown alongside the Latin name.",
+      "Rendered under the name on Family Tree cards, My Family cards, the Members admin cards, and at the top of the profile drawer. Empty by default; existing members carry over unchanged."
+    ]
+  },
+  {
+    "version": "4.28",
+    "date": "2026-05-13",
+    "title": "529-plan quick-link chip on tree cards (Admin + Family)",
+    "changes": [
+      "Family Tree + My Family cards: when a member has a 529 plan URL saved, a small 🎓 \"529 plan\" chip now renders directly on their card for the Admin and Family roles. Clicking the chip opens the plan portal in a new tab — no need to drill into the drawer first. Plain User role doesn't see the chip."
+    ]
+  },
+  {
+    "version": "4.27",
+    "date": "2026-05-13",
+    "title": "Family role fixes — tree & My Family clickable, per-card Gifts visibility",
+    "changes": [
+      "Family role can now click any profile card on the Family Tree to open the (read-only) drawer. Previously the click handler was admin-only, leaving the tree non-interactive for Family.",
+      "Family role can now click any profile card on the My Family page. Previously they were stuck with the User-tier rule (only their own card + spouse's card opened).",
+      "Drawer Gifts section is now per-card for Family role: it shows when the family member is viewing their own card or their spouse's card, and is hidden on every other relative's card. Admin still sees Gifts on every card; plain User behavior is unchanged."
+    ]
+  },
+  {
+    "version": "4.26",
+    "date": "2026-05-13",
+    "title": "New \"Family\" role — read-only access to ages, profiles, and a filtered Calendar",
+    "changes": [
+      "New role between User and Admin. Set a member's Role to \"Family\" in their profile edit form (admins only). Existing User and Admin roles unchanged.",
+      "Family Tree: Family role sees age chips on every member's card (same as Admins). Plain Users still don't.",
+      "Profile drawer for Family role: card details are visible, but the Gifts section is hidden, and the bottom-row actions (Edit profile, Link to family, Mark as divorced, Reset password, Remove from tree) are all hidden — even on the user's own card. Pure read-only.",
+      "Calendar page is now accessible to Family role as read-only. Events show only if the family member is on the attendee list (same filter as the Events tab); birthdays, anniversaries, and US holidays always show; reminders, the \"+ Reminder\" button, the per-day \"+\" add-event button, and the Google Calendar sync button are all hidden. Event chips appear but aren't clickable; birthday / anniversary chips still open the read-only profile drawer."
+    ]
+  },
+  {
+    "version": "4.25",
+    "date": "2026-05-12",
+    "title": "Admin polish — insurance emoji picker, larger bank details, Instagram link, Neighbors section, drag-reorder persistence",
+    "changes": [
+      "Admin → Benefits: each insurance card now has its own Emoji picker (Health 🩺, Hospital 🏥, Rx 💊, Dental 🦷, Vision 👓, Auto 🚗, Home 🏠, Umbrella 🌂, Pet 🐶, Travel ✈️, Life 🦺, Mental health 🧠, Disability 🏃, Other 📄). Leaving it on \"Auto\" keeps the existing kind-based default so previously created cards are unchanged.",
+      "Admin → Finance: bank-account details reformatted. Each fact (Account number, Routing number, Account holders) is on its own line with an emoji prefix, the value font is ~50% larger (19px) so it's readable at a glance, and Account holders are now explicitly labelled rather than tacked onto the end of the dense sub-line.",
+      "Admin → Family: Instagram handles are now clickable links to https://www.instagram.com/<handle> instead of a plain @text label.",
+      "Admin → Home: new \"Neighbors\" section. Each entry holds name, address, phone, a free-form \"kids\" note, an optional photo (uploaded inline, auto-downscaled), and notes. Same drag-to-reorder + click-to-enlarge photo behavior as the rest of the Admin page.",
+      "Bug fix: drag-to-reorder on Finance / Benefits / Home lists now actually saves the new order. The previous version committed on the `drop` event, but Chrome refuses to fire `drop` if the cursor is over the dragged row at release time (which is the common case, since the row tracks the cursor). The new order is now committed on `dragend`, which always fires."
+    ]
+  },
+  {
+    "version": "4.24",
+    "date": "2026-05-12",
+    "title": "Admin polish — utility emoji picker, in-page card photo lightbox, drag-to-reorder lists",
+    "changes": [
+      "Admin → Home → Utilities: the emoji field is now a curated dropdown (Electricity / Gas / Water / Trash / Internet / Cable / Phone / Yard / Pest / Pool / Cleaning / Solar / Power / Security) instead of a freeform text input. Custom emojis set in earlier versions carry forward as a \"(custom)\" option so they aren't lost.",
+      "Admin → Benefits: clicking an insurance card photo now opens it in an in-page lightbox overlay instead of trying to navigate a new tab to the data: URL (which Chrome refuses, leaving a blank page). Close via the × button, clicking the backdrop, or pressing Esc.",
+      "Admin → Finance / Benefits / Home: every list (banks, insurance cards, utilities, HOAs, code sets) now has a six-dot drag handle on the left of each row. Drag a row up or down to reorder; the new order is saved immediately. The row you're dragging gets a subtle lift + dimming so you can see what you're moving."
+    ]
+  },
+  {
+    "version": "4.23",
+    "date": "2026-05-12",
+    "title": "Admin page polish — Finance multi-holder + balance log, Benefits new fields + larger photos, multi-HOA/codes, structured birth fields",
+    "changes": [
+      "Finance: bank accounts now support multiple account holders (checkbox list restricted to nuclear-family members), a Nickname field that renders inline with the bank name (\"Chase — Joint checking\"), and a Balance history log so a savings account's growth can be tracked over time. The account number is now shown in full (no more ••••) — these records are admin-only behind RLS anyway. View card shows the latest balance + an expandable history table.",
+      "Benefits: added Car insurance as a Type option, plus four new fields per card — Plan #, NAIC #, Effective date, Expiration date. Insurance card photos render larger on the read-side view (up to 360px wide at credit-card aspect ratio) with a small caption tag so you can actually read what's on the card before clicking through to the full-size image.",
+      "Home: HOA / Property management is now a list — each entry has a Property label (e.g. \"Primary home\", \"Lake house\") so multiple HOAs can coexist. Same for Gate / amenity codes — each code set has its own property label. Existing single-record HOAs and codes are auto-migrated into the first entry under the \"Primary\" label.",
+      "Home: utilities get an emoji prefix field (e.g. ⚡ NV Energy, 🔥 Southwest Gas) shown before the name, and the saved-row layout was reformatted to match the HOA card style — separate lines with emoji-prefixed website/phone/account-# rather than a cramped single line.",
+      "Family: structured birth-detail inputs — Time uses the native time picker, Weight splits into lbs + oz number inputs, Length is inches (number with decimal step). Legacy free-text \"7 lbs 4 oz\" strings are parsed and migrated automatically. Added a Google Drive URL field (type=url) per member, rendered as a clickable link in the view."
+    ]
+  },
+  {
+    "version": "4.22",
+    "date": "2026-05-12",
+    "title": "New Admin (vault) page — household private records: family IDs, bank accounts, insurance cards, utilities, HOA, gate codes",
+    "changes": [
+      "New \"Admin\" nav tab — a private records vault visible only to Ted Yoo, Doan Yoo, and the system admin (admin-bootstrap). Other admins and regular users can't see the tab or reach the page; Views.show bounces them back to the tree. Gated via Auth.canAccessVault(), surfaced on the body as is-vault-authorized.",
+      "Family sub-tab: auto-populates a profile card for each member in the logged-in user's nuclear family (self + spouse + children). Each card holds the new private fields: Driver's Licenses (multi-state, add/remove rows), Passport #, Known Traveler #, Rapid Rewards, Instagram, and structured Birth details (place, hospital, time, weight, length, notes). Fields live under member.private — they do not surface in the regular profile drawer.",
+      "Finance sub-tab: bank account list with add / inline-edit / delete. Each entry holds bank name, account #, routing #, type (Checking / Savings / Credit / Other), holder member, and notes. Tinted pill on the row shows the account type.",
+      "Benefits sub-tab: insurance card list with add / inline-edit / delete. Each card holds type (Health / Dental / Vision / Other), insurer, policy #, group #, phone, covered member, notes, and front + back card photos (uploaded inline as auto-downscaled JPEGs via the new downscaleImageFile helper). Thumbnails open the full-size image in a new tab.",
+      "Home sub-tab: utility account list (name, website, phone, account #, notes), HOA / property-management contact card, and gate / amenity codes (pedestrian gate, car gate, pool, clubhouse, plus a buildings list).",
+      "Data model: archive grows a state.vault sub-tree { banks[], insurances[], utilities[], hoa{}, codes{} } and a state.vaultAccessIds[] escape hatch for granting access to other members by id. healMissingKeys backfills both on every load. Member records gain m.private = { driversLicenses[], passport, ktn, rapidRewards, instagram, birth{place,hospital,time,weight,length,notes} }."
+    ]
+  },
+  {
+    "version": "4.21",
+    "date": "2026-05-12",
+    "title": "More profile emojis, Deceased-checkbox fix, bigger heart + memoriam tag, Gifts Reports dashboard",
+    "changes": [
+      "Profile drawer: Life stage 🌱, Address 🏠, Group 👥, Ethnicity 🌍, Role 🔑, 529 plan 🎓 — added emoji glyphs to all remaining labels in both the view and edit modes. Notes label gets 📝 in the edit form.",
+      "Bug fix: the \"Deceased\" checkbox now renders the native checkmark when toggled. The .field input { appearance: none } rule was stripping the indicator off checkboxes living inside a .field wrapper; the .field-check selector now explicitly restores appearance: auto.",
+      "Family Tree: spouse-line heart marker scaled up (.8 → 1.1) with a proportionally larger halo so the connection reads more clearly at a glance, especially on dense layouts.",
+      "Profile cards: \"In loving memory\" badge enlarged (9px → 11px font, more padding) and now leads with a 🕊️ glyph. The drawer-side \"In loving memory\" pill matches.",
+      "Gifts → Log a gift: the To-member field is now a typeahead picker that defaults to the logged-in user's nuclear family (self + spouse + children) since received gifts almost always go to \"us\". A \"Show all family members\" button or typing any letter expands to the full list.",
+      "Gifts bug fix: the From-member picker now clears its search box after each pick, so adding multiple givers in a row no longer leaves the previous query filtering the list (was masking later picks).",
+      "Gifts → Reports: new tab with a visual dashboard. Headline cards for Received / Given / Net totals, a 12-month grouped bar chart, top recipients + top givers ranked by dollars, and a by-occasion breakdown with received/given segments per occasion. Multi-giver gifts split evenly across senders so the top-giver totals stay honest."
+    ]
+  },
+  {
+    "version": "4.20",
+    "date": "2026-05-12",
+    "title": "Red spouse heart, profile-label emojis, deceased checkbox, Nickname→Display name, group-invite opt-out",
+    "changes": [
+      "Family Tree: the spouse-line heart marker is now red (#dc2626) on both the main tree and My Family mini-tree, making current marriages pop. Broken-heart markers for ex-spouses stay muted gray to keep the past-tense read.",
+      "Profile drawer: added emoji glyphs to the Birthday (🎂), Phone (📱), Email (📧), Anniversary (❤️), and Date of death (🕊️) labels for quick visual scan.",
+      "Profile edit: \"Date of death\" is now gated behind a \"Deceased\" checkbox. The date input only appears when checked, so a stray click on the date picker can't accidentally mark someone as having passed away.",
+      "Members: \"Nickname\" → \"Display name\". This optional field overrides what the app renders anywhere a member appears (tree cards, drawer headline, admin list, attendee rows, calendar chips, gift list, etc.). If left blank, it falls back to First + Middle + Last. Existing nicknames carry forward in the v4.20 migration. CSV export header updated.",
+      "Groups: each member has a new \"Include in group invites\" checkbox in the profile edit form (default on). When unchecked, that person is skipped by Events → \"+ Add by group…\" — they can still be added one-by-one. Useful for someone who is part of a group socially but shouldn't get auto-invited to every event for it."
+    ]
+  },
+  {
+    "version": "4.19",
+    "date": "2026-05-12",
+    "title": "Members: drop Role column, \"Last activity\" now sourced from Supabase auth",
+    "changes": [
+      "Members page: removed the Role column. Role is already visible inside each member's profile drawer, so the table column was redundant.",
+      "Members page: \"Last activity\" now reads auth.users.last_sign_in_at directly via a new SECURITY DEFINER RPC (public.member_last_seen). Every member with a linked Supabase login lights up — not just whoever happens to be in the current session. The previous in-archive lastLoginAt stamping (which only ever wrote for the viewer, and silently skipped admin-bootstrap accounts) is gone. Requires a one-time SQL migration: run the member_last_seen block in supabase/schema.sql."
+    ]
+  },
+  {
+    "version": "4.18",
+    "date": "2026-05-11",
+    "title": "Tree favicon, Members \"Last activity\" column, Dashboard 5-day forecast + today highlight",
+    "changes": [
+      "Favicon: browser tab now shows a 🌳 tree emoji via inline SVG favicon (no asset file needed).",
+      "Members page: new \"Last activity\" column showing the date of each member's most recent visit. The timestamp is stamped on the member record (Auth.applyAccount sets lastLoginAt on resolve, debounced to once-per-minute to avoid noisy saves) and the cell carries a full-datetime tooltip on hover.",
+      "Dashboard: the single-line current-weather chip is replaced with a 5-day Las Vegas forecast. Each day shows day-of-week → weather icon → high/low temp. Cache lifetime bumped to 30 min since daily forecasts don't move minute-to-minute.",
+      "Dashboard: upcoming list rows for items happening today now render with a light-yellow background + amber border so the \"today\" row pops out of the cream stack."
+    ]
+  },
+  {
+    "version": "4.17",
+    "date": "2026-05-11",
+    "title": "Bug fixes — event card net chip, own-profile click, My Family layout + half-sib coloring",
+    "changes": [
+      "Events: the +/− gift summary chip on the event list card on the left side is now hidden for non-admin users (in addition to the attendee-table footer fixed in v4.16).",
+      "My Family: non-admin user can now actually open their own profile card and their current spouse's. v4.16 treated Auth.current as a bare id, but it's the resolved member OBJECT — the set comparison never matched. The check now pulls the .id off the object.",
+      "Family Tree: same bug fixed in the autoLayout root-sort heuristic. rootContainsAdminByBlood was always returning false because Auth.current (an object) was being compared to member ids (strings), so the admin's family wasn't actually sorting correctly. Now extracts .id properly.",
+      "My Family: bumped the row gap from 100 to 160 so multi-group parent trunks (half-siblings routed under different parent pairs) have breathing room.",
+      "My Family: half-sibling trunks now stagger their Y lanes (18px apart) so multi-group routings don't all collapse onto the same horizontal rail. Plus each parent-group gets a distinct hue applied to its kid card's top accent bar (only when 2+ groups are present), so it's visually obvious which kids share which parents."
+    ]
+  },
+  {
+    "version": "4.16",
+    "date": "2026-05-11",
+    "title": "Tightened user-role permissions in My Family and Events",
+    "changes": [
+      "My Family: a non-admin user can now only open their own profile card and their current spouse's. Clicking any other card (parents, siblings, children, in-laws) is a no-op — the read-only mini-tree stays visible but the drawer with private fields no longer opens.",
+      "Events: the \"Total gifts received\" summary row in the attendees table is now admin-only. Non-admin users see the attendee list but not the money sum."
+    ]
+  },
+  {
+    "version": "4.15",
+    "date": "2026-05-11",
+    "title": "Family Tree spouse line solid + ex dotted, My Family zoomed out 10%",
+    "changes": [
+      "Family Tree: swapped the line styles between current spouse and ex spouse — current spouse line is now solid (with the heart marker), ex spouse line is dotted + muted opacity.",
+      "My Family: scaled the mini-tree down 10% with a CSS transform so larger families don't feel as cramped horizontally. Top-center origin keeps the focus row in place visually."
+    ]
+  },
+  {
+    "version": "4.14",
+    "date": "2026-05-11",
+    "title": "Family Tree — new members slot in next to their relative in manual layout",
+    "changes": [
+      "Family Tree: when the layout is in manual mode and a new member is added with a relationship, the new card now drops in at a natural position relative to its target (child → below the parent or below the parent-couple midpoint, spouse/sibling → beside the target, parent → above the target). Previously the card landed at (0, 0) in the top-left corner.",
+      "Family Tree: the placer nudges along the primary axis if the chosen slot would overlap an existing card, so adding multiple kids to the same parents stacks them in a row instead of dropping each on top of the last."
+    ]
+  },
+  {
+    "version": "4.13",
+    "date": "2026-05-11",
+    "title": "Family Tree — manual layout: unlock to drag cards, lock to save",
+    "changes": [
+      "Family Tree: new \"Unlock layout\" toggle in the toolbar (lock icon next to Auto-arrange). When unlocked, cards become directly draggable — pointerdown on a card and move it; the parent/child/spouse connectors redraw in real-time. Lock the layout again when finished and the positions stick across reloads + sync.",
+      "Family Tree: while the layout is unlocked, autoLayout() becomes a no-op so adding or removing members never reshuffles your hand-placed cards. Locking the layout keeps that protection in place — positions persist. Clicking Auto-arrange wipes the manual flag and returns to the algorithm-driven layout.",
+      "Family Tree: drag-to-reposition uses a 4px movement threshold to distinguish drags from clicks, so quickly tapping a card in edit mode still opens the profile drawer."
+    ]
+  },
+  {
+    "version": "4.12",
+    "date": "2026-05-11",
+    "title": "Nav-tab INP fix — defer per-view renders out of the click handler",
+    "changes": [
+      "Performance: Views.show() no longer runs the target view's render() synchronously inside the click handler. The visibility toggle still happens immediately so the active nav-tab + view-switch paint right away; the heavy per-view render (autoLayout, edges SVG, large innerHTML builds) is queued as a fresh task and runs on the next frame. Cuts INP on nav-tab clicks from ~200ms to <50ms on a populated archive.",
+      "Performance: rapid nav-tab switches are coalesced — only the final tab's render runs."
+    ]
+  },
+  {
+    "version": "4.11",
+    "date": "2026-05-11",
+    "title": "Family Tree ancestor roots land left of admin, reminders gain hide-from-Dashboard flag",
+    "changes": [
+      "Family Tree: within the admin family group, roots that contain the admin by blood now sort to the RIGHT of surname-only roots. So Bong+Kum, Wonjoon Yoo, and any floating Grandpa/Grandma Yoo roots lay out to the left of Hee Yoo's cluster instead of stacking after it. Wiring those ancestor roots in as Hee's parents will still consolidate them into a single subtree above Hee.",
+      "Calendar: reminders now have a \"Hide from Dashboard\" checkbox. Checked reminders still render on the Calendar but never enter the Dashboard upcoming list — useful for low-signal recurring chores like trash day."
+    ]
+  },
+  {
+    "version": "4.10",
+    "date": "2026-05-11",
+    "title": "My Family — per-kid parent routing, step-sibling inclusion, dashed ex-connectors",
+    "changes": [
+      "My Family: parent → kids lines are now routed per kid based on their actual visible bio parents. Half-siblings only connect to the parent(s) they actually share. In Suejin Chang's view, Jewelia Chang now drops only from her bio mother Mimi Morse instead of having a stray line from Tony Chang.",
+      "My Family: step-siblings (children of a step-parent of focus) are now included in the siblings list. Jewelia surfaces in Suejin's view because Mimi is a step-parent; the per-kid router then keeps Jewelia connected only to Mimi.",
+      "My Family: ex-couple heart-lines now render dashed (matching the main Family Tree). The dashed treatment applies to broken hearts between divorced bio parents, between a bio parent and an ex step-parent, and between the focus and their own ex-partners."
+    ]
+  },
+  {
+    "version": "4.9",
+    "date": "2026-05-11",
+    "title": "Family Tree root sort — admin family on the left + bloodline detection fix",
+    "changes": [
+      "Family Tree: root sorting now puts the admin's own family on the LEFT side of the canvas (was: right). For Ted's archive that means the Yoo branch — Bong/Kum, Grandpa/Grandma Yoo, Wonjoon Yoo — clusters on the left and the Nguyen branch (Doan's parents) clusters on the right.",
+      "Family Tree: rewrote the \"does this root contain the admin\" check to walk children only, never spouses. The previous version walked through Doan's marriage to Ted, so Doan's parents' subtree was getting classified as admin's family too and the sort never separated them.",
+      "Family Tree: added a surname fallback for floating roots that aren't wired to the bloodline yet. A standalone Grandpa Yoo or Wonjoon Yoo now lands in the admin's cluster (left) because their last name matches the admin's. Once you wire them as Bong's parents / sibling, they'll slot in under the bloodline directly and the surname rule stops mattering for them."
+    ]
+  },
+  {
+    "version": "4.8",
+    "date": "2026-05-11",
+    "title": "Anniversary on cards, admin-on-the-right root sort, My Family all-spouses display",
+    "changes": [
+      "Family Tree: profile cards now show \"X years together\" (or \"X months together\" when under a year) underneath the age. The chip reads off the member or their current spouse so it appears on both halves of the couple.",
+      "Family Tree: root sorting now puts whichever root subtree contains the admin on the right edge of the canvas. Doan's parents (Nguyen) layout on the left, Ted's parents/grandparents (Yoo) layout on the right — independent of the order members were added.",
+      "My Family: bio parents now bring in every spouse — current AND ex — that isn't themselves a bio parent of the focus. Suejin Chang's view now surfaces all of Tony Chang's partners (including Heather Grisnik's mother Mimi Morse) so half-sibling parentage reads clearly.",
+      "My Family: ex-step-parents render with a broken heart to the bio parent (current step-parents stay solid). Bio co-parent now interleaves directly after the bio parent so the bio-couple heart never gets stranded across step-parent cards."
+    ]
+  },
+  {
+    "version": "4.7",
+    "date": "2026-05-11",
+    "title": "Reminder icons, My Family step-parent display, Family Tree side-by-side spouses + root order",
+    "changes": [
+      "Calendar reminders: each reminder now has a customizable icon (defaults to 🔔). The Repeats modal got an Icon field with the same emoji-input + browse button used by Events. The chosen icon shows on the calendar chip and the Dashboard upcoming list.",
+      "My Family: spouse-inferred bio parents are back — but only when the bio parent has no ex-spouses. Doan's mother Cuc Tran now appears automatically when viewing Doan, while Ted's view still does not falsely list Kimberly as a parent (Hee has an ex).",
+      "My Family: a bio parent's current spouse who is not themselves a bio parent now appears as a step-parent in the parents row, with a solid heart connector to their bio-parent spouse and no parent-line down to the focus.",
+      "My Family: divorced bio parents now show a broken heart between them in the parents row, matching how the main Family Tree page renders ex-couples.",
+      "Family Tree: reverted v4.6's stacked-spouse layout. Current spouse, anchor, and ex(es) are all side-by-side again. The orphan-prevention behaviour is kept by pulling each ex's current spouse into the same cluster row immediately after the ex, so nobody ends up dumped far to the right.",
+      "Family Tree: root iteration now filters to true top-of-tree members (a member with no parents whose spouses and exes also have no parents). Reversed the iteration order so Doan's parents (Nguyen) lay out on the left and Ted's parents/grandparents (Yoo) on the right, keeping the Ted+Doan marriage near the visual center."
+    ]
+  },
+  {
+    "version": "4.6",
+    "date": "2026-05-11",
+    "title": "Family Tree stacked-spouse layout, line-style differentiation, Calendar custom recurrence, Gifts table fix, History chip fix, My Family step-parent fix",
+    "changes": [
+      "Family Tree: when an anchor has both a current spouse and an ex-spouse, the current spouse now stacks vertically above the anchor (with a vertical heart-line) while the ex(es) stay beside. Fixes the case where the current spouse was getting dropped into the orphan bucket far to the right with no connector back.",
+      "Family Tree: the same stacking rule applies when an ex is the layout root — that ex's current spouse is placed above the ex card, instead of being orphaned.",
+      "Family Tree: parent → child lines are now thicker, rounder, and more opaque; sibling lines use a longer dash pattern. The three relationship types (solid bold = parent, long-dash = sibling, dotted + heart = spouse) read distinctly at a glance.",
+      "Family Tree: family-children trunk now drops from the bottom of the lower card when the parent couple is stacked.",
+      "Calendar: reminder recurrence now supports \"Every 2 weeks\" and a Google-style custom panel — pick an interval (every N), a unit (day/week/month/year), and for weekly: tap day-of-week chips (M T W T F S S).",
+      "Gifts: removed the .gift-row flex layout from <tr> rows. The class was originally for the inline mini-gift list in the profile drawer; on the Gifts table it was turning each <tr> into a flex container, breaking column alignment between the header and the body. Scoped the flex layout to the inline list only.",
+      "History: current-version chip background was using an undefined --brand-800 CSS variable, so the chip rendered transparent with paper-colored text (invisible). Pointed it at --brand-700 and the chip now shows up correctly.",
+      "My Family: removed the \"add each parent's current spouse\" step from the parents collection. That heuristic was pulling step-parents in as bio parents (Kimberly was showing as Ted/Sarah's mother because she's Hee's current spouse). Parents now come from explicit parentIds + reverse-lookup only.",
+      "My Family: parent-trunk now spans every parent's column, not just the first — fixes a gap where the second divorced parent's drop-line landed in empty space."
+    ]
+  },
+  {
+    "version": "4.5",
+    "date": "2026-05-11",
+    "title": "My Family siblings, Dashboard chip colors, gift total dedupe, + button focus fix",
+    "changes": [
+      "Family Tree: the \"+\" add-relative button no longer stays visible after the modal closes — clicking it now blurs the button and the modal's close() drops any lingering focus so :focus-within releases.",
+      "Dashboard: Upcoming filter chips are now color-coded to match the Calendar legend (blue events, green birthdays, purple anniversaries, red holidays, amber reminders). Each chip also carries a thin matching left-border when idle.",
+      "Events: attendees-table \"Total gifts received\" footer used to sum each attendee's gift credit, which double-counted joint gifts (Hee + Kim both got credit for the same $500 → footer showed $1000). The footer now iterates gifts directly and sums each gift once.",
+      "My Family: siblings now appear on the focus row after the exes, branched off the same parent trunk as the focus.",
+      "History: changelog is inlined in the bundle instead of fetched from changelog.json so the current-version chip always renders without depending on the static-file route."
+    ]
+  },
+  {
+    "version": "4.4",
+    "date": "2026-05-11",
+    "title": "My Family parents fix, Dashboard filters and totals, Members rename, History page",
+    "changes": [
+      "My Family: parents row unions focus.parentIds + reverse-lookup + each parent's current spouse, so a missing co-parent (the Doan Yoo's-mother case) surfaces automatically from the spouse link.",
+      "My Family: children row interleaves each child's spouse next to them; grandchildren include kids of the in-law too.",
+      "Family Tree: emoji slot in the toolbar is no longer hidden by the global data-admin-only rule.",
+      "Dashboard: Birthdays / Anniversaries / Events / Holidays / Reminders are now clickable filter chips.",
+      "Dashboard: \"This month's gifts\" panel — received, given, net for the current month.",
+      "Dashboard: each event row in Upcoming shows its rolling gift totals.",
+      "Dashboard: gift tracker now only shows direction=given gifts that aren't fully purchased + sent.",
+      "Admin tab renamed to Members.",
+      "New History page (this changelog)."
+    ]
+  },
+  {
+    "version": "4.3",
+    "date": "2026-05-11",
+    "title": "Family Tree card overflow, group filter ancestors, My Family per-child routing",
+    "changes": [
+      "Family Tree: .node overflows visible so the \"In loving memory\" badge and the \"+\" button aren't clipped.",
+      "Family Tree: removed the desaturate-on-death photo filter.",
+      "Family Tree: Group filter keep-set walks every ancestor so the tree stays vertical instead of collapsing into a horizontal row.",
+      "Family Tree: emoji slot moved out of a hidden floating position into the toolbar.",
+      "My Family: per-child routing — each child's trunk drops from their actual visible bio parent(s).",
+      "My Family: focus row order is [current spouse, focus, ex1, ex2, ...].",
+      "My Family: added a 4th row for grandchildren."
+    ]
+  },
+  {
+    "version": "4.2",
+    "date": "2026-05-11",
+    "title": "Family Tree polish, My Family ex-spouses, Dashboard tweaks, Admin sort and login column, page emojis",
+    "changes": [
+      "Family Tree: \"In loving memory\" badge on the profile card when a date of death is set; age caps at date of death.",
+      "Family Tree: Tree.relations does union-from-both-directions and healMissingKeys heals asymmetric links every load.",
+      "My Family: renders current spouse + every ex on the focus row with broken-heart lines.",
+      "Dashboard: Upcoming horizon 60 days; US holidays merged in.",
+      "Dashboard: gift tracker hides rows where both purchased AND sent are checked.",
+      "Members: Name column header click toggles between by-last and by-first sort; new Login column.",
+      "Page emojis: admins can set an emoji per page; updates both the H2 and the nav tab."
+    ]
+  },
+  {
+    "version": "4.1",
+    "date": "2026-05-11",
+    "title": "Dashboard, profile additions, calendar reminders, travel trips",
+    "changes": [
+      "Profile drawer: date of death, 529 plan URL, notes, in-drawer gifts section.",
+      "Members table: inline copy-email button per row.",
+      "Calendar: birthday chip recolored green; legend updated.",
+      "Calendar: new Calendar reminder type (recurring, calendar-only).",
+      "Events: travel-trip toggle adds destination, end date, four budget categories, and a daily itinerary editor.",
+      "New Dashboard page (admin-only): Las Vegas clock + weather (Open-Meteo), upcoming list, quick gift tracker, shared grocery list.",
+      "Admins land on Dashboard after sign-in."
+    ]
+  },
+  {
+    "version": "4.0",
+    "date": "2026-05-11",
+    "title": "Multiple ex-spouses, photo recrop, Group + My Family tree filters",
+    "changes": [
+      "Multi-spouse data model: exSpouseIds[] on every member; canvas draws each ex with a long-dashed broken heart.",
+      "healMissingKeys migrates legacy divorced-flag-on-current-spouse pairs into the new model.",
+      "Profile edit drawer: \"Crop photo\" button re-runs the cropper on an existing photo.",
+      "Family Tree toolbar: Group dropdown and My Family toggle as mutually-exclusive view filters."
+    ]
+  },
+  {
+    "version": "3.4",
+    "date": "2026-05-11",
+    "title": "Edge Function for admin password reset",
+    "changes": [
+      "New Supabase Edge Function admin-reset-password (service_role server-side) so admins can set a member's password directly from the website.",
+      "Client toast surfaces a deploy-the-function hint when the call fails."
+    ]
+  },
+  {
+    "version": "3.3",
+    "date": "2026-05-11",
+    "title": "Smart Reset PW handles missing logins; recovery modal fixes",
+    "changes": [
+      "Admin Reset PW probes member_accounts first; if no login exists, it offers to create one on the spot.",
+      "Open the recovery modal directly when the URL has a recovery hash."
+    ]
+  },
+  {
+    "version": "3.2",
+    "date": "2026-05-11",
+    "title": "Mirror members into Supabase Auth on create",
+    "changes": [
+      "Member-create form gains an Email field; saving creates a Supabase Auth user via a session-less throwaway client (admin stays logged in).",
+      "member_accounts row links the auth user to the in-app member; credentials shown once for the admin to share."
+    ]
+  },
+  {
+    "version": "3.1",
+    "date": "2026-05-11",
+    "title": "RLS policy fixes; admin password reset via email",
+    "changes": [
+      "Split member_accounts policies per operation to break the infinite-recursion RLS error.",
+      "Add INSERT policy on archive so PostgREST .upsert() works.",
+      "Admin Reset PW uses resetPasswordForEmail and a recovery-mode change-password modal on the receiving end."
+    ]
+  },
+  {
+    "version": "3.0",
+    "date": "2026-05-11",
+    "title": "Supabase backend wire-up + auth",
+    "changes": [
+      "Replaced localStorage-only storage with Supabase: JSONB-blob single-row archive + member_accounts mapping + RLS.",
+      "Auth flow switched from local username/passwordHash to Supabase email/password with realtime sync."
+    ]
+  },
+  {
+    "version": "2.0",
+    "date": "2026-05-11",
+    "title": "Calendar, expenses, anniversaries, photo crop, profile fields",
+    "changes": [
+      "Calendar page with events, birthdays, US holidays; Google Calendar sync; per-attendee expenses; anniversary tracking; photo crop modal; profile improvements."
+    ]
+  },
+  {
+    "version": "1.0",
+    "date": "2026-05-11",
+    "title": "Initial commit",
+    "changes": [
+      "Family Archive web app — vanilla JS, single index.html + app.js + styles.css."
+    ]
+  }
+]
