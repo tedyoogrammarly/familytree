@@ -2841,14 +2841,17 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   overflow: visible;
   pointer-events: none;
 }
+/* v4.69: rounded caps + antialiased rendering — the old square-cap
+   crispEdges strokes read as jagged hairlines at odd zoom levels. Slightly
+   quieter opacity keeps the people foregrounded over the plumbing. */
 .myfamily-edges .myfamily-edge-lines path {
   fill: none;
-  stroke: var(--brand-700, hsl(163 38% 30%));
-  stroke-width: 2;
-  stroke-linecap: square;
-  stroke-linejoin: miter;
-  shape-rendering: crispEdges;
-  opacity: .8;
+  stroke: var(--brand-600, hsl(163 38% 30%));
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  shape-rendering: auto;
+  opacity: .62;
 }
 /* Past-marriage connectors: dashed + muted so a broken-heart link reads
    visually distinct from a current marriage at a glance. */
