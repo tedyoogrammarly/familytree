@@ -128,6 +128,69 @@ const appt = await p.evaluate(() => {
 console.log('TASK6', JSON.stringify(appt));
 check(appt.added === 1 && appt.cat === 'personal' && appt.start === '15:00' && appt.name === 'Dentist', 'appointment saved as personal timed event');
 
+// Task 7: FIX B — week view unifies internal + Google timed items into one
+// per-day layout pass (this._weekTimed / relayoutDay), instead of two
+// independent placeTimed() passes that stacked same-time events on top of
+// each other. Also verifies the merge path de-dupes by event id (guards the
+// old double-append bug on a re-resolved same-week fetch).
+const weekMerge = await p.evaluate(() => {
+  CalendarView.mode = 'week';
+  CalendarView.weekStart = CalendarView.startOfWeek(new Date());
+  CalendarView.render(); // fresh week grid; resets this._weekTimed for the week
+
+  // Pick a day in the current week that isn't "today", so this doesn't
+  // collide with the Task 6 Dentist appointment (seeded on today's date).
+  const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(CalendarView.weekStart); d.setDate(d.getDate() + i); return d; });
+  const todayIso = toIsoDate(new Date());
+  const testDay = days.find(d => toIsoDate(d) !== todayIso) || days[0];
+  const iso = toIsoDate(testDay);
+
+  // Seed two overlapping "internal" items directly into the shared store,
+  // exactly as renderWeek() would, then lay that day out.
+  CalendarView._weekTimed[iso] = [
+    { startMin: 540, endMin: 600, label: 'A', group: 'personal', kind: 'event', id: 'ev-a' },
+    { startMin: 570, endMin: 630, label: 'B', group: 'personal', kind: 'event', id: 'ev-b' },
+  ];
+  CalendarView.relayoutDay(iso);
+  const col = document.querySelector(`#cal-week .cal-wk-col[data-date="${iso}"]`);
+  const nodesAfterSeed = col ? col.querySelectorAll('.cal-wk-event').length : -1;
+  const lefts = col ? Array.from(col.querySelectorAll('.cal-wk-event')).map(n => n.style.left) : [];
+  const ncolsCheck = CalendarView.layoutDayColumns([...CalendarView._weekTimed[iso]]).map(i => i._ncols);
+
+  // Simulate the Google-merge path (mirrors renderGoogleEventsUnified's week
+  // branch): one genuinely new item + one item whose id already exists.
+  const incoming = [
+    { startMin: 660, endMin: 690, label: 'G-new', group: 'work', kind: 'google', id: 'g:new1' },
+    { startMin: 540, endMin: 600, label: 'A-dup', group: 'personal', kind: 'event', id: 'ev-a' }, // duplicate id
+  ];
+  const existing = CalendarView._weekTimed[iso];
+  const seenIds = new Set(existing.map(it => it.id));
+  const fresh = incoming.filter(it => !seenIds.has(it.id));
+  existing.push(...fresh);
+  CalendarView.relayoutDay(iso);
+  const nodesAfterMerge = col.querySelectorAll('.cal-wk-event').length;
+  const storeLenAfterMerge = CalendarView._weekTimed[iso].length;
+
+  // Re-merge the SAME duplicate id again — node count / store length must
+  // not grow further (this is the double-append regression the fix targets).
+  const seenIds2 = new Set(CalendarView._weekTimed[iso].map(it => it.id));
+  const reDupeIncoming = [{ startMin: 540, endMin: 600, label: 'A-dup2', group: 'personal', kind: 'event', id: 'ev-a' }];
+  const fresh2 = reDupeIncoming.filter(it => !seenIds2.has(it.id));
+  CalendarView._weekTimed[iso].push(...fresh2);
+  CalendarView.relayoutDay(iso);
+  const nodesAfterReDupe = col.querySelectorAll('.cal-wk-event').length;
+
+  return { nodesAfterSeed, lefts, ncolsCheck, freshCount: fresh.length, nodesAfterMerge, storeLenAfterMerge, nodesAfterReDupe };
+});
+console.log('TASK7', JSON.stringify(weekMerge));
+check(weekMerge.nodesAfterSeed === 2, 'two overlapping internal items render as two .cal-wk-event nodes in the day column');
+check(weekMerge.lefts.length === 2 && weekMerge.lefts[0] !== weekMerge.lefts[1], 'overlapping items get different left offsets (side-by-side, not stacked)');
+check(weekMerge.ncolsCheck[0] === 2 && weekMerge.ncolsCheck[1] === 2, 'layoutDayColumns over the combined array assigns _ncols=2 to the overlapping pair');
+check(weekMerge.freshCount === 1, 'merge filters out the item whose id already exists in _weekTimed, keeping only the genuinely new one');
+check(weekMerge.nodesAfterMerge === 3, 'merging one new + one duplicate-id item yields 3 rendered nodes total (2 seed + 1 new)');
+check(weekMerge.storeLenAfterMerge === 3, '_weekTimed[iso] holds 3 items after merge (no duplicate by id)');
+check(weekMerge.nodesAfterReDupe === 3, 're-merging an already-present id does not increase the rendered node count (no double-append)');
+
 console.log(errs.length ? ('ERRORS:\n' + errs.join('\n')) : 'no console/page errors');
 await b.close();
 

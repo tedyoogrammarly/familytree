@@ -7410,13 +7410,14 @@ const GoogleCalendar = {
     });
     if (!r.ok) throw new Error('Could not load calendar list (' + r.status + ').');
     const d = await r.json();
-    const prev = new Map((cfg.calendars || []).map(c => [c.id, c.enabled]));
+    const prev = new Map((cfg.calendars || []).map(c => [c.id, { enabled: c.enabled, category: c.category }]));
     cfg.calendars = (d.items || []).map(c => ({
       id: c.id,
       summary: c.summary || c.id,
       backgroundColor: c.backgroundColor || '#4285f4',
       primary: !!c.primary,
-      enabled: prev.has(c.id) ? prev.get(c.id) : !!c.primary,
+      enabled: prev.has(c.id) ? prev.get(c.id).enabled : !!c.primary,
+      category: prev.get(c.id)?.category || 'other',
     }));
     cfg.lastSync = Date.now();
     Store.state.googleCalendar = cfg;
@@ -7550,6 +7551,12 @@ const CalendarView = {
   month: null, // 0..11
   mode: 'week',
   weekStart: null,
+  // Per-render store of week timed items: iso date -> array of {startMin,
+  // endMin, label, group, kind, id, ...}. Shared by internal events (from
+  // renderWeek) and Google events (from renderGoogleEventsUnified) so both
+  // sources are laid out together in one relayoutDay() pass instead of two
+  // independent placeTimed() passes stacking on top of each other. (v4.72)
+  _weekTimed: {},
   timeToMin(hhmm) {
     if (!hhmm || typeof hhmm !== 'string') return null;
     const [h, m] = hhmm.split(':').map(Number);
@@ -7863,6 +7870,9 @@ const CalendarView = {
 
   // ---------- Week view (v4.72) ----------
   renderWeek() {
+    // Reset the shared per-day timed-item store for this render cycle. Google
+    // events (async) merge into this same store via relayoutDay(). (v4.72 FIX B)
+    this._weekTimed = {};
     const host = $('#cal-week');
     const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(this.weekStart); d.setDate(d.getDate() + i); return d; });
     const first = days[0], last = days[6];
@@ -7926,8 +7936,14 @@ const CalendarView = {
     // Birthdays / anniversaries / holidays → all-day row under Family filter.
     if (this.filterOn('family')) this.addWeekFamilyAllDay(days);
 
-    // Place timed internal items now; Google timed items get placed in renderGoogleEventsUnified.
-    timedByDay.forEach((items, iso) => this.placeTimed(iso, items));
+    // Seed the shared per-day store with internal timed items, then lay each
+    // day out. Google timed items merge into this same store (and re-run
+    // relayoutDay) when renderGoogleEventsUnified()'s fetch resolves, so the
+    // two sources are never laid out in separate passes. (v4.72 FIX B)
+    timedByDay.forEach((items, iso) => {
+      this._weekTimed[iso] = items;
+      this.relayoutDay(iso);
+    });
 
     this.drawNowLine(days);
     // Auto-scroll to 7am on first paint of the week.
@@ -7935,9 +7951,19 @@ const CalendarView = {
     if (scroller) scroller.scrollTop = 7 * HOUR_PX;
   },
   hourLabel(h) { const am = h < 12; const hr = (h % 12) || 12; return `${hr} ${am ? 'AM' : 'PM'}`; },
-  placeTimed(iso, items) {
+  // Lays out and (re)renders ALL timed items for one day column from the
+  // shared this._weekTimed[iso] store — internal + Google together — so
+  // overlaps are packed side-by-side across both sources instead of each
+  // source running its own independent placeTimed() pass. Clears the day's
+  // existing .cal-wk-event nodes first so re-runs (e.g. Google events
+  // arriving after the initial internal-only paint) never leave stale or
+  // duplicate DOM nodes behind. (v4.72 FIX B; replaces the old placeTimed())
+  relayoutDay(iso) {
     const col = $(`#cal-week .cal-wk-col[data-date="${iso}"]`);
-    if (!col || !items.length) return;
+    if (!col) return;
+    col.querySelectorAll('.cal-wk-event').forEach(n => n.remove());
+    const items = this._weekTimed[iso] || [];
+    if (!items.length) return;
     this.layoutDayColumns(items);
     items.forEach(it => {
       const top = ((it.startMin - WEEK_START_HOUR * 60) / 60) * HOUR_PX;
@@ -8045,9 +8071,22 @@ const CalendarView = {
         const startMin = this.timeToMin(ev.startTime);
         let endMin = this.timeToMin(ev.endTime);
         if (endMin == null || endMin <= startMin) endMin = startMin + 30;
-        byDay.get(ev.date).push({ startMin, endMin, label: ev.summary, group: this.groupOf('google', ev.category), kind: 'google', htmlLink: ev.htmlLink });
+        byDay.get(ev.date).push({ startMin, endMin, label: ev.summary, group: this.groupOf('google', ev.category), kind: 'google', htmlLink: ev.htmlLink, id: ev.id });
       });
-      byDay.forEach((items, iso) => this.placeTimed(iso, items));
+      // Merge into the shared per-day store (dedupe by id — guards against a
+      // re-resolved same-week fetch double-appending, e.g. after a manual
+      // refresh while a prior fetch is still in flight), then relayout each
+      // affected day so internal + Google items are packed together in one
+      // pass instead of two separate placeTimed() calls stacking. (v4.72 FIX B)
+      byDay.forEach((items, iso) => {
+        if (!items.length) return;
+        const existing = this._weekTimed[iso] || (this._weekTimed[iso] = []);
+        const seenIds = new Set(existing.map(it => it.id));
+        const fresh = items.filter(it => !seenIds.has(it.id));
+        if (!fresh.length) return;
+        existing.push(...fresh);
+        this.relayoutDay(iso);
+      });
       return;
     }
 
