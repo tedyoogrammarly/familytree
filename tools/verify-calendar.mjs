@@ -100,6 +100,24 @@ console.log('TASK4 roundtrip', JSON.stringify(filterRoundTrip));
 check(filterRoundTrip.offRead === false && filterRoundTrip.persisted === false, 'setFilter(false) persists to Store.state.calendarFilters');
 check(filterRoundTrip.onRead === true, 'setFilter(true) round-trips back on');
 
+// Task 5: weekly time-grid layout helpers (overlap columns + time parsing).
+const lay = await p.evaluate(() => {
+  const items = [
+    { startMin: 540, endMin: 600 },  // 9:00–10:00
+    { startMin: 570, endMin: 630 },  // 9:30–10:30 (overlaps #1)
+    { startMin: 660, endMin: 690 },  // 11:00–11:30 (separate)
+  ];
+  CalendarView.layoutDayColumns(items);
+  return items.map(i => ({ c: i._col, n: i._ncols }));
+});
+console.log('TASK5', JSON.stringify(lay));
+check(lay[0].n === 2 && lay[1].n === 2, 'overlapping pair splits into 2 columns');
+check(lay[0].c !== lay[1].c, 'overlapping events get different columns');
+check(lay[2].n === 1, 'non-overlapping event is full width');
+
+const time = await p.evaluate(() => CalendarView.timeToMin('09:30'));
+check(time === 570, 'timeToMin');
+
 console.log(errs.length ? ('ERRORS:\n' + errs.join('\n')) : 'no console/page errors');
 await b.close();
 
