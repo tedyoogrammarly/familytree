@@ -7886,6 +7886,17 @@ const CalendarView = {
         </div>
       </div>`;
 
+    // Click an empty slot in a day column → open the appointment modal
+    // prefilled with the date + a 15-min-snapped time. (v4.72)
+    $$('#cal-week .cal-wk-col').forEach(col => on(col, 'click', (e) => {
+      if (e.target.closest('.cal-wk-event')) return;      // ignore clicks on events
+      if (!Auth.canEditCalendarEvents()) return;
+      const rect = col.getBoundingClientRect();
+      const min = clamp(Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 15) * 15, 0, 23*60+45) + WEEK_START_HOUR*60;
+      const hh = String(Math.floor(min/60)).padStart(2,'0'), mm = String(min%60).padStart(2,'0');
+      AppointmentModal.open({ date: col.dataset.date, startTime: `${hh}:${mm}` });
+    }));
+
     // Internal events for the week (respecting filters). Date-only → all-day row; timed → grid.
     const isFamilyReadOnly = !Auth.isAdmin() && Auth.isFamily();
     const source = isFamilyReadOnly ? userEventsList() : (Store.state.events || []);
@@ -8205,6 +8216,52 @@ const CalendarView = {
       this.refreshGoogleIndicator();
       this.render();
     });
+  },
+};
+
+// Lightweight in-app "personal appointment" modal — admin-only one-off
+// timed events that live alongside Events/Reminders but skip the full
+// Events form. Also reachable by clicking an empty slot in the week
+// grid (see CalendarView.renderWeek). (v4.72)
+const AppointmentModal = {
+  init() {
+    on($('#cal-add-appt'), 'click', () => this.open());
+    on($('#appt-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#appt-form'), 'submit', (e) => { e.preventDefault(); this.submit(); });
+  },
+  open(prefill = {}) {
+    if (!Auth.canEditCalendarEvents()) return;
+    const f = $('#appt-form'); f.reset(); $('#appt-error').textContent = '';
+    if (prefill.date) f.date.value = prefill.date;
+    if (prefill.startTime) f.startTime.value = prefill.startTime;
+    $('#appt-modal').setAttribute('aria-hidden', 'false');
+    f.name.focus();
+  },
+  close() { $('#appt-modal').setAttribute('aria-hidden', 'true'); },
+  submit() {
+    const f = $('#appt-form'); const fd = new FormData(f);
+    const name = (fd.get('name') || '').toString().trim();
+    const date = (fd.get('date') || '').toString();
+    const startTime = (fd.get('startTime') || '').toString();
+    if (!name || !date || !startTime) { $('#appt-error').textContent = 'Title, date, and start time are required.'; return; }
+    this.saveFrom({ name, date, startTime,
+      endTime: (fd.get('endTime') || '').toString(),
+      location: (fd.get('location') || '').toString().trim(),
+      description: (fd.get('description') || '').toString().trim() });
+    this.close();
+    toast('Appointment added.');
+  },
+  // Pure persistence path (also called by the harness). (v4.72)
+  saveFrom(data) {
+    Store.state.events ||= [];
+    Store.state.events.unshift({
+      id: uid('evt'), name: data.name, date: data.date,
+      startTime: data.startTime, endTime: data.endTime || '',
+      location: data.location || '', description: data.description || '',
+      category: 'personal', icon: '📌', attendees: [],
+    });
+    Store.save();
+    if (typeof CalendarView !== 'undefined') CalendarView.render();
   },
 };
 
@@ -10159,6 +10216,7 @@ async function init() {
   CropModal.init();
   EventsView.init();
   CalendarView.init();
+  AppointmentModal.init();
   GiftsView.init();
   VaultView.init();
   RemindersModal.init();

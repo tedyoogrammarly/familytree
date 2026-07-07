@@ -118,6 +118,16 @@ check(lay[2].n === 1, 'non-overlapping event is full width');
 const time = await p.evaluate(() => CalendarView.timeToMin('09:30'));
 check(time === 570, 'timeToMin');
 
+// Task 6: in-app personal appointment modal — pure persistence path.
+const appt = await p.evaluate(() => {
+  const before = (Store.state.events || []).length;
+  AppointmentModal.saveFrom({ name: 'Dentist', date: '2026-07-07', startTime: '15:00', endTime: '', location: 'Downtown', description: '' });
+  const ev = Store.state.events[0];
+  return { added: Store.state.events.length - before, cat: ev.category, start: ev.startTime, name: ev.name };
+});
+console.log('TASK6', JSON.stringify(appt));
+check(appt.added === 1 && appt.cat === 'personal' && appt.start === '15:00' && appt.name === 'Dentist', 'appointment saved as personal timed event');
+
 console.log(errs.length ? ('ERRORS:\n' + errs.join('\n')) : 'no console/page errors');
 await b.close();
 
