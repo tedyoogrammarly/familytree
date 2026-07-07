@@ -7638,10 +7638,13 @@ const CalendarView = {
   },
   startOfWeek(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - x.getDay()); return x; },
   setMode(mode) {
+    const wasWeek = this.mode === 'week';
     this.mode = (mode === 'month') ? 'month' : 'week';
     // Keep Month in sync with whichever week you were viewing, rather than
     // showing a stale month left over from the last time Month was active. (v4.72)
-    if (this.mode === 'month' && this.weekStart) {
+    // Only resync on an actual week->month transition, so a redundant click on
+    // the already-active Month button doesn't discard in-month navigation.
+    if (this.mode === 'month' && wasWeek && this.weekStart) {
       this.month = this.weekStart.getMonth();
       this.year = this.weekStart.getFullYear();
     }
