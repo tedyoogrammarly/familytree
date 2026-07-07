@@ -1029,6 +1029,9 @@ const Store = {
       reminders: [],
       grocery: [],
       pageEmojis: {},     // { dashboard, tree, myfamily, calendar, events, gifts, admin } → emoji string
+      // Shared Calendar (v4.72): view mode + filter groups persisted in the blob.
+      calendarView: 'week',            // 'week' | 'month'
+      calendarFilters: { work: true, personal: true, family: true },
       googleCalendar: {
         clientId: '',
         accessToken: '',
@@ -1519,6 +1522,12 @@ const Store = {
         m.divorced = false;
       }
     }
+    // v4.72 backfills — tolerate older blobs saved before Shared Calendar shipped.
+    if (this.state.calendarView !== 'week' && this.state.calendarView !== 'month') this.state.calendarView = 'week';
+    if (!this.state.calendarFilters || typeof this.state.calendarFilters !== 'object') {
+      this.state.calendarFilters = { work: true, personal: true, family: true };
+    }
+    (this.state.events || []).forEach(ev => { if (!ev.category) ev.category = 'family'; });
   },
   // Save: write through to localStorage (cache) AND queue a debounced upsert
   // to Supabase. Sync to all existing callers — no awaiting required.
