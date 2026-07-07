@@ -7424,6 +7424,32 @@ const GoogleCalendar = {
     this.eventCache.clear();
   },
 
+  // Convert a raw Google event + its calendar into the grid's normalized shape.
+  // Keeps local HH:MM start/end for the week time-grid; null for all-day. (v4.72)
+  normalizeEvent(ev, cal) {
+    const isAllDay = !!ev.start?.date;
+    const startIso = ev.start?.dateTime || null;
+    const endIso   = ev.end?.dateTime || null;
+    const hhmm = (iso) => {
+      if (!iso) return null;
+      const d = new Date(iso);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+    const date = ev.start?.date || (startIso ? startIso.slice(0, 10) : null);
+    return {
+      id: 'g:' + ev.id,
+      date,
+      summary: ev.summary || '(no title)',
+      htmlLink: ev.htmlLink || '',
+      color: cal.color || 'var(--accent-500)',
+      calendarName: cal.summary || '',
+      allDay: isAllDay,
+      startTime: isAllDay ? null : hhmm(startIso),
+      endTime:   isAllDay ? null : hhmm(endIso),
+      category: cal.category || 'other',
+    };
+  },
+
   async fetchEventsForMonth(year, month /* 0-11 */) {
     const cfg = this.config();
     if (!cfg.clientId || !cfg.calendars?.length) return [];
@@ -7447,17 +7473,9 @@ const GoogleCalendar = {
         this.eventCache.set(key, items);
       }
       items.forEach(ev => {
-        const startDate = ev.start?.date || (ev.start?.dateTime ? ev.start.dateTime.slice(0, 10) : null);
-        if (!startDate) return;
-        out.push({
-          id: 'g:' + (ev.id || Math.random().toString(36).slice(2)),
-          date: startDate,
-          summary: ev.summary || '(untitled)',
-          htmlLink: ev.htmlLink || '',
-          color: cal.backgroundColor || '#4285f4',
-          calendarName: cal.summary,
-          allDay: !!ev.start?.date,
-        });
+        const norm = this.normalizeEvent(ev, cal);
+        if (!norm.date) return; // skip events with no resolvable date
+        out.push(norm);
       });
     }
     return out;
