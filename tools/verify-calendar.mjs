@@ -49,6 +49,33 @@ check(norm.timed.allDay === false && norm.timed.category === 'work', 'timed flag
 check(norm.timed.color === '#123', 'color reads backgroundColor');
 check(norm.allDay.allDay === true && norm.allDay.startTime === null && norm.allDay.category === 'personal', 'all-day flags');
 
+const cat = await p.evaluate(() => {
+  Store.state.googleCalendar = { clientId: 'x', accessToken: '', tokenExpiresAt: 0, userEmail: '',
+    calendars: [{ id: 'c1', summary: 'Work', color: '#123', enabled: true }], lastSync: 0, showEvents: true };
+  GoogleCalendar.setCalendarCategory('c1', 'work');
+  return GoogleCalendar.config().calendars[0].category;
+});
+console.log('TASK3', cat);
+check(cat === 'work', 'category persists on calendar');
+
+// Screenshot the connect-modal category dropdowns on a seeded, configured googleCalendar.
+await p.evaluate(() => {
+  Store.state.googleCalendar = {
+    clientId: 'x', accessToken: 'tok', tokenExpiresAt: Date.now() + 3600000, userEmail: 'ted@example.com',
+    calendars: [
+      { id: 'c1', summary: 'Work Calendar', backgroundColor: '#4285f4', enabled: true, category: 'work', primary: true },
+      { id: 'c2', summary: 'Personal', backgroundColor: '#0f9d58', enabled: true, category: 'personal' },
+      { id: 'c3', summary: 'Misc', backgroundColor: '#db4437', enabled: false, category: 'other' },
+    ],
+    lastSync: Date.now(), showEvents: true,
+  };
+  CalendarView.openGoogleModal();
+});
+await p.waitForTimeout(300);
+const gcalCatCount = await p.evaluate(() => document.querySelectorAll('[data-gcal-cat]').length);
+check(gcalCatCount === 3, 'modal renders one category select per calendar');
+await p.screenshot({ path: 'temporary screenshots/cal-gcal-modal.png' });
+
 console.log(errs.length ? ('ERRORS:\n' + errs.join('\n')) : 'no console/page errors');
 await b.close();
 

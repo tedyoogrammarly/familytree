@@ -7511,6 +7511,16 @@ const GoogleCalendar = {
     this.eventCache.clear();
   },
 
+  setCalendarCategory(id, category) {
+    const cfg = this.config();
+    const c = (cfg.calendars || []).find(x => x.id === id);
+    if (!c) return;
+    c.category = (category === 'work' || category === 'personal') ? category : 'other';
+    Store.state.googleCalendar = cfg;
+    Store.save();
+    this.eventCache.clear();
+  },
+
   setShowEvents(show) {
     const cfg = this.config();
     cfg.showEvents = !!show;
@@ -7887,6 +7897,11 @@ const CalendarView = {
                 <input type="checkbox" data-gcal-id="${escape(c.id)}" ${c.enabled ? 'checked' : ''} />
                 <span class="gcal-cal-swatch" style="background:${escape(c.backgroundColor)}"></span>
                 <span class="gcal-cal-name">${escape(c.summary)}${c.primary ? ' <span class="muted small">(primary)</span>' : ''}</span>
+                <select class="gcal-cat" data-gcal-cat="${escape(c.id)}" aria-label="Calendar type">
+                  <option value="work"     ${c.category === 'work' ? 'selected' : ''}>Work</option>
+                  <option value="personal" ${c.category === 'personal' ? 'selected' : ''}>Personal</option>
+                  <option value="other"    ${(c.category || 'other') === 'other' ? 'selected' : ''}>Other</option>
+                </select>
               </label>
             `).join('')}
           </div>
@@ -7905,6 +7920,10 @@ const CalendarView = {
     });
     body.querySelectorAll('[data-gcal-id]').forEach(cb => on(cb, 'change', () => {
       GoogleCalendar.setCalendarEnabled(cb.dataset.gcalId, cb.checked);
+      this.render();
+    }));
+    body.querySelectorAll('[data-gcal-cat]').forEach(sel => on(sel, 'change', () => {
+      GoogleCalendar.setCalendarCategory(sel.dataset.gcalCat, sel.value);
       this.render();
     }));
     on($('#gcal-sync'), 'click', async () => {

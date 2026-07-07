@@ -3904,6 +3904,20 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   flex-shrink: 0;
 }
 .gcal-cal-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Higher specificity than ".field select" (styles.css ~228) so the compact
+   inline select isn't stretched to width:100% / stripped of its arrow. */
+.gcal-cal-row .gcal-cat {
+  appearance: auto;
+  width: auto;
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink-200);
+  background: #fff;
+  color: var(--ink-800);
+}
 
 @media (max-width: 900px) {
   .cal-grid { grid-auto-rows: minmax(80px, 1fr); }
