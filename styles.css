@@ -2978,6 +2978,19 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 }
 .cal-toolbar #cal-year { width: 100px; padding: 6px 10px; }
 
+/* Independent Work/Personal/Family filter chips (v4.72) */
+.cal-filters { display: flex; gap: var(--space-2); margin: var(--space-2) 0; }
+.cal-filter-chip {
+  font-family: var(--font-sans); font-size: 13px; font-weight: 600;
+  padding: 5px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--ink-200); background: var(--paper-soft); color: var(--ink-500);
+  transition: transform .16s var(--ease-spring), background-color .2s var(--ease-out);
+}
+.cal-filter-chip:hover { transform: translateY(-1px); }
+.cal-filter-chip.is-on[data-filter="work"]     { background: var(--brand-500);  color: #fff; border-color: var(--brand-500); }
+.cal-filter-chip.is-on[data-filter="personal"] { background: var(--accent-500); color: #fff; border-color: var(--accent-500); }
+.cal-filter-chip.is-on[data-filter="family"]   { background: var(--ink-700);    color: #fff; border-color: var(--ink-700); }
+
 .cal-legend {
   display: flex; gap: 16px; align-items: center;
   margin: 0 0 14px;

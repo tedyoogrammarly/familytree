@@ -7547,6 +7547,29 @@ const GoogleCalendar = {
 const CalendarView = {
   year: null,
   month: null, // 0..11
+  // Map any calendar item to one of the three filter groups. (v4.72)
+  groupOf(kind, category) {
+    if (kind === 'google') return category === 'personal' ? 'personal' : 'work'; // work + other → work
+    if (kind === 'event')  return category === 'personal' ? 'personal' : 'family';
+    return 'family'; // birthday / anniversary / holiday / reminder
+  },
+  filterOn(group) {
+    const f = Store.state.calendarFilters || { work: true, personal: true, family: true };
+    return f[group] !== false;
+  },
+  setFilter(group, on) {
+    Store.state.calendarFilters ||= { work: true, personal: true, family: true };
+    Store.state.calendarFilters[group] = !!on;
+    Store.save();
+    this.render();
+  },
+  renderFilters() {
+    $$('#cal-filters .cal-filter-chip').forEach(chip => {
+      const on = this.filterOn(chip.dataset.filter);
+      chip.classList.toggle('is-on', on);
+      chip.setAttribute('aria-pressed', String(on));
+    });
+  },
   init() {
     const now = new Date();
     this.year  = now.getFullYear();
@@ -7569,6 +7592,8 @@ const CalendarView = {
     on($('#cal-google-btn'), 'click', () => this.openGoogleModal());
     on($('#gcal-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeGoogleModal(); });
     on($('#cal-add-reminder'), 'click', () => RemindersModal.open());
+    $$('#cal-filters .cal-filter-chip').forEach(chip =>
+      on(chip, 'click', () => this.setFilter(chip.dataset.filter, !this.filterOn(chip.dataset.filter))));
     // Static weekday header
     const wkLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     $('#cal-weekdays').innerHTML = wkLabels.map(w => `<div class="cal-weekday">${w}</div>`).join('');
@@ -7588,6 +7613,7 @@ const CalendarView = {
     const todayIso = toIsoDate(today);
     const monthFirst = new Date(this.year, this.month, 1);
     $('#cal-label').textContent = monthFirst.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    this.renderFilters();
 
     // Year dropdown (current ± 50)
     const yrSel = $('#cal-year');
@@ -7604,6 +7630,7 @@ const CalendarView = {
     const eventsByDate = new Map();
     visibleEvents.forEach(ev => {
       if (!ev.date) return;
+      if (!this.filterOn(this.groupOf('event', ev.category))) return; // v4.72 filter
       if (!eventsByDate.has(ev.date)) eventsByDate.set(ev.date, []);
       eventsByDate.get(ev.date).push(ev);
     });
@@ -7668,7 +7695,7 @@ const CalendarView = {
       const isToday      = iso === todayIso;
 
       const chips = [];
-      if (dayHoliday) {
+      if (dayHoliday && this.filterOn('family')) {
         chips.push(`<button type="button" class="cal-chip cal-chip-holiday" title="${escape(dayHoliday.name)} (US holiday)">
           <span class="cal-chip-icon">🇺🇸</span><span class="cal-chip-text">${escape(dayHoliday.name)}</span>
         </button>`);
@@ -7678,7 +7705,7 @@ const CalendarView = {
           <span class="cal-chip-icon">${escape(ev.icon || '🎉')}</span><span class="cal-chip-text">${escape(ev.name)}</span>
         </button>`);
       });
-      dayBdays.forEach(m => {
+      if (this.filterOn('family')) dayBdays.forEach(m => {
         const bYear = parseInt((m.birthday || '').slice(0, 4), 10);
         const turning = Number.isFinite(bYear) ? (c.dt.getFullYear() - bYear) : null;
         const ageHint = turning != null && turning >= 0 ? ` — turns ${turning}` : '';
@@ -7687,7 +7714,7 @@ const CalendarView = {
         </button>`);
       });
       const dayAnnivs = anniversariesByMD.get(md) || [];
-      dayAnnivs.forEach(({ focus, partner, isoDate }) => {
+      if (this.filterOn('family')) dayAnnivs.forEach(({ focus, partner, isoDate }) => {
         const aYear = parseInt((isoDate || '').slice(0, 4), 10);
         const nth   = Number.isFinite(aYear) ? (c.dt.getFullYear() - aYear) : null;
         const ordHint = nth != null && nth > 0 ? ` — ${nth}${nthSuffix(nth)} anniversary` : '';
@@ -7698,7 +7725,7 @@ const CalendarView = {
       });
       // Calendar-only reminders (recurring). Hidden entirely from the
       // Family role per the v4.26 spec — they're an admin-only construct.
-      if (!isFamilyReadOnly) {
+      if (!isFamilyReadOnly && this.filterOn('family')) {
         const dayReminders = (Store.state.reminders || []).filter(r => reminderOccursOn(r, iso));
         dayReminders.forEach(r => {
           chips.push(`<button type="button" class="cal-chip cal-chip-reminder" data-reminder-id="${r.id}" title="${escape(r.title)} — click to edit">
@@ -7786,6 +7813,7 @@ const CalendarView = {
     }
     if (this._renderKey !== renderKey) return; // user navigated away
     events.forEach(ev => {
+      if (!this.filterOn(this.groupOf('google', ev.category))) return; // v4.72 filter
       const cell = document.querySelector(`#cal-grid .cal-cell[data-date="${ev.date}"]`);
       if (!cell) return;
       const chips = cell.querySelector('.cal-chips');

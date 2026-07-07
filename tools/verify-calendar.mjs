@@ -76,6 +76,30 @@ const gcalCatCount = await p.evaluate(() => document.querySelectorAll('[data-gca
 check(gcalCatCount === 3, 'modal renders one category select per calendar');
 await p.screenshot({ path: 'temporary screenshots/cal-gcal-modal.png' });
 
+// Task 4: Work/Personal/Family filter chips (Month view).
+const filt = await p.evaluate(() => {
+  const g = (kind, cat) => CalendarView.groupOf(kind, cat);
+  return {
+    work: g('google', 'work'), pers: g('google', 'personal'), oth: g('google', 'other'),
+    apptGroup: g('event', 'personal'), famEvent: g('event', 'family'), bday: g('birthday'),
+  };
+});
+console.log('TASK4', JSON.stringify(filt));
+check(filt.work === 'work' && filt.pers === 'personal' && filt.oth === 'work', 'google other→work bucket');
+check(filt.apptGroup === 'personal' && filt.famEvent === 'family' && filt.bday === 'family', 'internal buckets');
+
+const filterRoundTrip = await p.evaluate(() => {
+  CalendarView.setFilter('family', false);
+  const offRead = CalendarView.filterOn('family');
+  const persisted = Store.state.calendarFilters.family;
+  CalendarView.setFilter('family', true);
+  const onRead = CalendarView.filterOn('family');
+  return { offRead, persisted, onRead };
+});
+console.log('TASK4 roundtrip', JSON.stringify(filterRoundTrip));
+check(filterRoundTrip.offRead === false && filterRoundTrip.persisted === false, 'setFilter(false) persists to Store.state.calendarFilters');
+check(filterRoundTrip.onRead === true, 'setFilter(true) round-trips back on');
+
 console.log(errs.length ? ('ERRORS:\n' + errs.join('\n')) : 'no console/page errors');
 await b.close();
 
