@@ -1029,6 +1029,9 @@ const Store = {
       reminders: [],
       grocery: [],
       pageEmojis: {},     // { dashboard, tree, myfamily, calendar, events, gifts, admin } → emoji string
+      // Shared Calendar (v4.72): view mode + filter groups persisted in the blob.
+      calendarView: 'week',            // 'week' | 'month'
+      calendarFilters: { work: true, personal: true, family: true },
       googleCalendar: {
         clientId: '',
         accessToken: '',
@@ -1519,6 +1522,12 @@ const Store = {
         m.divorced = false;
       }
     }
+    // v4.72 backfills — tolerate older blobs saved before Shared Calendar shipped.
+    if (this.state.calendarView !== 'week' && this.state.calendarView !== 'month') this.state.calendarView = 'week';
+    if (!this.state.calendarFilters || typeof this.state.calendarFilters !== 'object') {
+      this.state.calendarFilters = { work: true, personal: true, family: true };
+    }
+    (this.state.events || []).forEach(ev => { if (!ev.category) ev.category = 'family'; });
   },
   // Save: write through to localStorage (cache) AND queue a debounced upsert
   // to Supabase. Sync to all existing callers — no awaiting required.
@@ -7401,18 +7410,47 @@ const GoogleCalendar = {
     });
     if (!r.ok) throw new Error('Could not load calendar list (' + r.status + ').');
     const d = await r.json();
-    const prev = new Map((cfg.calendars || []).map(c => [c.id, c.enabled]));
+    const prev = new Map((cfg.calendars || []).map(c => [c.id, { enabled: c.enabled, category: c.category }]));
     cfg.calendars = (d.items || []).map(c => ({
       id: c.id,
       summary: c.summary || c.id,
       backgroundColor: c.backgroundColor || '#4285f4',
       primary: !!c.primary,
-      enabled: prev.has(c.id) ? prev.get(c.id) : !!c.primary,
+      enabled: prev.has(c.id) ? prev.get(c.id).enabled : !!c.primary,
+      category: prev.get(c.id)?.category || 'other',
     }));
     cfg.lastSync = Date.now();
     Store.state.googleCalendar = cfg;
     Store.save();
     this.eventCache.clear();
+  },
+
+  // Convert a raw Google event + its calendar into the grid's normalized shape.
+  // Keeps local HH:MM start/end for the week time-grid; null for all-day. (v4.72)
+  normalizeEvent(ev, cal) {
+    const isAllDay = !!ev.start?.date;
+    const startIso = ev.start?.dateTime || null;
+    const endIso   = ev.end?.dateTime || null;
+    const hhmm = (iso) => {
+      if (!iso) return null;
+      const d = new Date(iso);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+    const date = ev.start?.date || (startIso ? startIso.slice(0, 10) : null);
+    return {
+      // Real Google events always carry an id; fall back to a deterministic
+      // key (summary+start) so a missing id never collides as 'g:undefined'.
+      id: 'g:' + (ev.id || (ev.summary || '') + (ev.start?.dateTime || ev.start?.date || '')),
+      date,
+      summary: ev.summary || '(untitled)',
+      htmlLink: ev.htmlLink || '',
+      color: cal.backgroundColor || cal.color || 'var(--accent-500)',
+      calendarName: cal.summary || '',
+      allDay: isAllDay,
+      startTime: isAllDay ? null : hhmm(startIso),
+      endTime:   isAllDay ? null : hhmm(endIso),
+      category: cal.category || 'other',
+    };
   },
 
   async fetchEventsForMonth(year, month /* 0-11 */) {
@@ -7438,17 +7476,9 @@ const GoogleCalendar = {
         this.eventCache.set(key, items);
       }
       items.forEach(ev => {
-        const startDate = ev.start?.date || (ev.start?.dateTime ? ev.start.dateTime.slice(0, 10) : null);
-        if (!startDate) return;
-        out.push({
-          id: 'g:' + (ev.id || Math.random().toString(36).slice(2)),
-          date: startDate,
-          summary: ev.summary || '(untitled)',
-          htmlLink: ev.htmlLink || '',
-          color: cal.backgroundColor || '#4285f4',
-          calendarName: cal.summary,
-          allDay: !!ev.start?.date,
-        });
+        const norm = this.normalizeEvent(ev, cal);
+        if (!norm.date) return; // skip events with no resolvable date
+        out.push(norm);
       });
     }
     return out;
@@ -7482,6 +7512,16 @@ const GoogleCalendar = {
     this.eventCache.clear();
   },
 
+  setCalendarCategory(id, category) {
+    const cfg = this.config();
+    const c = (cfg.calendars || []).find(x => x.id === id);
+    if (!c) return;
+    c.category = (category === 'work' || category === 'personal') ? category : 'other';
+    Store.state.googleCalendar = cfg;
+    Store.save();
+    this.eventCache.clear();
+  },
+
   setShowEvents(show) {
     const cfg = this.config();
     cfg.showEvents = !!show;
@@ -7505,18 +7545,84 @@ const GoogleCalendar = {
 };
 
 // -------------------- CALENDAR VIEW --------------------
+const WEEK_START_HOUR = 0, WEEK_END_HOUR = 24, HOUR_PX = 48;
 const CalendarView = {
   year: null,
   month: null, // 0..11
+  mode: 'week',
+  weekStart: null,
+  // Per-render store of week timed items: iso date -> array of {startMin,
+  // endMin, label, group, kind, id, ...}. Shared by internal events (from
+  // renderWeek) and Google events (from renderGoogleEventsUnified) so both
+  // sources are laid out together in one relayoutDay() pass instead of two
+  // independent placeTimed() passes stacking on top of each other. (v4.72)
+  _weekTimed: {},
+  timeToMin(hhmm) {
+    if (!hhmm || typeof hhmm !== 'string') return null;
+    const [h, m] = hhmm.split(':').map(Number);
+    return (h * 60) + (m || 0);
+  },
+  // Assigns _col (column index) and _ncols (columns in the overlap cluster) to
+  // each timed item so the week grid can place side-by-side overlaps. (v4.72)
+  layoutDayColumns(items) {
+    items.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+    // Split into clusters where events transitively overlap.
+    const clusters = [];
+    let cluster = [], clusterEnd = -1;
+    for (const it of items) {
+      if (cluster.length && it.startMin >= clusterEnd) { clusters.push(cluster); cluster = []; clusterEnd = -1; }
+      cluster.push(it);
+      clusterEnd = Math.max(clusterEnd, it.endMin);
+    }
+    if (cluster.length) clusters.push(cluster);
+    // Greedy column packing within each cluster.
+    for (const cl of clusters) {
+      const colEnd = []; // end minute of the last event placed in each column
+      for (const it of cl) {
+        let col = colEnd.findIndex(end => end <= it.startMin);
+        if (col === -1) { col = colEnd.length; colEnd.push(it.endMin); }
+        else { colEnd[col] = it.endMin; }
+        it._col = col;
+      }
+      for (const it of cl) it._ncols = colEnd.length;
+    }
+    return items;
+  },
+  // Map any calendar item to one of the three filter groups. (v4.72)
+  groupOf(kind, category) {
+    if (kind === 'google') return category === 'personal' ? 'personal' : 'work'; // work + other → work
+    if (kind === 'event')  return category === 'personal' ? 'personal' : 'family';
+    return 'family'; // birthday / anniversary / holiday / reminder
+  },
+  filterOn(group) {
+    const f = Store.state.calendarFilters || { work: true, personal: true, family: true };
+    return f[group] !== false;
+  },
+  setFilter(group, on) {
+    Store.state.calendarFilters ||= { work: true, personal: true, family: true };
+    Store.state.calendarFilters[group] = !!on;
+    Store.save();
+    this.render();
+  },
+  renderFilters() {
+    $$('#cal-filters .cal-filter-chip').forEach(chip => {
+      const on = this.filterOn(chip.dataset.filter);
+      chip.classList.toggle('is-on', on);
+      chip.setAttribute('aria-pressed', String(on));
+    });
+  },
   init() {
     const now = new Date();
     this.year  = now.getFullYear();
     this.month = now.getMonth();
+    this.mode = (Store.state.calendarView === 'month') ? 'month' : 'week';
+    this.weekStart = this.startOfWeek(new Date()); // Sunday of current week
     on($('#cal-prev'),  'click', () => this.shift(-1));
     on($('#cal-next'),  'click', () => this.shift(1));
     on($('#cal-today'), 'click', () => {
       const n = new Date();
       this.year = n.getFullYear(); this.month = n.getMonth();
+      this.weekStart = this.startOfWeek(new Date());
       this.render();
     });
     on($('#cal-year'),  'change', (e) => { this.year = parseInt(e.target.value, 10); this.render(); });
@@ -7530,21 +7636,61 @@ const CalendarView = {
     on($('#cal-google-btn'), 'click', () => this.openGoogleModal());
     on($('#gcal-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeGoogleModal(); });
     on($('#cal-add-reminder'), 'click', () => RemindersModal.open());
+    $$('#cal-filters .cal-filter-chip').forEach(chip =>
+      on(chip, 'click', () => this.setFilter(chip.dataset.filter, !this.filterOn(chip.dataset.filter))));
+    $$('.cal-viewbtn').forEach(btn => on(btn, 'click', () => this.setMode(btn.dataset.mode)));
     // Static weekday header
     const wkLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     $('#cal-weekdays').innerHTML = wkLabels.map(w => `<div class="cal-weekday">${w}</div>`).join('');
   },
+  startOfWeek(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - x.getDay()); return x; },
+  setMode(mode) {
+    const wasWeek = this.mode === 'week';
+    this.mode = (mode === 'month') ? 'month' : 'week';
+    // Keep Month in sync with whichever week you were viewing, rather than
+    // showing a stale month left over from the last time Month was active. (v4.72)
+    // Only resync on an actual week->month transition, so a redundant click on
+    // the already-active Month button doesn't discard in-month navigation.
+    if (this.mode === 'month' && wasWeek && this.weekStart) {
+      this.month = this.weekStart.getMonth();
+      this.year = this.weekStart.getFullYear();
+    }
+    Store.state.calendarView = this.mode;
+    Store.save();
+    this.render();
+  },
   shift(delta) {
+    if (this.mode === 'week') {
+      this.weekStart = new Date(this.weekStart);
+      this.weekStart.setDate(this.weekStart.getDate() + (7 * delta));
+      this.render();
+      return;
+    }
     this.month += delta;
     if (this.month < 0)  { this.month = 11; this.year -= 1; }
     if (this.month > 11) { this.month = 0;  this.year += 1; }
     this.render();
   },
   render() {
-    if (this.year == null || this.month == null) {
-      const n = new Date();
-      this.year = n.getFullYear(); this.month = n.getMonth();
-    }
+    if (this.year == null || this.month == null) { const n = new Date(); this.year = n.getFullYear(); this.month = n.getMonth(); }
+    $$('.cal-viewbtn').forEach(b => b.classList.toggle('is-active', b.dataset.mode === this.mode));
+    // Prev/next nav labels track whichever mode is active. (v4.72)
+    const navWord = this.mode === 'week' ? 'week' : 'month';
+    const prevBtn = $('#cal-prev'), nextBtn = $('#cal-next');
+    if (prevBtn) { prevBtn.title = `Previous ${navWord}`; prevBtn.setAttribute('aria-label', `Previous ${navWord}`); }
+    if (nextBtn) { nextBtn.title = `Next ${navWord}`; nextBtn.setAttribute('aria-label', `Next ${navWord}`); }
+    this.renderFilters();
+    const monthEls = ['#cal-grid', '#cal-weekdays'];
+    const weekOn = this.mode === 'week';
+    monthEls.forEach(sel => { const el = $(sel); if (el) el.hidden = weekOn; });
+    $('#cal-week').hidden = !weekOn;
+    if (weekOn) this.renderWeek(); else this.renderMonth();
+    this.refreshGoogleIndicator();
+    if (Auth.canUseGoogleCalendar()) this.renderGoogleEventsUnified();
+  },
+  renderMonth() {
+    // year/month null-guard and renderFilters() already run once in the
+    // outer render() before this is called; not repeated here. (v4.72)
     const today = new Date();
     const todayIso = toIsoDate(today);
     const monthFirst = new Date(this.year, this.month, 1);
@@ -7565,6 +7711,7 @@ const CalendarView = {
     const eventsByDate = new Map();
     visibleEvents.forEach(ev => {
       if (!ev.date) return;
+      if (!this.filterOn(this.groupOf('event', ev.category))) return; // v4.72 filter
       if (!eventsByDate.has(ev.date)) eventsByDate.set(ev.date, []);
       eventsByDate.get(ev.date).push(ev);
     });
@@ -7629,7 +7776,7 @@ const CalendarView = {
       const isToday      = iso === todayIso;
 
       const chips = [];
-      if (dayHoliday) {
+      if (dayHoliday && this.filterOn('family')) {
         chips.push(`<button type="button" class="cal-chip cal-chip-holiday" title="${escape(dayHoliday.name)} (US holiday)">
           <span class="cal-chip-icon">🇺🇸</span><span class="cal-chip-text">${escape(dayHoliday.name)}</span>
         </button>`);
@@ -7639,7 +7786,7 @@ const CalendarView = {
           <span class="cal-chip-icon">${escape(ev.icon || '🎉')}</span><span class="cal-chip-text">${escape(ev.name)}</span>
         </button>`);
       });
-      dayBdays.forEach(m => {
+      if (this.filterOn('family')) dayBdays.forEach(m => {
         const bYear = parseInt((m.birthday || '').slice(0, 4), 10);
         const turning = Number.isFinite(bYear) ? (c.dt.getFullYear() - bYear) : null;
         const ageHint = turning != null && turning >= 0 ? ` — turns ${turning}` : '';
@@ -7648,7 +7795,7 @@ const CalendarView = {
         </button>`);
       });
       const dayAnnivs = anniversariesByMD.get(md) || [];
-      dayAnnivs.forEach(({ focus, partner, isoDate }) => {
+      if (this.filterOn('family')) dayAnnivs.forEach(({ focus, partner, isoDate }) => {
         const aYear = parseInt((isoDate || '').slice(0, 4), 10);
         const nth   = Number.isFinite(aYear) ? (c.dt.getFullYear() - aYear) : null;
         const ordHint = nth != null && nth > 0 ? ` — ${nth}${nthSuffix(nth)} anniversary` : '';
@@ -7659,7 +7806,7 @@ const CalendarView = {
       });
       // Calendar-only reminders (recurring). Hidden entirely from the
       // Family role per the v4.26 spec — they're an admin-only construct.
-      if (!isFamilyReadOnly) {
+      if (!isFamilyReadOnly && this.filterOn('family')) {
         const dayReminders = (Store.state.reminders || []).filter(r => reminderOccursOn(r, iso));
         dayReminders.forEach(r => {
           chips.push(`<button type="button" class="cal-chip cal-chip-reminder" data-reminder-id="${r.id}" title="${escape(r.title)} — click to edit">
@@ -7719,9 +7866,172 @@ const CalendarView = {
       e.stopPropagation();
       EventsView.openModal(null, { defaultDate: b.dataset.addEvent });
     }));
+  },
 
-    this.refreshGoogleIndicator();
-    this.renderGoogleEvents();
+  // ---------- Week view (v4.72) ----------
+  renderWeek() {
+    // Reset the shared per-day timed-item store for this render cycle. Google
+    // events (async) merge into this same store via relayoutDay(). (v4.72 FIX B)
+    this._weekTimed = {};
+    const host = $('#cal-week');
+    const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(this.weekStart); d.setDate(d.getDate() + i); return d; });
+    const first = days[0], last = days[6];
+    $('#cal-label').textContent =
+      `${first.toLocaleDateString(undefined,{month:'short',day:'numeric'})} – ${last.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})}`;
+
+    const todayIso = toIsoDate(new Date());
+    const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const hours = [];
+    for (let h = WEEK_START_HOUR; h < WEEK_END_HOUR; h++) hours.push(h);
+
+    // Header + all-day row
+    const headCells = days.map((d,i) => {
+      const iso = toIsoDate(d);
+      return `<div class="cal-wk-daycol ${iso===todayIso?'is-today':''}" data-date="${iso}">
+        <div class="cal-wk-dayname">${dayNames[d.getDay()]}</div>
+        <div class="cal-wk-daynum">${d.getDate()}</div></div>`;
+    }).join('');
+
+    host.innerHTML = `
+      <div class="cal-wk-head">
+        <div class="cal-wk-gutter"></div>${headCells}
+      </div>
+      <div class="cal-wk-allday">
+        <div class="cal-wk-gutter cal-wk-alllabel">all-day</div>
+        ${days.map(d => `<div class="cal-wk-allcell" data-date="${toIsoDate(d)}"></div>`).join('')}
+      </div>
+      <div class="cal-wk-scroll">
+        <div class="cal-wk-grid" style="--hour-px:${HOUR_PX}px;">
+          <div class="cal-wk-axis">${hours.map(h => `<div class="cal-wk-hour"><span>${this.hourLabel(h)}</span></div>`).join('')}</div>
+          ${days.map(d => `<div class="cal-wk-col" data-date="${toIsoDate(d)}" style="height:${(WEEK_END_HOUR-WEEK_START_HOUR)*HOUR_PX}px;"></div>`).join('')}
+        </div>
+      </div>`;
+
+    // Click an empty slot in a day column → open the appointment modal
+    // prefilled with the date + a 15-min-snapped time. (v4.72)
+    $$('#cal-week .cal-wk-col').forEach(col => on(col, 'click', (e) => {
+      if (e.target.closest('.cal-wk-event')) return;      // ignore clicks on events
+      if (!Auth.canEditCalendarEvents()) return;
+      const rect = col.getBoundingClientRect();
+      const min = clamp(Math.round(((e.clientY - rect.top) / HOUR_PX) * 60 / 15) * 15, 0, 23*60+45) + WEEK_START_HOUR*60;
+      const hh = String(Math.floor(min/60)).padStart(2,'0'), mm = String(min%60).padStart(2,'0');
+      AppointmentModal.open({ date: col.dataset.date, startTime: `${hh}:${mm}` });
+    }));
+
+    // Internal events for the week (respecting filters). Date-only → all-day row; timed → grid.
+    const isFamilyReadOnly = !Auth.isAdmin() && Auth.isFamily();
+    const source = isFamilyReadOnly ? userEventsList() : (Store.state.events || []);
+    const weekIsos = new Set(days.map(toIsoDate));
+    const timedByDay = new Map(days.map(d => [toIsoDate(d), []]));
+    source.forEach(ev => {
+      if (!ev.date || !weekIsos.has(ev.date)) return;
+      if (!this.filterOn(this.groupOf('event', ev.category))) return;
+      const startMin = this.timeToMin(ev.startTime);
+      if (startMin == null) { this.addAllDayChip(ev.date, ev.name || '(event)', this.groupOf('event', ev.category)); return; }
+      let endMin = this.timeToMin(ev.endTime);
+      if (endMin == null || endMin <= startMin) endMin = startMin + 30;
+      timedByDay.get(ev.date).push({ startMin, endMin, label: ev.name || '(event)', group: this.groupOf('event', ev.category), kind: 'event', id: ev.id });
+    });
+
+    // Birthdays / anniversaries / holidays → all-day row under Family filter.
+    if (this.filterOn('family')) this.addWeekFamilyAllDay(days);
+
+    // Seed the shared per-day store with internal timed items, then lay each
+    // day out. Google timed items merge into this same store (and re-run
+    // relayoutDay) when renderGoogleEventsUnified()'s fetch resolves, so the
+    // two sources are never laid out in separate passes. (v4.72 FIX B)
+    timedByDay.forEach((items, iso) => {
+      this._weekTimed[iso] = items;
+      this.relayoutDay(iso);
+    });
+
+    this.drawNowLine(days);
+    // Auto-scroll to 7am on first paint of the week.
+    const scroller = host.querySelector('.cal-wk-scroll');
+    if (scroller) scroller.scrollTop = 7 * HOUR_PX;
+  },
+  hourLabel(h) { const am = h < 12; const hr = (h % 12) || 12; return `${hr} ${am ? 'AM' : 'PM'}`; },
+  // Lays out and (re)renders ALL timed items for one day column from the
+  // shared this._weekTimed[iso] store — internal + Google together — so
+  // overlaps are packed side-by-side across both sources instead of each
+  // source running its own independent placeTimed() pass. Clears the day's
+  // existing .cal-wk-event nodes first so re-runs (e.g. Google events
+  // arriving after the initial internal-only paint) never leave stale or
+  // duplicate DOM nodes behind. (v4.72 FIX B; replaces the old placeTimed())
+  relayoutDay(iso) {
+    const col = $(`#cal-week .cal-wk-col[data-date="${iso}"]`);
+    if (!col) return;
+    col.querySelectorAll('.cal-wk-event').forEach(n => n.remove());
+    const items = this._weekTimed[iso] || [];
+    if (!items.length) return;
+    this.layoutDayColumns(items);
+    items.forEach(it => {
+      const top = ((it.startMin - WEEK_START_HOUR * 60) / 60) * HOUR_PX;
+      const height = Math.max(16, ((it.endMin - it.startMin) / 60) * HOUR_PX - 2);
+      const widthPct = 100 / it._ncols;
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = `cal-wk-event cal-wk-${it.group}`;
+      el.style.cssText = `top:${top}px;height:${height}px;left:${it._col * widthPct}%;width:calc(${widthPct}% - 3px);`;
+      el.innerHTML = `<span class="cal-wk-ev-time">${this.minToLabel(it.startMin)}</span><span class="cal-wk-ev-title">${escape(it.label)}</span>`;
+      if (it.kind === 'event' && it.id) on(el, 'click', () => EventsView.openModal(it.id));
+      if (it.kind === 'google' && it.htmlLink) on(el, 'click', () => window.open(it.htmlLink, '_blank', 'noopener'));
+      col.appendChild(el);
+    });
+  },
+  minToLabel(min) { const h = Math.floor(min/60), m = min%60; const am = h<12; const hr=(h%12)||12; return `${hr}${m?':'+String(m).padStart(2,'0'):''} ${am?'am':'pm'}`; },
+  addAllDayChip(iso, label, group) {
+    const cell = $(`#cal-week .cal-wk-allcell[data-date="${iso}"]`);
+    if (!cell) return;
+    const chip = document.createElement('div');
+    chip.className = `cal-wk-allchip cal-wk-${group}`;
+    chip.textContent = label;
+    cell.appendChild(chip);
+  },
+  addWeekFamilyAllDay(days) {
+    // Birthdays + anniversaries + US holidays for each day, mirroring the same
+    // lookups renderMonth() builds (v4.72). Callers already gate on filterOn('family').
+    // Anniversaries — recurring annually on MM-DD; dedupe by couple, same as renderMonth().
+    const anniversariesByMD = new Map();
+    const seenPairs = new Set();
+    Store.membersList().forEach(m => {
+      if (!m.spouseId || m.divorced) return;
+      const sp = Store.byId(m.spouseId);
+      if (!sp || sp.divorced) return;
+      const pairKey = [m.id, sp.id].sort().join('|');
+      if (seenPairs.has(pairKey)) return;
+      seenPairs.add(pairKey);
+      const aniso = m.anniversary || sp.anniversary;
+      if (!aniso || aniso.length < 10) return;
+      const md = aniso.slice(5, 10);
+      const focus = m.id < sp.id ? m : sp;
+      const partner = focus === m ? sp : m;
+      if (!anniversariesByMD.has(md)) anniversariesByMD.set(md, []);
+      anniversariesByMD.get(md).push({ focus, partner, isoDate: aniso });
+    });
+    // US holidays — cover every year represented in this week (handles Dec/Jan boundary weeks).
+    const holidaysByDate = new Map();
+    new Set(days.map(d => d.getFullYear())).forEach(y => usHolidaysForYear(y).forEach(h => holidaysByDate.set(h.date, h)));
+
+    days.forEach(d => {
+      const iso = toIsoDate(d), md = iso.slice(5, 10);
+      Store.membersList().forEach(m => { if (m.birthday && m.birthday.slice(5,10) === md) this.addAllDayChip(iso, `🎂 ${displayName(m)}`, 'family'); });
+      (anniversariesByMD.get(md) || []).forEach(({ focus, partner }) => {
+        this.addAllDayChip(iso, `💍 ${focus.firstName} & ${partner.firstName}`, 'family');
+      });
+      const holiday = holidaysByDate.get(iso);
+      if (holiday) this.addAllDayChip(iso, `🇺🇸 ${holiday.name}`, 'family');
+    });
+  },
+  drawNowLine(days) {
+    const now = new Date(); const iso = toIsoDate(now);
+    const col = $(`#cal-week .cal-wk-col[data-date="${iso}"]`);
+    if (!col) return;
+    const min = now.getHours()*60 + now.getMinutes();
+    const line = document.createElement('div');
+    line.className = 'cal-wk-now';
+    line.style.top = `${((min - WEEK_START_HOUR*60)/60)*HOUR_PX}px`;
+    col.appendChild(line);
   },
 
   refreshGoogleIndicator() {
@@ -7731,12 +8041,56 @@ const CalendarView = {
     $('#cal-google-label').textContent = connected ? 'Google · synced' : 'Google';
   },
 
-  async renderGoogleEvents() {
+  // Renders Google events on whichever view is active (month chips or week
+  // time-grid blocks). Replaces the old month-only renderGoogleEvents(). (v4.72)
+  async renderGoogleEventsUnified() {
     // Google Calendar integration is admin-only. Family / User never see
     // pulled Google events on the grid.
     if (!Auth.canUseGoogleCalendar()) return;
     const cfg = GoogleCalendar.config();
     if (!cfg.clientId || !cfg.showEvents) return;
+
+    if (this.mode === 'week') {
+      const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(this.weekStart); d.setDate(d.getDate() + i); return d; });
+      const weekIsos = new Set(days.map(toIsoDate));
+      const renderKey = `week-${toIsoDate(this.weekStart)}`;
+      this._renderKey = renderKey;
+      // fetch covers the month(s) spanning this week
+      const months = new Set(days.map(d => `${d.getFullYear()}-${d.getMonth()}`));
+      let all = [];
+      for (const key of months) {
+        const [y, m] = key.split('-').map(Number);
+        try { all = all.concat(await GoogleCalendar.fetchEventsForMonth(y, m)); } catch {}
+      }
+      if (this._renderKey !== renderKey) return; // user navigated away
+      const byDay = new Map(days.map(d => [toIsoDate(d), []]));
+      all.forEach(ev => {
+        if (!weekIsos.has(ev.date)) return;
+        if (!this.filterOn(this.groupOf('google', ev.category))) return;
+        if (ev.allDay || ev.startTime == null) { this.addAllDayChip(ev.date, ev.summary, this.groupOf('google', ev.category)); return; }
+        const startMin = this.timeToMin(ev.startTime);
+        let endMin = this.timeToMin(ev.endTime);
+        if (endMin == null || endMin <= startMin) endMin = startMin + 30;
+        byDay.get(ev.date).push({ startMin, endMin, label: ev.summary, group: this.groupOf('google', ev.category), kind: 'google', htmlLink: ev.htmlLink, id: ev.id });
+      });
+      // Merge into the shared per-day store (dedupe by id — guards against a
+      // re-resolved same-week fetch double-appending, e.g. after a manual
+      // refresh while a prior fetch is still in flight), then relayout each
+      // affected day so internal + Google items are packed together in one
+      // pass instead of two separate placeTimed() calls stacking. (v4.72 FIX B)
+      byDay.forEach((items, iso) => {
+        if (!items.length) return;
+        const existing = this._weekTimed[iso] || (this._weekTimed[iso] = []);
+        const seenIds = new Set(existing.map(it => it.id));
+        const fresh = items.filter(it => !seenIds.has(it.id));
+        if (!fresh.length) return;
+        existing.push(...fresh);
+        this.relayoutDay(iso);
+      });
+      return;
+    }
+
+    // MONTH branch: existing chip-append code (with the Task-4 filter guard).
     const renderKey = `${this.year}-${this.month}`;
     this._renderKey = renderKey;
     let events;
@@ -7747,6 +8101,7 @@ const CalendarView = {
     }
     if (this._renderKey !== renderKey) return; // user navigated away
     events.forEach(ev => {
+      if (!this.filterOn(this.groupOf('google', ev.category))) return; // v4.72 filter
       const cell = document.querySelector(`#cal-grid .cal-cell[data-date="${ev.date}"]`);
       if (!cell) return;
       const chips = cell.querySelector('.cal-chips');
@@ -7820,7 +8175,7 @@ const CalendarView = {
           toast('Google Calendar connected.');
           this.renderGoogleModal();
           this.refreshGoogleIndicator();
-          this.renderGoogleEvents();
+          this.renderGoogleEventsUnified();
         } catch (e) {
           err.textContent = e.message || 'Connection failed.';
           btn.disabled = false; btn.textContent = 'Connect Google Calendar';
@@ -7858,6 +8213,11 @@ const CalendarView = {
                 <input type="checkbox" data-gcal-id="${escape(c.id)}" ${c.enabled ? 'checked' : ''} />
                 <span class="gcal-cal-swatch" style="background:${escape(c.backgroundColor)}"></span>
                 <span class="gcal-cal-name">${escape(c.summary)}${c.primary ? ' <span class="muted small">(primary)</span>' : ''}</span>
+                <select class="gcal-cat" data-gcal-cat="${escape(c.id)}" aria-label="Calendar type">
+                  <option value="work"     ${c.category === 'work' ? 'selected' : ''}>Work</option>
+                  <option value="personal" ${c.category === 'personal' ? 'selected' : ''}>Personal</option>
+                  <option value="other"    ${(c.category || 'other') === 'other' ? 'selected' : ''}>Other</option>
+                </select>
               </label>
             `).join('')}
           </div>
@@ -7876,6 +8236,10 @@ const CalendarView = {
     });
     body.querySelectorAll('[data-gcal-id]').forEach(cb => on(cb, 'change', () => {
       GoogleCalendar.setCalendarEnabled(cb.dataset.gcalId, cb.checked);
+      this.render();
+    }));
+    body.querySelectorAll('[data-gcal-cat]').forEach(sel => on(sel, 'change', () => {
+      GoogleCalendar.setCalendarCategory(sel.dataset.gcalCat, sel.value);
       this.render();
     }));
     on($('#gcal-sync'), 'click', async () => {
@@ -7902,6 +8266,52 @@ const CalendarView = {
       this.refreshGoogleIndicator();
       this.render();
     });
+  },
+};
+
+// Lightweight in-app "personal appointment" modal — admin-only one-off
+// timed events that live alongside Events/Reminders but skip the full
+// Events form. Also reachable by clicking an empty slot in the week
+// grid (see CalendarView.renderWeek). (v4.72)
+const AppointmentModal = {
+  init() {
+    on($('#cal-add-appt'), 'click', () => this.open());
+    on($('#appt-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.close(); });
+    on($('#appt-form'), 'submit', (e) => { e.preventDefault(); this.submit(); });
+  },
+  open(prefill = {}) {
+    if (!Auth.canEditCalendarEvents()) return;
+    const f = $('#appt-form'); f.reset(); $('#appt-error').textContent = '';
+    if (prefill.date) f.date.value = prefill.date;
+    if (prefill.startTime) f.startTime.value = prefill.startTime;
+    $('#appt-modal').setAttribute('aria-hidden', 'false');
+    f.name.focus();
+  },
+  close() { $('#appt-modal').setAttribute('aria-hidden', 'true'); },
+  submit() {
+    const f = $('#appt-form'); const fd = new FormData(f);
+    const name = (fd.get('name') || '').toString().trim();
+    const date = (fd.get('date') || '').toString();
+    const startTime = (fd.get('startTime') || '').toString();
+    if (!name || !date || !startTime) { $('#appt-error').textContent = 'Title, date, and start time are required.'; return; }
+    this.saveFrom({ name, date, startTime,
+      endTime: (fd.get('endTime') || '').toString(),
+      location: (fd.get('location') || '').toString().trim(),
+      description: (fd.get('description') || '').toString().trim() });
+    this.close();
+    toast('Appointment added.');
+  },
+  // Pure persistence path (also called by the harness). (v4.72)
+  saveFrom(data) {
+    Store.state.events ||= [];
+    Store.state.events.unshift({
+      id: uid('evt'), name: data.name, date: data.date,
+      startTime: data.startTime, endTime: data.endTime || '',
+      location: data.location || '', description: data.description || '',
+      category: 'personal', icon: '📌', attendees: [],
+    });
+    Store.save();
+    if (typeof CalendarView !== 'undefined') CalendarView.render();
   },
 };
 
@@ -9856,6 +10266,7 @@ async function init() {
   CropModal.init();
   EventsView.init();
   CalendarView.init();
+  AppointmentModal.init();
   GiftsView.init();
   VaultView.init();
   RemindersModal.init();
@@ -10532,7 +10943,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.71';
+const APP_VERSION = '4.72';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {

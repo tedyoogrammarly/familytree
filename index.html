@@ -334,6 +334,33 @@
       </div>
     </div>
 
+    <div id="appt-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="appt-title">
+        <header class="modal-head"><h3 id="appt-title">Add appointment</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+        </header>
+        <form id="appt-form" class="modal-body">
+          <label class="field"><span>Title</span><input name="name" required autocomplete="off" placeholder="Dentist, haircut, …" /></label>
+          <div class="grid-2">
+            <label class="field"><span>Date</span><input name="date" type="date" required /></label>
+            <label class="field"><span>Start</span><input name="startTime" type="time" required /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>End (optional)</span><input name="endTime" type="time" /></label>
+            <label class="field"><span>Location</span><input name="location" autocomplete="off" /></label>
+          </div>
+          <label class="field"><span>Notes</span><textarea name="description" rows="2"></textarea></label>
+          <p class="form-error" id="appt-error" role="alert"></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save appointment</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- ===== TREE VIEW ===== -->
     <main id="view-tree" class="view view-tree">
       <div class="tree-toolbar">
@@ -1593,6 +1620,11 @@
             </button>
             <select class="input" id="cal-year" aria-label="Year"></select>
             <button class="btn btn-secondary btn-sm" id="cal-today">Today</button>
+            <div class="cal-viewtoggle" role="group" aria-label="Calendar view">
+              <button type="button" class="cal-viewbtn" data-mode="month">Month</button>
+              <button type="button" class="cal-viewbtn" data-mode="week">Week</button>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="cal-add-appt" data-admin-only title="Add a one-off personal appointment">+ Appointment</button>
             <button class="btn btn-secondary btn-sm" id="cal-add-reminder" data-admin-only title="Add a recurring reminder (Calendar-only)">+ Reminder</button>
             <button class="btn btn-secondary btn-sm" id="cal-refresh" title="Refresh calendar">
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1610,6 +1642,11 @@
             </button>
           </div>
         </div>
+        <div class="cal-filters" id="cal-filters" role="group" aria-label="Calendar filters">
+          <button type="button" class="cal-filter-chip" data-filter="work"     aria-pressed="true">Work</button>
+          <button type="button" class="cal-filter-chip" data-filter="personal" aria-pressed="true">Personal</button>
+          <button type="button" class="cal-filter-chip" data-filter="family"   aria-pressed="true">Family</button>
+        </div>
         <div class="cal-legend">
           <span class="cal-legend-item"><span class="cal-dot is-event"></span>Event</span>
           <span class="cal-legend-item"><span class="cal-dot is-birthday"></span>Birthday</span>
@@ -1620,6 +1657,7 @@
         <div class="panel cal-panel">
           <div class="cal-weekdays" id="cal-weekdays"></div>
           <div class="cal-grid" id="cal-grid"></div>
+          <div id="cal-week" class="cal-week" hidden></div>
         </div>
       </div>
     </main>

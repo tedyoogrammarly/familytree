@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.72",
+    "date": "2026-07-06",
+    "title": "Shared Calendar — weekly view, Work/Personal/Family filter, quick appointments",
+    "changes": [
+      "The Calendar now opens on a weekly time-grid (like Google's week view) so a busy day is easy to read at a glance; switch back to Month anytime with the Month/Week toggle.",
+      "New Work · Personal · Family filter chips let you show or hide each group independently — tag each connected Google calendar as Work or Personal in the Connect Google window.",
+      "You can now add a quick personal appointment (title, date, time, location, notes) right on the Calendar — handy for scheduling things for each other. It shows up under the Personal filter for both of you."
+    ]
+  },
+  {
     "version": "4.71",
     "date": "2026-07-05",
     "title": "Cleaner family-tree connection lines · under-the-hood speedups",
