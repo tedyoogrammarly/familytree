@@ -7437,11 +7437,13 @@ const GoogleCalendar = {
     };
     const date = ev.start?.date || (startIso ? startIso.slice(0, 10) : null);
     return {
-      id: 'g:' + ev.id,
+      // Real Google events always carry an id; fall back to a deterministic
+      // key (summary+start) so a missing id never collides as 'g:undefined'.
+      id: 'g:' + (ev.id || (ev.summary || '') + (ev.start?.dateTime || ev.start?.date || '')),
       date,
-      summary: ev.summary || '(no title)',
+      summary: ev.summary || '(untitled)',
       htmlLink: ev.htmlLink || '',
-      color: cal.color || 'var(--accent-500)',
+      color: cal.backgroundColor || cal.color || 'var(--accent-500)',
       calendarName: cal.summary || '',
       allDay: isAllDay,
       startTime: isAllDay ? null : hhmm(startIso),

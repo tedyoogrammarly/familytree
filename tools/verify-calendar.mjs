@@ -32,18 +32,21 @@ check(state.filters && state.filters.work === true && state.filters.personal ===
 check(state.allEventsHaveCategory, 'every event has a category');
 
 const norm = await p.evaluate(() => {
+  // Offset-less local ISO strings: new Date() parses these as local time in
+  // every host timezone, so getHours()/getMinutes() are deterministic (no -07:00).
   const timed = GoogleCalendar.normalizeEvent(
     { id: 'x1', summary: 'Standup', htmlLink: 'h',
-      start: { dateTime: '2026-07-07T09:30:00-07:00' }, end: { dateTime: '2026-07-07T10:00:00-07:00' } },
-    { id: 'c1', summary: 'Work', color: '#123', category: 'work' });
+      start: { dateTime: '2026-07-07T09:30:00' }, end: { dateTime: '2026-07-07T10:00:00' } },
+    { id: 'c1', summary: 'Work', backgroundColor: '#123', category: 'work' });
   const allDay = GoogleCalendar.normalizeEvent(
     { id: 'x2', summary: 'Holiday', start: { date: '2026-07-04' }, end: { date: '2026-07-05' } },
-    { id: 'c2', summary: 'Personal', color: '#456', category: 'personal' });
+    { id: 'c2', summary: 'Personal', backgroundColor: '#456', category: 'personal' });
   return { timed, allDay };
 });
 console.log('TASK2', JSON.stringify(norm));
 check(norm.timed.startTime === '09:30' && norm.timed.endTime === '10:00', 'timed event keeps HH:MM');
 check(norm.timed.allDay === false && norm.timed.category === 'work', 'timed flags');
+check(norm.timed.color === '#123', 'color reads backgroundColor');
 check(norm.allDay.allDay === true && norm.allDay.startTime === null && norm.allDay.category === 'personal', 'all-day flags');
 
 console.log(errs.length ? ('ERRORS:\n' + errs.join('\n')) : 'no console/page errors');
