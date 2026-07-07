@@ -7639,6 +7639,12 @@ const CalendarView = {
   startOfWeek(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - x.getDay()); return x; },
   setMode(mode) {
     this.mode = (mode === 'month') ? 'month' : 'week';
+    // Keep Month in sync with whichever week you were viewing, rather than
+    // showing a stale month left over from the last time Month was active. (v4.72)
+    if (this.mode === 'month' && this.weekStart) {
+      this.month = this.weekStart.getMonth();
+      this.year = this.weekStart.getFullYear();
+    }
     Store.state.calendarView = this.mode;
     Store.save();
     this.render();
@@ -7658,6 +7664,11 @@ const CalendarView = {
   render() {
     if (this.year == null || this.month == null) { const n = new Date(); this.year = n.getFullYear(); this.month = n.getMonth(); }
     $$('.cal-viewbtn').forEach(b => b.classList.toggle('is-active', b.dataset.mode === this.mode));
+    // Prev/next nav labels track whichever mode is active. (v4.72)
+    const navWord = this.mode === 'week' ? 'week' : 'month';
+    const prevBtn = $('#cal-prev'), nextBtn = $('#cal-next');
+    if (prevBtn) { prevBtn.title = `Previous ${navWord}`; prevBtn.setAttribute('aria-label', `Previous ${navWord}`); }
+    if (nextBtn) { nextBtn.title = `Next ${navWord}`; nextBtn.setAttribute('aria-label', `Next ${navWord}`); }
     this.renderFilters();
     const monthEls = ['#cal-grid', '#cal-weekdays'];
     const weekOn = this.mode === 'week';
@@ -7668,15 +7679,12 @@ const CalendarView = {
     if (Auth.canUseGoogleCalendar()) this.renderGoogleEventsUnified();
   },
   renderMonth() {
-    if (this.year == null || this.month == null) {
-      const n = new Date();
-      this.year = n.getFullYear(); this.month = n.getMonth();
-    }
+    // year/month null-guard and renderFilters() already run once in the
+    // outer render() before this is called; not repeated here. (v4.72)
     const today = new Date();
     const todayIso = toIsoDate(today);
     const monthFirst = new Date(this.year, this.month, 1);
     $('#cal-label').textContent = monthFirst.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-    this.renderFilters();
 
     // Year dropdown (current ± 50)
     const yrSel = $('#cal-year');
@@ -10893,7 +10901,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.71';
+const APP_VERSION = '4.72';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
