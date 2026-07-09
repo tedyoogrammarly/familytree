@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.73",
+    "date": "2026-07-08",
+    "title": "Connect Google Calendar with a shareable link",
+    "changes": [
+      "Connecting a Google Calendar no longer needs a Google Cloud OAuth Client ID or a sign-in popup. Instead, make the calendar public in Google Calendar, copy its shareable link, and paste it in Calendar → the Google button. Events show up as before, you can tag each as Work or Personal, and you can add several calendars.",
+      "Because this reads public calendars only, a private link is rejected with a clear message explaining how to make the calendar public first.",
+      "Existing Google Calendar connections are cleared by this update — re-add each calendar once using its shareable link."
+    ]
+  },
+  {
     "version": "4.72",
     "date": "2026-07-06",
     "title": "Shared Calendar — weekly view, Work/Personal/Family filter, quick appointments",

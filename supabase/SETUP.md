@@ -72,3 +72,19 @@ The "Reset PW" button in Admin will start working as soon as this is deployed.
 2. Sign up with your email + password — that account becomes the admin automatically (via `claim_first_admin()`).
 3. Add family members from the Admin page. Provide an email on the create form and the Supabase Auth user is created automatically; the generated password is shown once for you to share.
 4. Click **Reset PW** on any member to generate a new password (calls the Edge Function above).
+
+## 8. Google Calendar API key *(optional — Calendar page)*
+
+The Calendar page can show events from **public** Google Calendars added by their
+shareable link (Calendar → the Google button → paste a `…?cid=` link). This needs
+one Google API key, shipped in `config.js`:
+
+1. **Google Cloud Console** → enable the **Google Calendar API** for a project.
+2. **Credentials** → create an **API key**.
+3. Restrict it by **HTTP referrer** to this app's origin(s) (e.g. your deployed URL and `http://localhost:3000`).
+4. Put it in `config.js`: `window.GOOGLE_API_KEY = 'YOUR_KEY';`
+
+Leave `GOOGLE_API_KEY = ''` to keep the integration disabled (the connect window
+will say a key is needed). The key is safe to ship — it's referrer-locked and can
+only read calendars that have been made public. Only **public** calendars work;
+private links are rejected with a message explaining how to make the calendar public.

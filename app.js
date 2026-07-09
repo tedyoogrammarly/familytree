@@ -1033,11 +1033,9 @@ const Store = {
       calendarView: 'week',            // 'week' | 'month'
       calendarFilters: { work: true, personal: true, family: true },
       googleCalendar: {
-        clientId: '',
-        accessToken: '',
-        tokenExpiresAt: 0,
-        userEmail: '',
-        calendars: [],     // [{ id, summary, backgroundColor, primary, enabled }]
+        // v4.73: link-based. Each entry is one public calendar added by its
+        // shareable link: { id, summary, backgroundColor, enabled, category, link }.
+        calendars: [],
         lastSync: 0,
         showEvents: true,
       },
@@ -7302,123 +7300,137 @@ function usHolidaysForYear(year) {
   ];
 }
 
+// Extract a Google calendar id from whatever the user pastes: a shareable
+// link (…?cid=<base64>), an iCal URL (/calendar/ical/<id>/public/basic.ics),
+// or a raw calendar id (email-like). Returns the id, or null if unparseable.
+function parseCalendarLink(input) {
+  if (!input) return null;
+  const s = String(input).trim();
+
+  // 1) iCal URL: /calendar/ical/<calId>/public/basic.ics (calId is URL-encoded)
+  const ical = s.match(/\/calendar\/ical\/([^/]+)\//);
+  if (ical) { try { return decodeURIComponent(ical[1]); } catch { return ical[1]; } }
+
+  // 2) cid= param (full URL or bare "cid=..."), base64 → calendar id
+  const m = s.match(/[?&]cid=([^&\s]+)/);
+  const cidToken = m ? m[1]
+    : (/^[A-Za-z0-9\-_]+={0,2}$/.test(s) && !s.includes('@') && s.length >= 16 ? s : null);
+  if (cidToken) {
+    try {
+      let b = decodeURIComponent(cidToken).replace(/-/g, '+').replace(/_/g, '/');
+      while (b.length % 4) b += '=';
+      const decoded = atob(b);
+      if (decoded && /@/.test(decoded)) return decoded;
+    } catch { /* fall through */ }
+  }
+
+  // 3) raw calendar id (email-like or *.calendar.google.com)
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return s;
+
+  return null;
+}
+
 // -------------------- GOOGLE CALENDAR --------------------
-// Read-only sync of the user's Google Calendar events into the Calendar view.
-// Auth: Google Identity Services (GIS) Implicit flow → access token in localStorage.
-// Tokens are short-lived (~1h); we silently re-prompt after expiry when consent
-// has already been granted. Each install needs its own OAuth Client ID — there
-// is no shared client because Google rate-limits per-project.
+// Read-only display of PUBLIC Google Calendars, addressed by their shareable
+// link. No OAuth: we decode the calendar id from the link and read metadata +
+// events from Calendar API v3 using window.GOOGLE_API_KEY (shipped in
+// config.js, HTTP-referrer-restricted). Only public calendars are readable.
 const GoogleCalendar = {
-  GIS_URL: 'https://accounts.google.com/gsi/client',
-  SCOPE: 'https://www.googleapis.com/auth/calendar.readonly',
-  tokenClient: null,
-  scriptPromise: null,
-  eventCache: new Map(),     // 'calId|YYYY-M' → [{ date, summary, htmlLink, color, calendarName }]
+  API_BASE: 'https://www.googleapis.com/calendar/v3',
+  // Colors auto-assigned per calendar (Google no longer exposes a per-user
+  // calendar color without OAuth).
+  PALETTE: ['#4285f4', '#0b8043', '#8e24aa', '#e67c00', '#d81b60', '#3f51b5', '#00897b', '#c2185b'],
+  eventCache: new Map(),     // 'calId|YYYY-M' → raw Google event items
 
   config() { return Store.state.googleCalendar || {}; },
+  apiKey() { return (window.GOOGLE_API_KEY || '').trim(); },
+  hasKey() { return !!this.apiKey(); },
+  isConfigured() { return (this.config().calendars || []).length > 0; },
 
-  hasClient() { return !!this.config().clientId; },
-
-  isConnected() {
-    const c = this.config();
-    return !!c.accessToken && c.tokenExpiresAt > Date.now();
+  // Normalize any legacy (OAuth-era) config: strip token fields and drop
+  // calendars that lack a shareable `link` (their ids came from calendarList
+  // and can't be re-fetched anonymously). Preserves enabled + category.
+  // Idempotent.
+  migrate() {
+    const cfg = Store.state.googleCalendar;
+    if (!cfg) return;
+    const legacy = ('clientId' in cfg) || ('accessToken' in cfg) ||
+      (Array.isArray(cfg.calendars) && cfg.calendars.some(c => !c.link));
+    if (!legacy) return;
+    Store.state.googleCalendar = {
+      calendars: (cfg.calendars || []).filter(c => c && c.link).map(c => ({
+        id: c.id,
+        summary: c.summary || c.id,
+        backgroundColor: c.backgroundColor || '#4285f4',
+        enabled: c.enabled !== false,
+        category: (c.category === 'work' || c.category === 'personal') ? c.category : 'other',
+        link: c.link,
+      })),
+      showEvents: cfg.showEvents !== false,
+      lastSync: cfg.lastSync || 0,
+    };
+    Store.save();
+    this.eventCache.clear();
   },
 
-  loadScript() {
-    if (window.google?.accounts?.oauth2) return Promise.resolve();
-    if (this.scriptPromise) return this.scriptPromise;
-    this.scriptPromise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = this.GIS_URL;
-      s.async = true; s.defer = true;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error('Could not load Google Identity Services.'));
-      document.head.appendChild(s);
-    });
-    return this.scriptPromise;
+  _pickColor() {
+    const used = (this.config().calendars || []).length;
+    return this.PALETTE[used % this.PALETTE.length];
   },
 
-  buildTokenClient(clientId, callback) {
-    this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: this.SCOPE,
-      callback,
-    });
+  // Read a public calendar's metadata (used to label it + validate access).
+  // Throws a coded Error: NO_KEY / NOT_PUBLIC / BAD_KEY / FETCH_FAILED.
+  async fetchCalendarMeta(calId) {
+    if (!this.hasKey()) throw new Error('NO_KEY');
+    const url = `${this.API_BASE}/calendars/${encodeURIComponent(calId)}?key=${encodeURIComponent(this.apiKey())}`;
+    let r;
+    try { r = await fetch(url); } catch { throw new Error('FETCH_FAILED'); }
+    if (r.status === 403 || r.status === 404) throw new Error('NOT_PUBLIC');
+    if (r.status === 400) throw new Error('BAD_KEY');
+    if (!r.ok) throw new Error('FETCH_FAILED');
+    return r.json(); // { id, summary, ... }
   },
 
-  // First-time consent. Opens the Google popup; user signs in & grants scope.
-  async connect(clientId) {
-    if (!clientId) throw new Error('Client ID required.');
-    await this.loadScript();
-    return new Promise((resolve, reject) => {
-      this.buildTokenClient(clientId, async (resp) => {
-        if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
-        const cfg = this.config();
-        cfg.clientId = clientId;
-        cfg.accessToken = resp.access_token;
-        cfg.tokenExpiresAt = Date.now() + ((resp.expires_in || 3600) * 1000) - 30_000;
-        Store.state.googleCalendar = cfg;
-        Store.save();
-        try {
-          await this.refreshMetadata();
-          resolve(cfg);
-        } catch (err) { reject(err); }
-      });
-      this.tokenClient.requestAccessToken({ prompt: 'consent' });
-    });
-  },
-
-  // Silent re-auth after token expiry — only works if consent already granted.
-  async reauthorize() {
+  // Parse + validate a pasted link, then add it. Throws BAD_LINK / DUPLICATE
+  // or a fetchCalendarMeta code; nothing is saved on failure.
+  async addCalendar(link) {
+    const calId = parseCalendarLink(link);
+    if (!calId) throw new Error('BAD_LINK');
     const cfg = this.config();
-    if (!cfg.clientId) throw new Error('Not configured.');
-    await this.loadScript();
-    return new Promise((resolve, reject) => {
-      this.buildTokenClient(cfg.clientId, (resp) => {
-        if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
-        cfg.accessToken = resp.access_token;
-        cfg.tokenExpiresAt = Date.now() + ((resp.expires_in || 3600) * 1000) - 30_000;
-        Store.state.googleCalendar = cfg;
-        Store.save();
-        resolve(cfg);
-      });
-      this.tokenClient.requestAccessToken({ prompt: '' });
+    if ((cfg.calendars || []).some(c => c.id === calId)) throw new Error('DUPLICATE');
+    const meta = await this.fetchCalendarMeta(calId);
+    cfg.calendars = cfg.calendars || [];
+    cfg.calendars.push({
+      id: calId,
+      summary: meta.summary || calId,
+      backgroundColor: this._pickColor(),
+      enabled: true,
+      category: 'other',
+      link: String(link).trim(),
     });
+    if (cfg.showEvents === undefined) cfg.showEvents = true;
+    cfg.lastSync = Date.now();
+    Store.state.googleCalendar = cfg;
+    Store.save();
+    this.eventCache.clear();
+    return cfg.calendars[cfg.calendars.length - 1];
   },
 
-  async ensureToken() {
-    if (this.isConnected()) return;
-    await this.reauthorize();
+  removeCalendar(id) {
+    const cfg = this.config();
+    cfg.calendars = (cfg.calendars || []).filter(c => c.id !== id);
+    Store.state.googleCalendar = cfg;
+    Store.save();
+    this.eventCache.clear();
   },
 
-  // Pulls userinfo (email) + the calendar list. Preserves the user's enable
-  // selections across refreshes; new calendars default to disabled unless primary.
+  // Re-fetch each connected calendar's summary (name) and clear the event
+  // cache. Enabled + category selections are left untouched.
   async refreshMetadata() {
     const cfg = this.config();
-    if (!cfg.accessToken) throw new Error('Not connected.');
-    try {
-      const ui = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { 'Authorization': `Bearer ${cfg.accessToken}` },
-      });
-      if (ui.ok) {
-        const u = await ui.json();
-        cfg.userEmail = u.email || '';
-      }
-    } catch {}
-    const r = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
-      headers: { 'Authorization': `Bearer ${cfg.accessToken}` },
-    });
-    if (!r.ok) throw new Error('Could not load calendar list (' + r.status + ').');
-    const d = await r.json();
-    const prev = new Map((cfg.calendars || []).map(c => [c.id, { enabled: c.enabled, category: c.category }]));
-    cfg.calendars = (d.items || []).map(c => ({
-      id: c.id,
-      summary: c.summary || c.id,
-      backgroundColor: c.backgroundColor || '#4285f4',
-      primary: !!c.primary,
-      enabled: prev.has(c.id) ? prev.get(c.id).enabled : !!c.primary,
-      category: prev.get(c.id)?.category || 'other',
-    }));
+    for (const c of (cfg.calendars || [])) {
+      try { const m = await this.fetchCalendarMeta(c.id); if (m.summary) c.summary = m.summary; } catch { /* keep existing name */ }
+    }
     cfg.lastSync = Date.now();
     Store.state.googleCalendar = cfg;
     Store.save();
@@ -7455,10 +7467,7 @@ const GoogleCalendar = {
 
   async fetchEventsForMonth(year, month /* 0-11 */) {
     const cfg = this.config();
-    if (!cfg.clientId || !cfg.calendars?.length) return [];
-    if (!this.isConnected()) {
-      try { await this.reauthorize(); } catch { return []; }
-    }
+    if (!this.hasKey() || !cfg.calendars?.length) return [];
     const enabled = cfg.calendars.filter(c => c.enabled);
     if (!enabled.length) return [];
     // Buffer ±1 month so events that bleed into the displayed grid are included.
@@ -7485,18 +7494,14 @@ const GoogleCalendar = {
   },
 
   async fetchOneCalendar(calId, timeMin, timeMax) {
-    const cfg = this.config();
+    if (!this.hasKey()) return null;
     const params = new URLSearchParams({
-      timeMin, timeMax,
+      key: this.apiKey(), timeMin, timeMax,
       singleEvents: 'true', orderBy: 'startTime', maxResults: '250',
     });
-    const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?${params}`;
-    const doFetch = () => fetch(url, { headers: { 'Authorization': `Bearer ${cfg.accessToken}` } });
-    let r = await doFetch();
-    if (r.status === 401) {
-      try { await this.reauthorize(); } catch { return null; }
-      r = await doFetch();
-    }
+    const url = `${this.API_BASE}/calendars/${encodeURIComponent(calId)}/events?${params}`;
+    let r;
+    try { r = await fetch(url); } catch { return null; }
     if (!r.ok) return null;
     const d = await r.json();
     return d.items || [];
@@ -7530,17 +7535,9 @@ const GoogleCalendar = {
   },
 
   disconnect() {
-    const cfg = this.config();
-    const token = cfg.accessToken;
-    Store.state.googleCalendar = {
-      clientId: '', accessToken: '', tokenExpiresAt: 0,
-      userEmail: '', calendars: [], lastSync: 0, showEvents: true,
-    };
+    Store.state.googleCalendar = { calendars: [], showEvents: true, lastSync: 0 };
     Store.save();
     this.eventCache.clear();
-    if (token && window.google?.accounts?.oauth2?.revoke) {
-      try { window.google.accounts.oauth2.revoke(token, () => {}); } catch {}
-    }
   },
 };
 
@@ -8036,7 +8033,7 @@ const CalendarView = {
 
   refreshGoogleIndicator() {
     const cfg = GoogleCalendar.config();
-    const connected = !!cfg.clientId && (!!cfg.accessToken || cfg.calendars?.length > 0);
+    const connected = GoogleCalendar.hasKey() && (cfg.calendars?.length > 0);
     $('#cal-google-dot').hidden = !connected;
     $('#cal-google-label').textContent = connected ? 'Google · synced' : 'Google';
   },
@@ -8048,7 +8045,7 @@ const CalendarView = {
     // pulled Google events on the grid.
     if (!Auth.canUseGoogleCalendar()) return;
     const cfg = GoogleCalendar.config();
-    if (!cfg.clientId || !cfg.showEvents) return;
+    if (!GoogleCalendar.hasKey() || !cfg.calendars?.length || !cfg.showEvents) return;
 
     if (this.mode === 'week') {
       const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(this.weekStart); d.setDate(d.getDate() + i); return d; });
@@ -8128,6 +8125,7 @@ const CalendarView = {
   },
 
   openGoogleModal() {
+    GoogleCalendar.migrate();
     this.renderGoogleModal();
     $('#gcal-modal').setAttribute('aria-hidden', 'false');
   },
@@ -8137,54 +8135,46 @@ const CalendarView = {
   renderGoogleModal() {
     const body = $('#gcal-body');
     const cfg  = GoogleCalendar.config();
-    const isConfigured = !!cfg.clientId;
+    const hasKey = GoogleCalendar.hasKey();
+    const configured = (cfg.calendars || []).length > 0;
 
-    if (!isConfigured) {
+    const errText = (code) => ({
+      BAD_LINK: "That doesn't look like a Google Calendar link. Paste the calendar's shareable link (it contains “?cid=”).",
+      DUPLICATE: 'That calendar is already added.',
+      NO_KEY: 'No Google API key is set. Add GOOGLE_API_KEY to config.js first.',
+      NOT_PUBLIC: "This calendar isn't public. In Google Calendar → the calendar's Settings → “Access permissions”, tick “Make available to public”, then copy the shareable link again.",
+      BAD_KEY: 'The Google API key in config.js was rejected. Check it’s valid and that the Calendar API is enabled.',
+      FETCH_FAILED: 'Could not reach Google Calendar. Check your connection and try again.',
+    }[code] || 'Something went wrong. Please try again.');
+
+    if (!configured) {
       body.innerHTML = `
-        <p class="muted small">Display events from your Google Calendar alongside family events. Read-only sync; nothing is written back to Google.</p>
+        <p class="muted small">Display events from a public Google Calendar alongside family events. Read-only; nothing is written back to Google.</p>
+        ${hasKey ? '' : '<p class="form-error" role="alert" style="margin:8px 0;">No Google API key is set. Add <code>GOOGLE_API_KEY</code> to <code>config.js</code> to enable this.</p>'}
         <details class="gcal-setup">
-          <summary>One-time setup — create a Google OAuth Client ID</summary>
+          <summary>How to get a shareable link</summary>
           <ol class="gcal-steps">
-            <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create (or pick) a project.</li>
-            <li>Enable the <strong>Google Calendar API</strong> for the project.</li>
-            <li>Configure the OAuth consent screen as <strong>External</strong>; add your own email as a test user.</li>
-            <li>Credentials → Create credentials → <strong>OAuth 2.0 Client ID</strong> → <strong>Web application</strong>.</li>
-            <li>Under <em>Authorized JavaScript origins</em>, add <code>http://localhost:3000</code>.</li>
-            <li>Copy the Client ID and paste it below.</li>
+            <li>In <a href="https://calendar.google.com/" target="_blank" rel="noopener">Google Calendar</a>, hover the calendar in the left list → ⋮ → <strong>Settings and sharing</strong>.</li>
+            <li>Under <strong>Access permissions</strong>, tick <strong>“Make available to public”</strong>.</li>
+            <li>Scroll to <strong>“Integrate calendar”</strong> and copy the <strong>Public URL to this calendar</strong> (the <code>…?cid=</code> link).</li>
+            <li>Paste it below and press Add.</li>
           </ol>
         </details>
         <label class="field">
-          <span>OAuth Client ID</span>
-          <input id="gcal-client-id" placeholder="xxxxxxxxxxxx.apps.googleusercontent.com" autocomplete="off" />
+          <span>Shareable link</span>
+          <input id="gcal-link" placeholder="https://calendar.google.com/calendar/u/0?cid=…" autocomplete="off" ${hasKey ? '' : 'disabled'} />
         </label>
         <p id="gcal-error" class="form-error" role="alert"></p>
         <div class="modal-actions">
-          <button class="btn btn-primary" id="gcal-connect">Connect Google Calendar</button>
+          <button class="btn btn-primary" id="gcal-add" ${hasKey ? '' : 'disabled'}>Add calendar</button>
           <button class="btn btn-ghost" type="button" data-close>Cancel</button>
         </div>
       `;
-      on($('#gcal-connect'), 'click', async () => {
-        const cid = $('#gcal-client-id').value.trim();
-        const err = $('#gcal-error');
-        if (!cid) { err.textContent = 'Paste your OAuth Client ID first.'; return; }
-        err.textContent = '';
-        const btn = $('#gcal-connect');
-        btn.disabled = true; btn.textContent = 'Connecting…';
-        try {
-          await GoogleCalendar.connect(cid);
-          toast('Google Calendar connected.');
-          this.renderGoogleModal();
-          this.refreshGoogleIndicator();
-          this.renderGoogleEventsUnified();
-        } catch (e) {
-          err.textContent = e.message || 'Connection failed.';
-          btn.disabled = false; btn.textContent = 'Connect Google Calendar';
-        }
-      });
+      on($('#gcal-add'), 'click', () => this._addGoogleFromInput(errText));
       return;
     }
 
-    // Configured (and possibly connected)
+    // Configured — one or more public calendars added by shareable link.
     const cals = cfg.calendars || [];
     const lastSyncText = cfg.lastSync
       ? new Date(cfg.lastSync).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -8195,7 +8185,6 @@ const CalendarView = {
           <div class="gcal-status">
             <span class="gcal-status-dot is-on"></span>
             <strong>Connected</strong>
-            ${cfg.userEmail ? `<span class="muted small">· ${escape(cfg.userEmail)}</span>` : ''}
           </div>
           <p class="muted small" style="margin:4px 0 0;">Last synced ${escape(lastSyncText)}</p>
         </div>
@@ -8205,28 +8194,32 @@ const CalendarView = {
         <span>Show Google events on the calendar</span>
       </label>
       <div class="field">
-        <span>Calendars to display</span>
-        ${cals.length ? `
-          <div class="gcal-list">
-            ${cals.map(c => `
-              <label class="gcal-cal-row">
-                <input type="checkbox" data-gcal-id="${escape(c.id)}" ${c.enabled ? 'checked' : ''} />
-                <span class="gcal-cal-swatch" style="background:${escape(c.backgroundColor)}"></span>
-                <span class="gcal-cal-name">${escape(c.summary)}${c.primary ? ' <span class="muted small">(primary)</span>' : ''}</span>
-                <select class="gcal-cat" data-gcal-cat="${escape(c.id)}" aria-label="Calendar type">
-                  <option value="work"     ${c.category === 'work' ? 'selected' : ''}>Work</option>
-                  <option value="personal" ${c.category === 'personal' ? 'selected' : ''}>Personal</option>
-                  <option value="other"    ${(c.category || 'other') === 'other' ? 'selected' : ''}>Other</option>
-                </select>
-              </label>
-            `).join('')}
-          </div>
-        ` : '<p class="muted small" style="margin:6px 0 0;">No calendars loaded yet — try Sync now.</p>'}
+        <span>Calendars</span>
+        <div class="gcal-list">
+          ${cals.map(c => `
+            <label class="gcal-cal-row">
+              <input type="checkbox" data-gcal-id="${escape(c.id)}" ${c.enabled ? 'checked' : ''} />
+              <span class="gcal-cal-swatch" style="background:${escape(c.backgroundColor)}"></span>
+              <span class="gcal-cal-name">${escape(c.summary)}</span>
+              <select class="gcal-cat" data-gcal-cat="${escape(c.id)}" aria-label="Calendar type">
+                <option value="work"     ${c.category === 'work' ? 'selected' : ''}>Work</option>
+                <option value="personal" ${c.category === 'personal' ? 'selected' : ''}>Personal</option>
+                <option value="other"    ${(c.category || 'other') === 'other' ? 'selected' : ''}>Other</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm gcal-cal-remove" data-remove-id="${escape(c.id)}" aria-label="Remove ${escape(c.summary)}">Remove</button>
+            </label>
+          `).join('')}
+        </div>
       </div>
+      <label class="field">
+        <span>Add another calendar</span>
+        <input id="gcal-link" placeholder="https://calendar.google.com/calendar/u/0?cid=…" autocomplete="off" />
+      </label>
       <p id="gcal-error" class="form-error" role="alert"></p>
       <div class="modal-actions">
+        <button class="btn btn-primary" id="gcal-add">Add calendar</button>
         <button class="btn btn-secondary" id="gcal-sync">Sync now</button>
-        <button class="btn btn-danger-ghost" id="gcal-disconnect">Disconnect</button>
+        <button class="btn btn-danger-ghost" id="gcal-disconnect">Disconnect all</button>
       </div>
     `;
     on($('#gcal-show'), 'change', (e) => {
@@ -8242,12 +8235,18 @@ const CalendarView = {
       GoogleCalendar.setCalendarCategory(sel.dataset.gcalCat, sel.value);
       this.render();
     }));
+    body.querySelectorAll('[data-remove-id]').forEach(b => on(b, 'click', () => {
+      GoogleCalendar.removeCalendar(b.dataset.removeId);
+      this.renderGoogleModal();
+      this.refreshGoogleIndicator();
+      this.render();
+    }));
+    on($('#gcal-add'), 'click', () => this._addGoogleFromInput(errText));
     on($('#gcal-sync'), 'click', async () => {
       const btn = $('#gcal-sync'); const err = $('#gcal-error');
       btn.disabled = true; btn.textContent = 'Syncing…';
       err.textContent = '';
       try {
-        await GoogleCalendar.ensureToken();
         await GoogleCalendar.refreshMetadata();
         this.renderGoogleModal();
         this.refreshGoogleIndicator();
@@ -8259,13 +8258,33 @@ const CalendarView = {
       }
     });
     on($('#gcal-disconnect'), 'click', () => {
-      if (!confirm('Disconnect Google Calendar? Your OAuth Client ID will be cleared from this browser.')) return;
+      if (!confirm('Remove all connected Google Calendars from this browser?')) return;
       GoogleCalendar.disconnect();
       toast('Google Calendar disconnected.');
       this.renderGoogleModal();
       this.refreshGoogleIndicator();
       this.render();
     });
+  },
+
+  // Shared "Add calendar" handler for the empty + configured modal states.
+  async _addGoogleFromInput(errText) {
+    const input = $('#gcal-link');
+    const err = $('#gcal-error');
+    const link = (input && input.value || '').trim();
+    if (!link) { err.textContent = 'Paste a shareable link first.'; return; }
+    err.textContent = '';
+    const btn = $('#gcal-add'); btn.disabled = true; btn.textContent = 'Adding…';
+    try {
+      await GoogleCalendar.addCalendar(link);
+      toast('Calendar added.');
+      this.renderGoogleModal();
+      this.refreshGoogleIndicator();
+      this.render();
+    } catch (e) {
+      err.textContent = errText(e.message);
+      btn.disabled = false; btn.textContent = 'Add calendar';
+    }
   },
 };
 
