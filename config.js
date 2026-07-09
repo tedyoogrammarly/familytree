@@ -8,3 +8,11 @@
 // must load before app.js and may load after the Supabase UMD bundle.
 window.SUPABASE_URL = 'https://inwutpebjqaakinybhwu.supabase.co';
 window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlud3V0cGVianFhYWtpbnliaHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0ODA3NDgsImV4cCI6MjA5NDA1Njc0OH0.JvzkwmacCDIYQz0CndXVM29OlR0HPZ8E1gCQ41E2Dj0';
+
+// Public, HTTP-referrer-restricted Google API key for reading PUBLIC Google
+// Calendars via Calendar API v3 (Calendar page → "Add calendar" by shareable
+// link). Safe to ship: referrer-locked, and it can only read calendars already
+// made public. Leave '' to keep the Google Calendar integration disabled.
+// To enable: Google Cloud → enable "Google Calendar API" → create an API key →
+// restrict it by HTTP referrer to this app's origin(s) → paste it here.
+window.GOOGLE_API_KEY = '';
