@@ -10962,7 +10962,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.72';
+const APP_VERSION = '4.73';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
