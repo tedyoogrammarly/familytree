@@ -3,6 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- App is served under /app/. This <base> makes relative asset URLs
+       (styles.css, app.js, config.js, changelog.json) resolve to /app/ even
+       when the URL has no trailing slash (e.g. /app). Allowed by base-uri 'self'. -->
+  <base href="/app/" />
   <!-- Content-Security-Policy (v4.56 hardening — C4). Defense-in-depth alongside
        the rich-text sanitizer + escape() + cssUrl(). script-src deliberately
        omits 'unsafe-inline' (the config script is externalized to config.js), so
