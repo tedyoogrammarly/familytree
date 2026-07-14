@@ -1,0 +1,2235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- Content-Security-Policy (v4.56 hardening — C4). Defense-in-depth alongside
+       the rich-text sanitizer + escape() + cssUrl(). script-src deliberately
+       omits 'unsafe-inline' (the config script is externalized to config.js), so
+       injected inline scripts / event handlers are blocked. style-src keeps
+       'unsafe-inline' because the app uses inline style="" attributes throughout.
+       If a network feature ever breaks, this is the line to relax / remove. -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' https://cdn.jsdelivr.net;
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    font-src 'self' https://fonts.gstatic.com data:;
+    img-src 'self' data: blob: https:;
+    media-src 'self' blob: data: https://*.supabase.co;
+    connect-src 'self' data: https://*.supabase.co wss://*.supabase.co https://api.open-meteo.com https://api.zippopotam.us https://www.googleapis.com;
+    frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com;
+    object-src 'none';
+    base-uri 'self';
+  " />
+  <title>The Yoo Family</title>
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle' font-size='56'>🌳</text></svg>" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Supabase JS client (v2, UMD build). Exposes `window.supabase`. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- Public Supabase config — externalized (v4.56) so the CSP can forbid
+       inline scripts. Must load before app.js (it does: app.js is deferred). -->
+  <script src="config.js"></script>
+</head>
+<body>
+
+  <!-- ============== LOGIN ============== -->
+  <section id="login-view" class="auth-shell">
+    <div class="auth-bg" aria-hidden="true">
+      <div class="auth-bg-blob a"></div>
+      <div class="auth-bg-blob b"></div>
+      <div class="auth-bg-grain"></div>
+    </div>
+
+    <div class="auth-card">
+      <div class="auth-brand">
+        <svg class="auth-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <path d="M32 8c-3 6-3 10 0 14m0 0c-5-3-9-3-14 0m14 0c5-3 9-3 14 0M32 22v34M14 56h36" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+          <circle cx="32" cy="22" r="3.2" fill="currentColor" />
+        </svg>
+        <p class="auth-eyebrow">Family Archive</p>
+        <h1 class="auth-title">Welcome home.</h1>
+        <p class="auth-sub">Sign in to view the family tree, profiles, and shared history.</p>
+      </div>
+
+      <!-- v4.70: sign-in and sign-up are now SEPARATE forms. A single combined
+           form (with a "Sign up" toggle inside it) made 1Password/Safari treat
+           the password field as account-creation — offering "Use Suggested
+           Password" even when signing in with a saved login. Isolating sign-in
+           to its own form with NO account-creation controls lets managers read
+           it as a pure login and offer to fill the saved credential. Only one
+           form is visible at a time. -->
+      <form id="login-form" class="auth-form" autocomplete="on" novalidate>
+        <label class="field">
+          <span>Email</span>
+          <!-- autocomplete="username" (not "email") so managers pair the saved
+               login to the password field; type="email" still drives the
+               keyboard + validation. -->
+          <input name="email" type="email" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
+        <button class="btn btn-primary btn-lg" type="submit" id="btn-login-submit">Sign in</button>
+        <button class="btn btn-ghost" type="button" id="btn-show-signup">Need an account? Sign up</button>
+      </form>
+
+      <form id="signup-form" class="auth-form" autocomplete="on" novalidate hidden>
+        <label class="field">
+          <span>Email</span>
+          <input name="email" type="email" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <!-- new-password here: creating an account is exactly when a
+               suggested strong password IS the right prompt. -->
+          <input name="password" type="password" autocomplete="new-password" required />
+        </label>
+        <p id="signup-error" class="form-error" role="alert" aria-live="polite"></p>
+        <button class="btn btn-primary btn-lg" type="submit" id="btn-signup-submit">Create account</button>
+        <button class="btn btn-ghost" type="button" id="btn-show-login">Have an account? Sign in</button>
+
+        <details class="auth-help">
+          <summary>First time here?</summary>
+          <p>The first person to sign up becomes the admin automatically. After that, admins create accounts for the rest of the family.</p>
+          <p id="auth-import-row" hidden>
+            <button type="button" id="btn-import-local" class="link-btn">Import data from this browser</button>
+            <span class="muted small" style="display:block; margin-top:4px;">One-time: copies the family data already in this browser into the database.</span>
+          </p>
+        </details>
+      </form>
+    </div>
+  </section>
+
+
+  <!-- ============== APP SHELL ============== -->
+  <div id="app-view" hidden>
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="brand" id="brand-btn" type="button">
+          <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+            <path d="M32 8c-3 6-3 10 0 14m0 0c-5-3-9-3-14 0m14 0c5-3 9-3 14 0M32 22v34M14 56h36" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+            <circle cx="32" cy="22" r="3.2" fill="currentColor" />
+          </svg>
+          <div>
+            <span class="brand-eyebrow">Family</span>
+            <span class="brand-name">Archive</span>
+          </div>
+        </button>
+        <nav class="nav" role="tablist">
+          <button class="nav-tab" data-view="dashboard" data-admin-only role="tab">Dashboard</button>
+          <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
+          <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
+          <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
+          <button class="nav-tab" data-view="memories" role="tab">Memories</button>
+          <button class="nav-tab" data-view="mykids" data-admin-only role="tab">My Kids</button>
+          <button class="nav-tab" data-view="recipes" data-admin-only data-family-allowed role="tab">Recipes</button>
+          <button class="nav-tab" data-view="timecapsule" role="tab" hidden>Time Capsule</button>
+          <button class="nav-tab" data-view="stories" role="tab" hidden>Stories</button>
+          <button class="nav-tab" data-view="events" role="tab" id="nav-events" hidden>Events<span class="nav-badge" id="events-badge" hidden aria-label="pending invites"></span></button>
+          <button class="nav-tab" data-view="gifts" data-admin-only role="tab">Gifts</button>
+          <button class="nav-tab" data-view="admin" data-admin-only role="tab">Members</button>
+          <button class="nav-tab" data-view="vault" data-vault-only role="tab">Vault</button>
+          <button class="nav-tab" data-view="history" data-admin-only role="tab">History</button>
+        </nav>
+      </div>
+      <div class="topbar-right">
+        <div class="user-chip" id="user-chip">
+          <div class="user-chip-avatar" id="user-chip-avatar"></div>
+          <div class="user-chip-text">
+            <span id="user-chip-name"></span>
+            <span class="user-chip-role" id="user-chip-role"></span>
+          </div>
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+          <div class="user-menu" id="user-menu" hidden>
+            <button data-action="my-profile">My profile</button>
+            <button data-action="change-password">Change password</button>
+            <hr />
+            <button data-action="logout">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===== DASHBOARD VIEW (admin only) ===== -->
+    <!-- ===== DASHBOARD VIEW (v4.53) =====
+         Hybrid layout: the original day-to-day panels (clock + weather,
+         upcoming-60-days with filter chips, monthly gift totals, gift
+         tracker, grocery list) on top, followed by the live family
+         summary (memories, kids highlights, recipes, upcoming dates)
+         compiled from the last 90 days. The summary has no date
+         controls or print/copy actions — those moved out per user
+         request; the digest just renders. -->
+    <main id="view-dashboard" class="view view-dashboard" hidden>
+      <div class="container">
+        <div class="dash-hero">
+          <div class="dash-hero-text">
+            <p class="dash-eyebrow" id="dash-greeting">Good morning</p>
+            <h2><span class="page-emoji" data-page-emoji="dashboard"></span><span id="dash-title">Today at a glance</span></h2>
+          </div>
+          <div class="dash-clock" id="dash-clock">
+            <div class="dash-time" id="dash-time">—</div>
+            <div class="dash-date" id="dash-date">Las Vegas, NV</div>
+            <div class="dash-forecast" id="dash-forecast" aria-label="5-day forecast">
+              <div class="dash-forecast-loading muted small">loading forecast…</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-grid">
+          <section class="panel dash-panel dash-upcoming">
+            <header class="dash-panel-head">
+              <h3>Upcoming · next 60 days</h3>
+              <div class="dash-filter-chips" id="dash-upcoming-filters">
+                <button type="button" class="dash-filter-chip is-active" data-kind="all">All</button>
+                <button type="button" class="dash-filter-chip" data-kind="birthday">Birthdays</button>
+                <button type="button" class="dash-filter-chip" data-kind="anniversary">Anniversaries</button>
+                <button type="button" class="dash-filter-chip" data-kind="event">Events</button>
+                <button type="button" class="dash-filter-chip" data-kind="holiday">Holidays</button>
+                <button type="button" class="dash-filter-chip" data-kind="reminder">Reminders</button>
+              </div>
+            </header>
+            <div id="dash-upcoming-list" class="dash-upcoming-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-month-totals">
+            <header class="dash-panel-head">
+              <h3 id="dash-month-title">This month's gifts</h3>
+              <span class="muted small">Logged so far</span>
+            </header>
+            <div class="dash-money-grid">
+              <div class="dash-money-cell received">
+                <span class="dash-money-label">Received</span>
+                <span class="dash-money-amount" id="dash-month-received">$0.00</span>
+              </div>
+              <div class="dash-money-cell given">
+                <span class="dash-money-label">Given</span>
+                <span class="dash-money-amount" id="dash-month-given">$0.00</span>
+              </div>
+              <div class="dash-money-cell net">
+                <span class="dash-money-label">Net</span>
+                <span class="dash-money-amount" id="dash-month-net">$0.00</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel dash-panel dash-gifts">
+            <header class="dash-panel-head">
+              <h3>Gift tracker</h3>
+              <button class="btn btn-secondary btn-sm" id="dash-add-gift">+ Log a gift</button>
+            </header>
+            <p class="muted small" style="margin: 0 0 10px;">Mark each gift as purchased and sent so nothing slips through.</p>
+            <div id="dash-gifts-list" class="dash-gifts-list"></div>
+          </section>
+
+          <section class="panel dash-panel dash-grocery">
+            <header class="dash-panel-head">
+              <h3>Grocery list</h3>
+              <span class="muted small">Shared with family · realtime</span>
+            </header>
+            <form id="dash-grocery-form" class="dash-grocery-add">
+              <input id="dash-grocery-input" type="text" placeholder="Add an item…" maxlength="80" autocomplete="off" />
+              <button type="submit" class="btn btn-primary btn-sm">Add</button>
+            </form>
+            <ul id="dash-grocery-list" class="dash-grocery-list"></ul>
+          </section>
+        </div>
+
+        <section class="panel newsletter-preview-panel">
+          <header class="panel-head">
+            <h3>Family summary · last 90 days</h3>
+          </header>
+          <article id="newsletter-preview" class="newsletter-preview"></article>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== REMINDER MODAL (Calendar-only recurring items) ===== -->
+    <div id="reminder-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="reminder-modal-title">New calendar reminder</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="reminder-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field">
+              <span>Icon</span>
+              <div class="emoji-input">
+                <input name="icon" id="reminder-icon" placeholder="🔔" maxlength="4" value="🔔" />
+                <button type="button" class="emoji-input-browse" id="reminder-icon-browse" data-emoji-trigger title="Browse emojis">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="1.4"/><circle cx="6" cy="7" r=".9" fill="currentColor"/><circle cx="10" cy="7" r=".9" fill="currentColor"/><path d="M5.5 10c.6 1 1.5 1.5 2.5 1.5s1.9-.5 2.5-1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+            </label>
+            <label class="field"><span>Title *</span><input name="title" required maxlength="80" placeholder="Trash day, Bills due, Yoga class…" /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Start date *</span><input name="startDate" type="date" required /></label>
+            <label class="field"><span>Color</span>
+              <select name="color">
+                <option value="amber">Amber</option>
+                <option value="teal">Teal</option>
+                <option value="rose">Rose</option>
+                <option value="indigo">Indigo</option>
+                <option value="lime">Lime</option>
+              </select>
+            </label>
+          </div>
+          <label class="field"><span>Repeats</span>
+            <select name="recurrence" id="reminder-recurrence">
+              <option value="none">Doesn't repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Every 2 weeks</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          <div id="reminder-custom" class="reminder-custom" hidden>
+            <div class="reminder-custom-row">
+              <span class="muted small">Repeat every</span>
+              <input name="customInterval" id="reminder-custom-interval" type="number" min="1" max="365" value="1" />
+              <select name="customUnit" id="reminder-custom-unit">
+                <option value="day">day(s)</option>
+                <option value="week">week(s)</option>
+                <option value="month">month(s)</option>
+                <option value="year">year(s)</option>
+              </select>
+            </div>
+            <div class="reminder-custom-days" id="reminder-custom-days" hidden>
+              <span class="muted small">On</span>
+              <div class="dow-row" role="group" aria-label="Days of week">
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="0"/><span>S</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="1"/><span>M</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="2"/><span>T</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="3"/><span>W</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="4"/><span>T</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="5"/><span>F</span></label>
+                <label class="dow-chip"><input type="checkbox" name="customDays" value="6"/><span>S</span></label>
+              </div>
+            </div>
+          </div>
+          <label class="field"><span>Notes</span><textarea name="notes" rows="2"></textarea></label>
+          <label class="field-check">
+            <input type="checkbox" name="hideFromDashboard" id="reminder-hide-dashboard" />
+            <span>Hide from Dashboard</span>
+            <small class="muted">Reminder still shows on the Calendar — just keeps low-signal items like trash day off the upcoming list.</small>
+          </label>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save reminder</button>
+            <button class="btn btn-danger-ghost" type="button" id="reminder-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="appt-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="appt-title">
+        <header class="modal-head"><h3 id="appt-title">Add appointment</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+        </header>
+        <form id="appt-form" class="modal-body">
+          <label class="field"><span>Title</span><input name="name" required autocomplete="off" placeholder="Dentist, haircut, …" /></label>
+          <div class="grid-2">
+            <label class="field"><span>Date</span><input name="date" type="date" required /></label>
+            <label class="field"><span>Start</span><input name="startTime" type="time" required /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>End (optional)</span><input name="endTime" type="time" /></label>
+            <label class="field"><span>Location</span><input name="location" autocomplete="off" /></label>
+          </div>
+          <label class="field"><span>Notes</span><textarea name="description" rows="2"></textarea></label>
+          <p class="form-error" id="appt-error" role="alert"></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save appointment</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== TREE VIEW ===== -->
+    <main id="view-tree" class="view view-tree">
+      <div class="tree-toolbar">
+        <div class="tree-toolbar-group">
+          <button class="icon-btn" id="btn-zoom-out" title="Zoom out (−)">
+            <svg viewBox="0 0 16 16"><path d="M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-zoom-reset" title="Reset view">
+            <span id="zoom-label">100%</span>
+          </button>
+          <button class="icon-btn" id="btn-zoom-in" title="Zoom in (+)">
+            <svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="btn-fit" title="Fit to screen">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-auto-layout" title="Auto-arrange">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 2v4M8 10v4M2 8h4M10 8h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-toggle-edit-layout" data-admin-only title="Unlock layout — drag cards manually">
+            <svg id="edit-layout-icon-locked" viewBox="0 0 16 16" fill="none"><path d="M4 7V5a4 4 0 018 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="10.5" r="1" fill="currentColor"/></svg>
+            <svg id="edit-layout-icon-unlocked" viewBox="0 0 16 16" fill="none" hidden><path d="M4 7V5a4 4 0 017.6-1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="10.5" r="1" fill="currentColor"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-expand-all" title="Expand all">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 6l5-3 5 3M3 10l5 3 5-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-collapse-all" title="Collapse all">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 5l5 3 5-3M3 11l5-3 5 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="btn-theme" title="Theme colors" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="1" opacity=".5"/></svg>
+            <span class="theme-swatch" id="theme-swatch" aria-hidden="true"></span>
+          </button>
+          <div class="theme-popover" id="theme-popover" hidden>
+            <p class="popover-title">Generation colors</p>
+            <p class="muted small">Each generation gets a hue derived from this color.</p>
+            <input type="color" id="theme-color" />
+            <div class="theme-presets">
+              <button data-hue="205" class="preset" style="--p: hsl(205 55% 52%)" title="Ocean"></button>
+              <button data-hue="155" class="preset" style="--p: hsl(155 45% 45%)" title="Forest"></button>
+              <button data-hue="25"  class="preset" style="--p: hsl(25 70% 55%)"  title="Copper"></button>
+              <button data-hue="285" class="preset" style="--p: hsl(285 40% 55%)" title="Plum"></button>
+              <button data-hue="0"   class="preset" style="--p: hsl(0 60% 55%)"   title="Rose"></button>
+            </div>
+            <p class="muted small">Preview</p>
+            <div class="theme-preview" id="theme-preview"></div>
+          </div>
+        </div>
+        <div class="tree-toolbar-group">
+          <span class="page-emoji page-emoji-inline" data-page-emoji="tree" title="Pick an emoji for Family Tree"></span>
+          <select id="tree-filter-group" class="tree-filter" title="Show only members of one group" aria-label="Filter by group">
+            <option value="">All groups</option>
+          </select>
+          <button class="icon-btn tree-filter-btn" id="btn-filter-myfamily" title="Show just my family (parents, spouse, kids, siblings & their kids, grandparents, grandchildren)" aria-pressed="false">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 14s-5-3-5-7a3 3 0 0 1 5-2 3 3 0 0 1 5 2c0 4-5 7-5 7z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+            <span class="myfam-label">My family</span>
+          </button>
+          <input id="tree-search" class="tree-search" type="search" placeholder="Search family…" />
+        </div>
+      </div>
+
+      <div id="tree-canvas" class="tree-canvas">
+        <div id="tree-world" class="tree-world">
+          <svg id="tree-edges" class="tree-edges" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="tree-nodes" class="tree-nodes"></div>
+        </div>
+        <div id="tree-empty" class="tree-empty" hidden>
+          <div class="tree-empty-card">
+            <h3>No family members yet</h3>
+            <p>Start the tree by adding the first person.</p>
+            <button class="btn btn-primary" id="btn-add-first" data-admin-only>+ Add the first member</button>
+          </div>
+        </div>
+        <!-- v4.69: connection legend + spotlight hint. Pure presentation — the
+             lines mirror the .tree-edges stroke styles exactly. -->
+        <div class="tree-legend" aria-hidden="true">
+          <div class="tree-legend-hint">Hover a card to trace their connections</div>
+          <div class="tree-legend-rows">
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-family"/></svg>Parent → child</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-spouse"/></svg>Married</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-ex"/></svg>Past marriage</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-sibling"/></svg>Siblings</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== MY FAMILY VIEW ===== -->
+    <main id="view-myfamily" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="myfamily"></span><span id="myfamily-title">My Family</span></h2>
+            <p id="myfamily-sub" class="muted">Your parents, spouse, and children at a glance.</p>
+          </div>
+          <div class="myfamily-tools" id="myfamily-tools" data-admin-only>
+            <label class="field" style="flex-direction:row; align-items:center; gap:8px;">
+              <span style="font-weight:600;">Viewing from</span>
+              <select class="input" id="myfamily-picker" aria-label="Pick a family member"></select>
+            </label>
+          </div>
+        </div>
+        <div class="myfamily-stage" id="myfamily-stage">
+          <div class="myfamily-empty" id="myfamily-empty" hidden></div>
+          <div class="myfamily-world" id="myfamily-world">
+            <svg id="myfamily-edges" class="myfamily-edges" xmlns="http://www.w3.org/2000/svg"></svg>
+            <div id="myfamily-nodes" class="myfamily-nodes"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== HISTORY VIEW (admin only) ===== -->
+    <main id="view-history" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="history"></span>Change history</h2>
+            <p>Every meaningful change shipped to this site, newest first.</p>
+          </div>
+          <div class="history-toolbar">
+            <span class="muted small">Current version:</span>
+            <span class="history-current-version" id="history-current-version">—</span>
+          </div>
+        </div>
+
+        <!-- v4.33: Storage diagnostic + photo compression. Admin-only;
+             surfaces a per-area byte breakdown of state and lets the user
+             recompress all photos in one pass. -->
+        <section class="panel storage-panel" data-admin-only>
+          <header class="panel-head">
+            <h3>💾 Database storage</h3>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button class="btn btn-ghost btn-sm" id="btn-storage-refresh">Refresh</button>
+              <button class="btn btn-secondary btn-sm" id="btn-storage-compress">Compress all photos</button>
+            </div>
+          </header>
+          <div class="panel-body">
+            <p class="muted small" style="margin-top:0;">
+              Approximate sizes as the browser sees them, computed from the in-memory state.
+              Actual on-disk usage in Supabase will be larger (TOAST bloat, indexes, realtime overhead) —
+              run <code>supabase/queries/storage-breakdown.sql</code> in the SQL Editor for the authoritative numbers.
+            </p>
+            <div id="storage-summary" class="storage-summary"></div>
+            <h4 class="storage-section-title">By area</h4>
+            <div id="storage-area-table" class="storage-table"></div>
+            <h4 class="storage-section-title">Vault sub-sections</h4>
+            <div id="storage-vault-table" class="storage-table"></div>
+            <h4 class="storage-section-title">Photo footprint</h4>
+            <div id="storage-photo-table" class="storage-table"></div>
+          </div>
+        </section>
+
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </main>
+
+    <!-- ===== MY KIDS VIEW (admin only — Wave 2 of v4.39 family-portal expansion) =====
+         Per-kid growing-up archive. The kid roster auto-derives from members
+         whose age < 18 at render time (no separate flag). Each kid has four
+         tabs: Milestones / School / Art / Letters. Entries reference photos
+         by { bucket, path } pointers into Supabase Storage (family-photos
+         bucket) so the JSONB archive row stays small. -->
+    <main id="view-mykids" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="mykids"></span>My Kids</h2>
+            <p id="mykids-page-sub">A growing-up archive for each kid in the family.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-mykids-back" hidden>← All kids</button>
+            <button class="btn btn-secondary btn-sm" id="btn-mykids-manage" data-admin-only>Manage kids</button>
+          </div>
+        </div>
+
+        <!-- Kid roster: shown when no kid is selected -->
+        <section id="mykids-roster" class="panel" hidden>
+          <header class="panel-head"><h3>Pick a kid</h3></header>
+          <div id="mykids-roster-grid" class="mykids-roster-grid"></div>
+          <div id="mykids-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No kids yet</h3>
+              <p>Click <strong>Pick my kids</strong> below to choose which family members appear here.</p>
+              <button class="btn btn-primary" id="btn-mykids-pick" data-admin-only>Pick my kids</button>
+              <p class="muted small" style="margin-top:12px;">
+                Tip: if you set parent links in the Family Tree (each kid has you and your spouse as parents), they'll auto-appear here too — no picker needed.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Per-kid detail: shown when a kid is selected -->
+        <section id="mykids-detail" class="panel" hidden>
+          <header class="panel-head mykids-kid-head">
+            <div class="mykids-kid-head-main">
+              <div class="mykids-kid-avatar" id="mykids-kid-avatar"></div>
+              <div>
+                <h3 id="mykids-kid-name">—</h3>
+                <p class="muted small" id="mykids-kid-sub">—</p>
+              </div>
+            </div>
+          </header>
+          <div class="mykids-tabs" role="tablist">
+            <button class="mykids-tab is-active" data-mykids-tab="milestones" role="tab">Milestones</button>
+            <button class="mykids-tab"           data-mykids-tab="school"     role="tab">School</button>
+            <button class="mykids-tab"           data-mykids-tab="art"        role="tab">Art</button>
+            <button class="mykids-tab"           data-mykids-tab="letters"    role="tab">Letters</button>
+            <button class="mykids-tab"           data-mykids-tab="capsule"    role="tab">Time Capsule</button>
+          </div>
+          <div class="mykids-tab-actions">
+            <button class="btn btn-primary btn-sm" id="btn-mykids-add" data-admin-only>+ Add entry</button>
+          </div>
+          <div id="mykids-entries" class="mykids-entries"></div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== RECIPES VIEW (v4.44 — Wave 3a) =====
+         Admin-edit, anyone-authenticated-view family recipe book. Grid
+         of recipe cards on the index; click a card to see the full
+         recipe. Photo + ingredients + instructions + notes + optional
+         link + optional "from this person" attribution.
+         Photos live in the family-photos bucket (Wave 1 storage). -->
+    <main id="view-recipes" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="recipes"></span>Recipes</h2>
+            <p id="recipes-page-sub">The family cookbook — bulgogi, pho, banchan, anything worth keeping.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-recipes-back" hidden>← All recipes</button>
+            <button class="btn btn-primary btn-sm" id="btn-recipe-add" data-admin-only hidden>+ Add recipe</button>
+          </div>
+        </div>
+
+        <!-- Grid: shown when no recipe is selected -->
+        <section id="recipes-grid-panel" class="panel" hidden>
+          <header class="panel-head">
+            <h3 id="recipes-grid-title">All recipes</h3>
+            <div class="panel-head-tools">
+              <input id="recipes-search" class="input" type="search" placeholder="Search by name, category, or person…" autocomplete="off" />
+            </div>
+          </header>
+          <!-- v4.46: category filter tab strip. Auto-built from the unique
+               categories present on saved recipes; "All" is always first
+               and is the default selection. -->
+          <div id="recipes-category-tabs" class="recipes-category-tabs" role="tablist"></div>
+          <div id="recipes-grid" class="recipes-grid"></div>
+          <div id="recipes-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No recipes yet</h3>
+              <p>Save the dishes that show up at every holiday — they'll live here for the kids to read someday.</p>
+              <button class="btn btn-primary" id="btn-recipe-add-first" data-admin-only>+ Add your first recipe</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Detail: shown when a recipe is selected -->
+        <section id="recipe-detail-panel" class="panel" hidden>
+          <div id="recipe-detail"></div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== RECIPE MODAL (add / edit) =====
+         Photo (single) → CropModal pipeline. Instructions + Notes are
+         rich-text. "From" is a single-select that lists members + every
+         friend household person, plus a free-text fallback for non-people
+         sources ("Korean cookbook"). -->
+    <div id="recipe-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="recipe-modal-title">
+        <header class="modal-head">
+          <h3 id="recipe-modal-title">Add recipe</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="recipe-form" class="modal-body">
+          <label class="field"><span>Recipe name *</span><input name="name" required placeholder="e.g. Mom's bulgogi" /></label>
+          <div class="grid-2">
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🥢</span>Category <span class="muted small">(optional)</span></span>
+              <input name="category" placeholder="Korean · Vietnamese · Dessert · Soup …" list="recipe-categories" autocomplete="off" />
+              <datalist id="recipe-categories"></datalist>
+            </label>
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🔗</span>Link <span class="muted small">(optional)</span></span>
+              <input name="link" type="url" placeholder="https://…" />
+            </label>
+          </div>
+          <div class="field">
+            <span><span class="kv-emoji" aria-hidden="true">👤</span>From <span class="muted small">(pick a person)</span></span>
+            <select name="fromRef" id="recipe-from-ref" class="input">
+              <option value="">— None —</option>
+            </select>
+          </div>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">✍️</span>Or describe in text <span class="muted small">(used when no person fits — e.g. "Korean cookbook")</span></span>
+            <input name="fromText" placeholder="e.g. Grandma Park" />
+          </label>
+          <div class="field">
+            <span>Photo <span class="muted small">(one)</span></span>
+            <div class="photo-row">
+              <div class="photo-preview recipe-photo-preview" id="recipe-photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="recipe-photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="recipe-photo-clear">Clear photo</button>
+              </div>
+            </div>
+          </div>
+          <label class="field">
+            <span>Ingredients <span class="muted small">(one per line)</span></span>
+            <textarea name="ingredients" rows="6" placeholder="1 lb ribeye, thinly sliced
+2 tbsp soy sauce
+1 tbsp brown sugar"></textarea>
+          </label>
+          <div class="field">
+            <span>Instructions *</span>
+            <div class="rich-text-editor" id="recipe-instructions-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Instructions formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="recipe-instructions-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="Step-by-step cooking instructions."></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Notes <span class="muted small">(optional — tips, substitutions, who this is best for)</span></span>
+            <div class="rich-text-editor" id="recipe-notes-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Notes formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="recipe-notes-emoji-btn" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="Substitutions, who this is best for, tips."></div>
+            </div>
+          </div>
+          <p class="form-error" id="recipe-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="recipe-submit">Save recipe</button>
+            <button class="btn btn-danger-ghost" type="button" id="recipe-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== MEMORIES WALL (v4.45 — Wave 3b) =====
+         Reverse-chrono family feed. Admin-only post; everyone
+         authenticated views. Each post: date + rich-text body + up to
+         6 photos + multi-tag of people (members or friend household
+         persons). Photos in family-photos bucket (Wave 1 storage). -->
+    <!-- ===== MEMORIES VIEW (v4.58) — one page, two sub-tabs: Posts + Albums -->
+    <main id="view-memories" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="memories"></span>Memories</h2>
+            <p id="memories-subtitle">Moments worth holding on to — quick notes, a few photos, who was there.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-memory-add">+ New post</button>
+            <button class="btn btn-primary btn-sm" id="btn-album-add" hidden>+ New album</button>
+          </div>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="member-tabs" role="tablist">
+          <button class="member-tab is-active" data-mem-subtab="posts"  role="tab">Posts</button>
+          <button class="member-tab"           data-mem-subtab="albums" role="tab">Albums</button>
+        </div>
+
+        <!-- Posts sub-panel (the feed) -->
+        <section id="memories-subpanel" class="panel memories-panel">
+          <header class="panel-head">
+            <div>
+              <h3 id="memories-list-title">All memories</h3>
+            </div>
+            <div class="panel-head-tools">
+              <input id="memories-search" class="input" type="search" placeholder="Search posts…" autocomplete="off" />
+            </div>
+          </header>
+          <!-- v4.69: filter the feed by tagged family member. Chips are built
+               from whoever is actually tagged in posts, so it never shows
+               people with nothing to see. -->
+          <div id="memories-people-filter" class="mem-people-filter" hidden></div>
+          <div id="memories-feed" class="memories-feed"></div>
+          <div id="memories-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No memories yet</h3>
+              <p>The first post gets the wall started. Pictures, a sentence about what happened, the people who were there.</p>
+              <button class="btn btn-primary" id="btn-memory-add-first">+ Add the first memory</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Albums sub-panel (the gallery) -->
+        <div id="albums-subpanel" hidden>
+          <section id="albums-gallery" class="albums-gallery"></section>
+          <div id="albums-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No albums yet</h3>
+              <p>Start the first one — give it a name and add a few photos.</p>
+              <button class="btn btn-primary" id="btn-album-add-first">+ Create the first album</button>
+            </div>
+          </div>
+          <!-- Album detail (hidden until an album is opened) -->
+          <section id="album-detail" class="album-detail" hidden></section>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== MEMORY POST MODAL (v4.45) -->
+    <div id="memory-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="memory-modal-title">
+        <header class="modal-head">
+          <h3 id="memory-modal-title">New post</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="memory-form" class="modal-body">
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Date *</span><input name="date" type="date" required /></label>
+          <div class="field">
+            <span>What happened</span>
+            <div class="rich-text-editor" id="memory-body-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Post formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="memory-body-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="A few sentences. Who was there, what made it memorable."></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Tag people <span class="muted small">(optional — family or friends)</span></span>
+            <div id="memory-tag-chips" class="memory-tag-chips" aria-live="polite"></div>
+            <select id="memory-tag-picker" class="input">
+              <option value="">+ Add person to tag…</option>
+            </select>
+          </div>
+          <div class="field" id="memory-photos-wrap">
+            <span>Photos <span class="muted small">(up to 6)</span></span>
+            <div class="mykids-photo-grid" id="memory-photo-grid"></div>
+            <label class="photo-dropzone" id="memory-dropzone">
+              <input type="file" accept="image/*" id="memory-photo-input" hidden multiple />
+              <span class="photo-dropzone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/></svg>
+              </span>
+              <span class="photo-dropzone-text">Drag photos here, or <span class="photo-dropzone-link">click to choose</span></span>
+            </label>
+          </div>
+          <p class="form-error" id="memory-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="memory-submit">Save post</button>
+            <button class="btn btn-danger-ghost" type="button" id="memory-delete" hidden>Delete post</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== ALBUM MODAL (v4.58) -->
+    <div id="album-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="album-modal-title">
+        <header class="modal-head">
+          <h3 id="album-modal-title">New album</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="album-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" type="text" maxlength="120" required placeholder="e.g. Summer 2025 Trip" /></label>
+          <label class="field"><span>Date <span class="muted small">(optional)</span></span><input name="event_date" type="date" /></label>
+          <label class="field"><span>Description <span class="muted small">(optional)</span></span><textarea name="description" rows="3" maxlength="2000" placeholder="A sentence about this album."></textarea></label>
+          <p class="form-error" id="album-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="album-submit">Create album</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== TIME CAPSULE VIEW (v4.47 — Wave 4a) =====
+         Sealed letters addressed to a family member, locked until the
+         unlock date. Admin writes; recipient sees a sealed envelope
+         card until the unlock date passes (admin can override and
+         reveal early — admin override policy). -->
+    <main id="view-timecapsule" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="timecapsule"></span>Time Capsule</h2>
+            <p id="timecapsule-page-sub">Letters written today, sealed until a chosen date.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-tcp-add" data-admin-only>+ New capsule</button>
+          </div>
+        </div>
+
+        <section class="panel">
+          <header class="panel-head">
+            <h3>Opened — ready to read</h3>
+          </header>
+          <div id="tcp-opened-list" class="tcp-list"></div>
+          <p class="muted small" id="tcp-opened-empty" style="padding:0 18px 18px;" hidden>No opened capsules yet.</p>
+        </section>
+
+        <section class="panel" style="margin-top:18px;">
+          <header class="panel-head">
+            <h3>Sealed — waiting</h3>
+          </header>
+          <div id="tcp-sealed-list" class="tcp-list"></div>
+          <p class="muted small" id="tcp-sealed-empty" style="padding:0 18px 18px;" hidden>No sealed capsules.</p>
+        </section>
+
+        <div id="tcp-empty" class="tree-empty" hidden>
+          <div class="tree-empty-card">
+            <h3>No capsules yet</h3>
+            <p>Write a letter to one of your kids, your spouse, or anyone in the family. Pick the date when they can read it. It stays sealed until then.</p>
+            <button class="btn btn-primary" id="btn-tcp-add-first" data-admin-only>+ Write your first capsule</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== TIME CAPSULE MODAL (write / edit) ===== -->
+    <div id="tcp-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="tcp-modal-title">
+        <header class="modal-head">
+          <h3 id="tcp-modal-title">New capsule</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="tcp-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">📨</span>For *</span>
+              <select name="recipientRef" id="tcp-recipient" class="input" required>
+                <option value="">— Pick recipient —</option>
+              </select>
+            </label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Unlock on *</span><input name="unlockDate" type="date" required /></label>
+          </div>
+          <label class="field"><span>Title <span class="muted small">(optional)</span></span><input name="title" placeholder="e.g. On your 18th birthday" /></label>
+          <div class="field">
+            <span>Letter *</span>
+            <div class="rich-text-editor" id="tcp-body-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Letter formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="tcp-body-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="Write what you want them to read on the day this opens."></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Photo <span class="muted small">(optional, one)</span></span>
+            <div class="photo-row">
+              <div class="photo-preview" id="tcp-photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="tcp-photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="tcp-photo-clear">Clear photo</button>
+              </div>
+            </div>
+          </div>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">🔗</span>Link <span class="muted small">(optional — e.g. a song or a Google Doc)</span></span>
+            <input name="link" type="url" placeholder="https://…" />
+          </label>
+          <p class="form-error" id="tcp-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="tcp-submit">Seal capsule</button>
+            <button class="btn btn-danger-ghost" type="button" id="tcp-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== STORIES VIEW (v4.48 — Wave 4b) =====
+         Voice + video stories. Admin uploads/records/embeds; everyone
+         authenticated plays. Each story is either an uploaded media file
+         (stored in family-audio or family-video Storage bucket) or an
+         embedded URL (YouTube/Vimeo recognized; everything else opens as
+         a "Watch link" chip to avoid iframe XSS surface). -->
+    <main id="view-stories" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="stories"></span>Stories</h2>
+            <p>Family stories worth keeping — Grandma's recipes told out loud, kids saying "happy birthday," old vacation clips.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-story-add" data-admin-only>+ New story</button>
+          </div>
+        </div>
+
+        <section class="panel">
+          <header class="panel-head">
+            <h3 id="stories-list-title">All stories</h3>
+            <div class="panel-head-tools">
+              <input id="stories-search" class="input" type="search" placeholder="Search by title or tagged person…" autocomplete="off" />
+            </div>
+          </header>
+          <div id="stories-grid" class="stories-grid"></div>
+          <div id="stories-empty" class="tree-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No stories yet</h3>
+              <p>Record an audio story right from your browser, upload a video, or paste a YouTube/Vimeo link. Each story can be tagged with who's in it.</p>
+              <button class="btn btn-primary" id="btn-story-add-first" data-admin-only>+ Add the first story</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== STORY MODAL (v4.48) ===== -->
+    <div id="story-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="story-modal-title">
+        <header class="modal-head">
+          <h3 id="story-modal-title">New story</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="story-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" required placeholder="e.g. Grandma on how she met Grandpa" /></label>
+          <label class="field"><span>Description <span class="muted small">(optional)</span></span><textarea name="description" rows="3" placeholder="Where this was recorded, what it's about, anything worth remembering."></textarea></label>
+          <!-- Source mode pills: Record audio · Upload audio · Upload video · Embed URL -->
+          <div class="field">
+            <span>Source *</span>
+            <div class="story-source-pills" role="tablist" aria-label="Story source">
+              <button type="button" class="story-pill is-active" data-source="record-audio" role="tab">🎤 Record audio</button>
+              <button type="button" class="story-pill" data-source="upload-audio" role="tab">📁 Upload audio</button>
+              <button type="button" class="story-pill" data-source="upload-video" role="tab">🎬 Upload video</button>
+              <button type="button" class="story-pill" data-source="embed-url"    role="tab">🔗 Embed link</button>
+            </div>
+          </div>
+
+          <!-- Record-audio panel: MediaRecorder. -->
+          <div class="story-source-panel" data-panel="record-audio">
+            <div class="story-recorder">
+              <button type="button" class="btn btn-primary" id="story-rec-toggle">Start recording</button>
+              <span class="story-rec-status" id="story-rec-status">Click to start. 5-minute max.</span>
+            </div>
+            <audio id="story-rec-preview" controls preload="metadata" hidden></audio>
+            <p class="muted small" style="margin-top:6px;">Microphone permission is required the first time.</p>
+          </div>
+
+          <!-- Upload-audio panel -->
+          <div class="story-source-panel" data-panel="upload-audio" hidden>
+            <input type="file" id="story-audio-input" accept="audio/*" />
+            <audio id="story-audio-preview" controls preload="metadata" hidden></audio>
+          </div>
+
+          <!-- Upload-video panel -->
+          <div class="story-source-panel" data-panel="upload-video" hidden>
+            <input type="file" id="story-video-input" accept="video/*" />
+            <video id="story-video-preview" controls preload="metadata" hidden style="max-width:100%; border-radius:10px; margin-top:8px;"></video>
+            <p class="muted small" style="margin-top:6px;">Max 100&nbsp;MB per clip.</p>
+          </div>
+
+          <!-- Embed URL panel -->
+          <div class="story-source-panel" data-panel="embed-url" hidden>
+            <input id="story-embed-url" type="url" class="input" placeholder="https://youtube.com/… · https://vimeo.com/…" />
+            <p class="muted small" id="story-embed-status" style="margin-top:6px;"></p>
+          </div>
+
+          <p class="muted small" id="story-upload-status" style="margin: 6px 0 0;"></p>
+
+          <label class="field" style="margin-top:14px;">
+            <span><span class="kv-emoji" aria-hidden="true">📅</span>Date recorded <span class="muted small">(optional)</span></span>
+            <input name="recordedDate" type="date" />
+          </label>
+          <div class="field">
+            <span>Tag people <span class="muted small">(optional)</span></span>
+            <div id="story-tag-chips" class="memory-tag-chips" aria-live="polite"></div>
+            <select id="story-tag-picker" class="input">
+              <option value="">+ Add person to tag…</option>
+            </select>
+          </div>
+          <p class="form-error" id="story-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="story-submit">Save story</button>
+            <button class="btn btn-danger-ghost" type="button" id="story-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== STORY PLAYER MODAL (v4.48) ===== -->
+    <div id="story-player-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="story-player-title">
+        <header class="modal-head">
+          <h3 id="story-player-title">Story</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div id="story-player-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <!-- ===== MY KIDS PICKER MODAL (v4.42) =====
+         Lets the admin pick exactly which family members appear on the
+         My Kids roster. Selected ids land in state.myKidsRoster, which
+         overrides the auto-walk-from-parentIds logic. -->
+    <div id="mykids-picker-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mykids-picker-title">
+        <header class="modal-head">
+          <h3 id="mykids-picker-title">Pick my kids</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="mykids-picker-form" class="modal-body">
+          <p class="muted small" style="margin: 0 0 12px;">
+            Check every family member whose growing-up archive should appear on the My Kids page. Cousins, nephews, and other relatives stay off the page unless you check them here.
+          </p>
+          <input id="mykids-picker-search" class="input" type="search" placeholder="Search by name…" autocomplete="off" />
+          <div id="mykids-picker-list" class="mykids-picker-list"></div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save kids</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== ENTRY EDITOR MODAL (Wave 2) =====
+         Used for adding / editing one entry across all four sections.
+         The section context determines which fields are shown (e.g.
+         Letters hides the photos block since they're written, not photo
+         entries). -->
+    <div id="mykids-entry-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mykids-entry-title">
+        <header class="modal-head">
+          <h3 id="mykids-entry-title">Add entry</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="mykids-entry-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📅</span>Date</span><input name="date" type="date" required /></label>
+            <label class="field" id="mykids-school-year-wrap" hidden><span>School year</span><input name="schoolYear" placeholder="e.g. 2025-26 · 1st grade" /></label>
+          </div>
+          <label class="field">
+            <span>Title</span>
+            <div class="title-with-emoji">
+              <input name="title" placeholder="e.g. First day of kindergarten" required />
+              <button type="button" class="btn btn-ghost btn-sm title-emoji-btn" id="mykids-title-emoji" data-emoji-trigger title="Insert emoji" aria-label="Insert emoji into title">😊</button>
+            </div>
+          </label>
+          <!-- v4.41: link field shown only for Art + Letters tabs (toggled in JS). -->
+          <label class="field" id="mykids-link-wrap" hidden>
+            <span><span class="kv-emoji" aria-hidden="true">🔗</span>Link <span class="muted small">(optional — Google Doc, photo album, etc.)</span></span>
+            <input name="link" type="url" placeholder="https://…" />
+          </label>
+          <!-- v4.41: Notes is now a rich-text editor. The hidden textarea
+               keeps form submission semantics + acts as the source of truth
+               on save (we sync HTML from the contenteditable into it). -->
+          <div class="field">
+            <span>Notes</span>
+            <div class="rich-text-editor" id="mykids-notes-editor">
+              <div class="rt-toolbar" role="toolbar" aria-label="Notes formatting">
+                <button type="button" class="rt-btn" data-rt-cmd="bold"             title="Bold (Ctrl+B)"><b>B</b></button>
+                <button type="button" class="rt-btn" data-rt-cmd="italic"           title="Italic (Ctrl+I)"><i>I</i></button>
+                <button type="button" class="rt-btn" data-rt-cmd="underline"        title="Underline (Ctrl+U)"><u>U</u></button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+                <button type="button" class="rt-btn" data-rt-cmd="createLink"        title="Insert link">🔗</button>
+                <span class="rt-sep" aria-hidden="true"></span>
+                <button type="button" class="rt-btn" data-rt-cmd="emoji"             title="Insert emoji" id="mykids-notes-emoji" data-emoji-trigger>😊</button>
+              </div>
+              <div class="rt-surface" contenteditable="true" data-rt-surface aria-multiline="true" role="textbox" data-placeholder="What happened, who was there, anything worth remembering."></div>
+              <textarea name="body" id="mykids-body-mirror" hidden></textarea>
+            </div>
+          </div>
+          <div class="field" id="mykids-photos-wrap">
+            <span>Photos <span class="muted small">(up to 6)</span></span>
+            <div class="mykids-photo-grid" id="mykids-photo-grid"></div>
+            <label class="btn btn-secondary btn-sm" id="mykids-photo-add-label">
+              + Add photo
+              <input type="file" accept="image/*" id="mykids-photo-input" hidden multiple />
+            </label>
+            <p class="muted small" id="mykids-photo-status" style="margin: 6px 0 0;"></p>
+          </div>
+          <p class="form-error" id="mykids-entry-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="mykids-entry-submit">Save entry</button>
+            <button class="btn btn-danger-ghost" type="button" id="mykids-entry-delete" hidden>Delete entry</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== ADMIN VIEW (Members) =====
+         v4.35: now three-tabbed — Family, Friends, All. Family tab keeps the
+         existing groups sidebar + members table/cards unchanged. Friends tab
+         shows households as expandable list rows. All tab is a flat,
+         export-friendly union of every person in either dataset. -->
+    <main id="view-admin" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="admin"></span>Members</h2>
+            <p id="admin-page-sub">Manage members, groups, and accounts.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-sm" id="btn-friend-add" data-admin-only hidden>+ Add Friend</button>
+            <button class="btn btn-secondary" id="btn-admin-export">Export to Excel</button>
+          </div>
+        </div>
+
+        <div class="member-tabs" role="tablist">
+          <button class="member-tab is-active" data-member-tab="family"  role="tab">Family</button>
+          <button class="member-tab"           data-member-tab="friends" role="tab">Friends</button>
+          <button class="member-tab"           data-member-tab="all"     role="tab">All</button>
+        </div>
+
+        <!-- ===== FAMILY SUB-TAB (default) ===== -->
+        <section id="member-panel-family" class="member-panel">
+          <div class="admin-grid">
+            <section class="panel">
+              <header class="panel-head">
+                <h3>Groups</h3>
+                <form id="group-form" class="inline-form">
+                  <input class="input" id="group-input" placeholder="New group name" />
+                  <button class="btn btn-primary btn-sm" type="submit">Add</button>
+                </form>
+              </header>
+              <ul id="group-list" class="chip-list"></ul>
+              <p class="muted small" style="padding: 0 18px 14px; margin: 0;">Click a group to filter the members table or manage its membership.</p>
+            </section>
+
+            <section class="panel" id="group-membership" hidden></section>
+
+            <section class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Members &amp; accounts</h3>
+                  <p class="muted small" id="admin-filter-note" style="margin:2px 0 0;">Showing all members</p>
+                </div>
+                <div class="panel-head-tools">
+                  <div class="seg" role="tablist" aria-label="View mode">
+                    <button class="seg-btn is-active" id="btn-admin-view-table" data-mode="table" type="button" title="Table view">
+                      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                      Table
+                    </button>
+                    <button class="seg-btn" id="btn-admin-view-cards" data-mode="cards" type="button" title="Card view">
+                      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
+                      Cards
+                    </button>
+                  </div>
+                  <button class="btn btn-primary btn-sm" id="btn-admin-add">+ Add member</button>
+                </div>
+              </header>
+              <div id="admin-content">
+                <div class="table-wrap" id="admin-table-wrap">
+                  <table class="table" id="admin-table">
+                    <thead>
+                      <tr>
+                        <th><button type="button" id="admin-name-sort" class="th-sort" title="Toggle sort: last name ↔ first name"><span id="admin-name-sort-label">Name (by last)</span> <span class="th-sort-arrow">⇅</span></button></th>
+                        <th>Email</th>
+                        <th>Group</th>
+                        <th>Birthday</th>
+                        <th title="Whether this member has a Supabase login linked">Login</th>
+                        <th title="Date this member last accessed the site">Last activity</th>
+                        <th title="When checked, this person is hidden from the &quot;+ Add member&quot; picker on events." style="width:60px; text-align:center;">Event</th>
+                        <th style="width:120px;"></th>
+                      </tr>
+                    </thead>
+                    <tbody id="admin-rows"></tbody>
+                  </table>
+                </div>
+                <div class="admin-cards" id="admin-cards" hidden></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ===== FRIENDS SUB-TAB ===== -->
+        <section id="member-panel-friends" class="member-panel" hidden>
+          <section class="panel">
+            <header class="panel-head">
+              <div>
+                <h3>Friends</h3>
+                <p class="muted small" id="friends-filter-note" style="margin:2px 0 0;">Showing all friends</p>
+              </div>
+              <div class="panel-head-tools">
+                <input id="friends-search" class="input" type="search" placeholder="Search name / email / phone…" style="min-width: 220px;" />
+                <button class="btn btn-ghost btn-sm" type="button" id="btn-friends-expand-toggle" title="Collapse all households" aria-pressed="true">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 6l5 5 5-5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span id="btn-friends-expand-label">Collapse all</span>
+                </button>
+                <button class="btn btn-secondary btn-sm" type="button" id="btn-friends-export" title="Download flattened CSV of every friend household member">
+                  Export to Excel
+                </button>
+              </div>
+            </header>
+            <div class="table-wrap">
+              <table class="table table-friends" id="friends-table">
+                <thead>
+                  <tr>
+                    <th style="width:32px;"></th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Address</th>
+                    <th style="white-space:nowrap; min-width:140px;">Phone</th>
+                    <th>Birthday</th>
+                    <th>Group</th>
+                    <th title="529 college savings plan link" style="width:90px;">529</th>
+                    <th style="width:80px;"></th>
+                  </tr>
+                </thead>
+                <tbody id="friends-rows"></tbody>
+              </table>
+            </div>
+            <div id="friends-empty" class="tree-empty" hidden>
+              <div class="tree-empty-card">
+                <h3>No friends yet</h3>
+                <p>Start by adding your first friend. They'll appear here as a row you can expand.</p>
+                <button class="btn btn-primary" id="btn-friend-add-first" data-admin-only>+ Add your first friend</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <!-- ===== ALL SUB-TAB (flat union, export-friendly) ===== -->
+        <section id="member-panel-all" class="member-panel" hidden>
+          <section class="panel">
+            <header class="panel-head">
+              <div>
+                <h3>All people</h3>
+                <p class="muted small" id="all-filter-note" style="margin:2px 0 0;">Showing everyone in the archive</p>
+              </div>
+              <div class="panel-head-tools">
+                <input id="all-search" class="input" type="search" placeholder="Search name / email / phone…" style="min-width: 220px;" />
+              </div>
+            </header>
+            <div class="table-wrap">
+              <table class="table" id="all-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Address</th>
+                    <th>Birthday</th>
+                    <th>Group</th>
+                    <th>Type</th>
+                  </tr>
+                </thead>
+                <tbody id="all-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== ADMIN / VAULT VIEW (Ted, Doan, or system admin only) ===== -->
+    <main id="view-vault" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="vault"></span>Vault</h2>
+            <p>Private family records. Visible only to authorized accounts.</p>
+          </div>
+        </div>
+        <div class="vault-tabs" role="tablist">
+          <button class="vault-tab is-active" data-vault-section="family"    role="tab">Family</button>
+          <button class="vault-tab"           data-vault-section="finance"   role="tab">Finance</button>
+          <button class="vault-tab"           data-vault-section="benefits"  role="tab">Benefits</button>
+          <button class="vault-tab"           data-vault-section="home"      role="tab">Home</button>
+          <button class="vault-tab"           data-vault-section="documents" role="tab">Documents</button>
+        </div>
+        <section id="vault-family"    class="vault-panel"></section>
+        <section id="vault-finance"   class="vault-panel" hidden></section>
+        <section id="vault-benefits"  class="vault-panel" hidden></section>
+        <section id="vault-home"      class="vault-panel" hidden></section>
+        <section id="vault-documents" class="vault-panel" hidden></section>
+      </div>
+    </main>
+
+    <!-- ===== DOCUMENT MODAL (v4.49) =====
+         Per-member or household-level document upload. Stored in the
+         private family-documents Storage bucket (admin-only end-to-end).
+         Photos render inline; PDFs/other types open in a new tab via a
+         signed URL. -->
+    <div id="document-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="document-modal-title">
+        <header class="modal-head">
+          <h3 id="document-modal-title">Add document</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="document-form" class="modal-body">
+          <label class="field"><span>Title *</span><input name="title" required placeholder="e.g. Olive's birth certificate" /></label>
+          <div class="grid-2">
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🏷️</span>Category <span class="muted small">(optional)</span></span>
+              <input name="category" placeholder="e.g. Birth certificate · Passport · Tax · Medical" list="document-categories" autocomplete="off" />
+              <datalist id="document-categories"></datalist>
+            </label>
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">👤</span>For</span>
+              <select name="memberId" id="document-member" class="input">
+                <option value="">— Household / shared —</option>
+              </select>
+            </label>
+          </div>
+          <div class="field">
+            <span>File *</span>
+            <input type="file" id="document-file-input" accept="application/pdf,image/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*" />
+            <p class="muted small" id="document-file-status" style="margin: 6px 0 0;"></p>
+          </div>
+          <label class="field"><span>Notes <span class="muted small">(optional)</span></span><textarea name="notes" rows="3" placeholder="Anything worth remembering about this document."></textarea></label>
+          <p class="form-error" id="document-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="document-submit">Save document</button>
+            <button class="btn btn-danger-ghost" type="button" id="document-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== Vault image lightbox (insurance card photos) ===== -->
+    <div id="vault-lightbox" class="vault-lightbox" hidden role="dialog" aria-modal="true" aria-label="Image preview">
+      <button type="button" class="vault-lightbox-close" data-vault-lightbox-close aria-label="Close preview">
+        <svg viewBox="0 0 16 16" width="16" height="16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <div class="vault-lightbox-backdrop" data-vault-lightbox-close></div>
+      <img class="vault-lightbox-img" alt="" />
+    </div>
+
+    <!-- ===== FRIEND MODAL (add / edit a friend / household) =====
+         v4.35: Friend record now represents a household. Modal includes:
+         - primary contact fields (name, contact, address split, group, 529, ethnicity, gender, photo)
+         - optional spouse subsection (name, birthday, phone, email, gender, ethnicity, 529)
+         - optional kids list (name, birthday, gender, ethnicity, 529 per row) -->
+    <!-- ===== FRIEND MODAL (add / edit a friend) ===== -->
+    <div id="friend-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="friend-modal-title">
+        <header class="modal-head">
+          <h3 id="friend-modal-title">Add a friend</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="friend-form" class="modal-body">
+          <div class="grid-3">
+            <label class="field"><span>First name *</span><input name="firstName" required /></label>
+            <label class="field"><span>Middle name</span><input name="middleName" placeholder="(optional)" /></label>
+            <label class="field"><span>Last name</span><input name="lastName" /></label>
+          </div>
+          <label class="field"><span>Display name <span class="muted small">(optional)</span></span><input name="displayName" placeholder="e.g. Sam" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🌐</span>International name <span class="muted small">(optional)</span></span><input name="internationalName" /></label>
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📱</span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="email" type="email" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">👥</span>Group</span><input name="group" placeholder="e.g. College friends, Work, Neighbors" /></label>
+          </div>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input name="plan529" type="url" placeholder="https://…" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🏠</span>Street address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
+          <div class="grid-zip">
+            <label class="field"><span>Zip / ZIP</span><input name="zip" id="friend-zip" inputmode="numeric" maxlength="10" placeholder="90210" autocomplete="postal-code" /></label>
+            <label class="field"><span>City</span><input name="city" id="friend-city" placeholder="Beverly Hills" autocomplete="address-level2" /></label>
+            <label class="field"><span>State</span><input name="state" id="friend-state" maxlength="3" placeholder="CA" autocomplete="address-level1" /></label>
+          </div>
+          <p id="friend-zip-status" class="muted small" style="margin-top:-6px;" hidden></p>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+            <div class="ethnicity-picker" data-picker="friend-ethnicity"></div>
+          </label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">📝</span>Notes</span><textarea name="notes" rows="3" placeholder="How you met, kids' names, anything worth remembering"></textarea></label>
+          <div class="field">
+            <span>Photo</span>
+            <div class="photo-row">
+              <div class="photo-preview" id="friend-photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="friend-photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="friend-photo-clear">Clear photo</button>
+              </div>
+            </div>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Gender</span>
+              <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
+            </label>
+          </div>
+          <label class="field-check">
+            <input type="checkbox" name="excludeFromEventsList" />
+            <span>Do not show in events list</span>
+            <small>Hides this person from the "+ Add member" picker on events.</small>
+          </label>
+
+          <!-- ===== HOUSEHOLD ROSTER ===== -->
+          <fieldset class="household-roster">
+            <legend>Household</legend>
+            <p class="muted small" style="margin: 0 0 10px;">Add a spouse / partner and any kids. They'll appear as expandable sub-rows under this friend in the list.</p>
+
+            <!-- Spouse subsection -->
+            <div class="roster-section">
+              <div class="roster-section-head">
+                <span class="roster-section-title">Spouse / partner</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="friend-spouse-add" hidden>+ Add spouse</button>
+                <button type="button" class="btn btn-danger-ghost btn-sm" id="friend-spouse-remove" hidden>Remove spouse</button>
+              </div>
+              <div id="friend-spouse-fields" hidden>
+                <div class="grid-3">
+                  <label class="field"><span>First name</span><input name="spouseFirstName" /></label>
+                  <label class="field"><span>Middle</span><input name="spouseMiddleName" /></label>
+                  <label class="field"><span>Last name</span><input name="spouseLastName" /></label>
+                </div>
+                <div class="grid-2">
+                  <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input name="spouseBirthday" type="date" /></label>
+                  <label class="field"><span>Gender</span><select name="spouseGender"><option value="female">Female</option><option value="male">Male</option></select></label>
+                </div>
+                <div class="grid-2">
+                  <label class="field"><span><span class="kv-emoji" aria-hidden="true">📱</span>Phone</span><input name="spousePhone" type="tel" placeholder="(555) 123-4567" /></label>
+                  <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="spouseEmail" type="email" /></label>
+                </div>
+                <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span><input name="spousePlan529" type="url" placeholder="https://…" /></label>
+                <label class="field">
+                  <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity <span class="muted small">(inherited by kids when saved)</span></span>
+                  <div class="ethnicity-picker" data-picker="friend-spouse-ethnicity"></div>
+                </label>
+                <div class="field">
+                  <span>Photo</span>
+                  <div class="photo-row">
+                    <div class="photo-preview" id="friend-spouse-photo-preview"></div>
+                    <div class="photo-actions">
+                      <label class="btn btn-secondary btn-sm">
+                        Upload photo
+                        <input type="file" accept="image/*" id="friend-spouse-photo-input" hidden />
+                      </label>
+                      <button type="button" class="btn btn-ghost btn-sm" id="friend-spouse-photo-clear">Clear photo</button>
+                    </div>
+                  </div>
+                </div>
+                <label class="field-check">
+                  <input type="checkbox" name="spouseExcludeFromEventsList" />
+                  <span>Do not show in events list</span>
+                  <small>Hides this person from the "+ Add member" picker on events.</small>
+                </label>
+              </div>
+            </div>
+
+            <!-- Kids subsection -->
+            <div class="roster-section">
+              <div class="roster-section-head">
+                <span class="roster-section-title">Kids</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="friend-kid-add">+ Add child</button>
+              </div>
+              <div id="friend-kids-list" class="kids-list"></div>
+            </div>
+          </fieldset>
+
+          <p class="form-error" id="friend-error" role="alert" hidden></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit" id="friend-submit">Save friend</button>
+            <button class="btn btn-danger-ghost" type="button" id="friend-delete" hidden>Delete</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== EVENTS VIEW (admin only) ===== -->
+    <main id="view-events" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="events"></span>Events</h2>
+            <p>Plan family gatherings and track who showed up.</p>
+          </div>
+          <button class="btn btn-primary" id="btn-event-add" data-admin-only>+ New event</button>
+        </div>
+        <div class="event-grid">
+          <aside class="event-list" id="event-list"></aside>
+          <section class="event-detail panel" id="event-detail"></section>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== CALENDAR VIEW (admin only) ===== -->
+    <main id="view-calendar" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="calendar"></span>Calendar</h2>
+            <p>Family events, birthdays, and US holidays in one view.</p>
+          </div>
+          <div class="cal-toolbar">
+            <button class="icon-btn" id="cal-prev" title="Previous month" aria-label="Previous month">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M10 3l-5 5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="cal-label" id="cal-label"></div>
+            <button class="icon-btn" id="cal-next" title="Next month" aria-label="Next month">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <select class="input" id="cal-year" aria-label="Year"></select>
+            <button class="btn btn-secondary btn-sm" id="cal-today">Today</button>
+            <div class="cal-viewtoggle" role="group" aria-label="Calendar view">
+              <button type="button" class="cal-viewbtn" data-mode="month">Month</button>
+              <button type="button" class="cal-viewbtn" data-mode="week">Week</button>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="cal-add-appt" data-admin-only title="Add a one-off personal appointment">+ Appointment</button>
+            <button class="btn btn-secondary btn-sm" id="cal-add-reminder" data-admin-only title="Add a recurring reminder (Calendar-only)">+ Reminder</button>
+            <button class="btn btn-secondary btn-sm" id="cal-refresh" title="Refresh calendar">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Refresh
+            </button>
+            <button class="btn btn-secondary btn-sm" id="cal-google-btn" data-admin-only title="Sync Google Calendar">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.19 3.32v2.77h3.55c2.08-1.92 3.28-4.74 3.28-8.1Z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.65l-3.55-2.77c-.98.66-2.24 1.05-3.73 1.05-2.86 0-5.29-1.93-6.15-4.53H2.18v2.84A11 11 0 0 0 12 23Z"/>
+                <path fill="#FBBC05" d="M5.85 14.1A6.55 6.55 0 0 1 5.5 12c0-.73.13-1.43.35-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.78.43 3.46 1.18 4.94l3.67-2.84Z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.07.56 4.21 1.65l3.15-3.15C17.45 2.12 14.97 1 12 1A11 11 0 0 0 2.18 7.07L5.85 9.9C6.71 7.31 9.14 5.38 12 5.38Z"/>
+              </svg>
+              <span id="cal-google-label">Google</span>
+              <span class="cal-google-dot" id="cal-google-dot" hidden aria-label="Connected"></span>
+            </button>
+          </div>
+        </div>
+        <div class="cal-filters" id="cal-filters" role="group" aria-label="Calendar filters">
+          <button type="button" class="cal-filter-chip" data-filter="work"     aria-pressed="true">Work</button>
+          <button type="button" class="cal-filter-chip" data-filter="personal" aria-pressed="true">Personal</button>
+          <button type="button" class="cal-filter-chip" data-filter="family"   aria-pressed="true">Family</button>
+        </div>
+        <div class="cal-legend">
+          <span class="cal-legend-item"><span class="cal-dot is-event"></span>Event</span>
+          <span class="cal-legend-item"><span class="cal-dot is-birthday"></span>Birthday</span>
+          <span class="cal-legend-item"><span class="cal-dot is-anniv"></span>Anniversary</span>
+          <span class="cal-legend-item"><span class="cal-dot is-holiday"></span>US holiday</span>
+          <span class="cal-legend-item" data-admin-only><span class="cal-dot is-reminder"></span>Reminder</span>
+        </div>
+        <div class="panel cal-panel">
+          <div class="cal-weekdays" id="cal-weekdays"></div>
+          <div class="cal-grid" id="cal-grid"></div>
+          <div id="cal-week" class="cal-week" hidden></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== GIFTS VIEW (admin only) ===== -->
+    <main id="view-gifts" class="view" hidden>
+      <div class="container">
+        <div class="page-head">
+          <div>
+            <h2><span class="page-emoji" data-page-emoji="gifts"></span>Gifts</h2>
+            <p>What we gave, what we received — keep the record straight.</p>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="btn btn-secondary" id="btn-gift-export">Export to Excel</button>
+            <button class="btn btn-primary" id="btn-gift-add">+ Log a gift</button>
+          </div>
+        </div>
+        <div class="gift-tabs" role="tablist">
+          <button class="gift-tab is-active" data-direction="received" role="tab">Received</button>
+          <button class="gift-tab" data-direction="given" role="tab">Given</button>
+          <button class="gift-tab" data-direction="both" role="tab">Both</button>
+          <button class="gift-tab" data-direction="reports" role="tab">Reports</button>
+        </div>
+        <div class="panel" id="gift-list-panel">
+          <div class="table-wrap">
+            <table class="table" id="gift-table">
+              <thead>
+                <tr>
+                  <th style="width:40px;"></th>
+                  <th>Date</th>
+                  <th>Item</th>
+                  <th id="gift-th-amount">Amount</th>
+                  <th id="gift-th-from">From</th>
+                  <th id="gift-th-to">To</th>
+                  <th>Occasion</th>
+                  <th>Notes</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="gift-rows"></tbody>
+              <tfoot id="gift-foot"></tfoot>
+            </table>
+          </div>
+        </div>
+        <div class="panel" id="gift-reports-panel" hidden></div>
+      </div>
+    </main>
+
+    <!-- ===== LINK FAMILY MODAL ===== -->
+    <div id="link-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3>Link to family</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="link-form" class="modal-body">
+          <p class="muted small" id="link-subject">Connect this person to someone already in the tree.</p>
+          <label class="field">
+            <span>Relationship</span>
+            <select name="relType" id="link-rel-type">
+              <option value="spouse">Spouse of…</option>
+              <option value="child">Child of…</option>
+              <option value="parent">Parent of…</option>
+              <option value="sibling">Sibling of…</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Family member</span>
+            <select name="targetId" id="link-target"></select>
+          </label>
+          <label class="checkbox-row" id="link-divorce-wrap" hidden>
+            <input type="checkbox" name="divorced" id="link-divorced" />
+            <span>Mark as divorced</span>
+          </label>
+          <p class="form-error" id="link-error" role="alert"></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Link</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== EVENT MODAL ===== -->
+    <div id="event-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="event-modal-title">New event</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="event-form" class="modal-body">
+          <div class="grid-2">
+            <label class="field">
+              <span>Icon</span>
+              <div class="emoji-input">
+                <input name="icon" id="event-icon" placeholder="🎉" maxlength="4" />
+                <button type="button" class="emoji-input-browse" id="event-icon-browse" data-emoji-trigger title="Browse emojis">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="1.4"/><circle cx="6" cy="7" r=".9" fill="currentColor"/><circle cx="10" cy="7" r=".9" fill="currentColor"/><path d="M5.5 10c.6 1 1.5 1.5 2.5 1.5s1.9-.5 2.5-1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+            </label>
+            <label class="field"><span>Event name *</span><input name="name" required /></label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Date</span><input name="date" type="date" /></label>
+            <label class="field"><span>Location</span><input name="location" /></label>
+          </div>
+
+          <label class="checkbox-row">
+            <input type="checkbox" name="isTrip" id="event-is-trip" />
+            <span>This is a travel trip <span class="muted small">(adds destination, dates, daily itinerary, and travel budget)</span></span>
+          </label>
+
+          <fieldset id="event-trip-fieldset" hidden class="trip-fieldset">
+            <legend>Trip details</legend>
+            <div class="grid-2">
+              <label class="field"><span>Destination</span><input name="tripDestination" placeholder="Tokyo, Japan" /></label>
+              <label class="field"><span>End date</span><input name="tripEndDate" type="date" /></label>
+            </div>
+            <div class="grid-2">
+              <label class="field"><span>Flights / transport budget</span><input name="tripTransportBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+              <label class="field"><span>Lodging budget</span><input name="tripLodgingBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+            </div>
+            <div class="grid-2">
+              <label class="field"><span>Food &amp; drink budget</span><input name="tripFoodBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+              <label class="field"><span>Activities budget</span><input name="tripActivitiesBudget" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+            </div>
+            <div class="trip-itinerary">
+              <div class="trip-itinerary-head">
+                <h4>Daily itinerary</h4>
+                <button type="button" class="btn btn-ghost btn-sm" id="event-add-itin">+ Add day</button>
+              </div>
+              <div id="event-itin-rows" class="trip-itinerary-rows"></div>
+            </div>
+          </fieldset>
+
+          <label class="field"><span>Description</span><textarea name="description" rows="3"></textarea></label>
+          <div class="field">
+            <span>Cover photo</span>
+            <div class="cover-row">
+              <div class="cover-preview" id="event-cover-preview"></div>
+              <div class="cover-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="event-cover-file" hidden />
+                </label>
+                <input type="url" name="coverUrl" id="event-cover-url" placeholder="Or paste an image URL…" />
+                <button type="button" class="btn btn-ghost btn-sm" id="event-cover-clear">Remove cover</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save event</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== GIFT MODAL ===== -->
+    <div id="gift-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="gift-modal-title">Log a gift</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="gift-form" class="modal-body">
+          <label class="field"><span>Direction</span>
+            <select name="direction" id="gift-direction">
+              <option value="received">Received (someone gave it to us)</option>
+              <option value="given">Given (we gave it to someone)</option>
+            </select>
+          </label>
+          <div class="grid-2">
+            <label class="field"><span>Item</span><input name="item" /></label>
+            <label class="field"><span>Amount ($)</span><input name="amount" type="number" step="0.01" min="0" placeholder="0.00" /></label>
+          </div>
+          <label class="field"><span>Date</span><input name="date" type="date" /></label>
+          <div class="grid-2">
+            <label class="field"><span id="gift-from-label">From</span><input name="fromText" placeholder="Free text or pick below" /></label>
+            <label class="field"><span id="gift-to-label">To</span><input name="toText" placeholder="Free text or pick below" /></label>
+          </div>
+          <label class="field">
+            <span>From (family members — pick one or more)</span>
+            <div class="member-picker" data-picker="gift-from-members"></div>
+          </label>
+          <label class="field"><span>To (family member)</span>
+            <div class="member-picker member-picker-single" data-picker="gift-to-member" id="gift-to-member"></div>
+          </label>
+          <div class="grid-2">
+            <label class="field">
+              <span>Linked event</span>
+              <select name="eventId" id="gift-event">
+                <option value="">— none —</option>
+              </select>
+            </label>
+            <label class="field"><span>Occasion</span><input name="occasion" placeholder="Christmas, Birthday, Wedding…" /></label>
+          </div>
+          <label class="field"><span>Notes</span><textarea name="notes" rows="3"></textarea></label>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save gift</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== PROFILE DRAWER ===== -->
+    <aside id="drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" data-close></div>
+      <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-name">
+        <button class="drawer-close" data-close aria-label="Close">
+          <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div class="drawer-hero">
+          <div class="drawer-photo" id="drawer-photo"></div>
+          <div class="drawer-id">
+            <p class="drawer-remembering" id="drawer-remembering" hidden>In loving memory</p>
+            <p class="drawer-eyebrow" id="drawer-relation"></p>
+            <h2 id="drawer-name"></h2>
+            <p class="drawer-international-name" id="drawer-international-name" hidden></p>
+            <p class="drawer-nick" id="drawer-nick"></p>
+          </div>
+        </div>
+
+        <div id="drawer-view" class="drawer-body">
+          <dl class="kv">
+            <div><dt><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</dt><dd id="kv-birthday">—</dd></div>
+            <div id="kv-dod-row" hidden><dt><span class="kv-emoji" aria-hidden="true">🕊️</span>Date of death</dt><dd id="kv-dod">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🌱</span>Life stage</dt><dd id="kv-lifestage">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">📧</span>Email</dt><dd id="kv-email-cell"><span id="kv-email">—</span><button type="button" id="kv-email-copy" class="kv-copy-btn" title="Copy email" hidden>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <span>Copy</span>
+            </button></dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">📱</span>Phone</dt><dd id="kv-phone">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🏠</span>Address</dt><dd id="kv-address-cell"><span id="kv-address">—</span><button type="button" id="kv-address-copy" class="kv-copy-btn" title="Copy address" hidden>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="4" y="3" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3 11V4a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <span>Copy</span>
+            </button></dd></div>
+            <div id="kv-anniv-row" hidden><dt><span class="kv-emoji" aria-hidden="true">❤️</span>Anniversary</dt><dd id="kv-anniv">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">👥</span>Group</dt><dd id="kv-group">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</dt><dd id="kv-ethnicity">—</dd></div>
+            <div><dt><span class="kv-emoji" aria-hidden="true">🔑</span>Role</dt><dd id="kv-role">—</dd></div>
+            <div id="kv-529-row" hidden><dt><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan</dt><dd id="kv-529-cell"><a id="kv-529" target="_blank" rel="noopener">—</a></dd></div>
+          </dl>
+
+          <div class="drawer-section" id="kv-notes-section" hidden>
+            <h4>Notes</h4>
+            <p class="drawer-notes" id="kv-notes"></p>
+          </div>
+
+          <div class="drawer-section">
+            <h4>Family</h4>
+            <div id="drawer-relations" class="relation-list"></div>
+          </div>
+
+          <div class="drawer-section" id="drawer-gifts-section">
+            <h4>Gifts</h4>
+            <div id="drawer-gifts" class="gifts-mini"></div>
+          </div>
+
+          <div class="drawer-actions">
+            <button class="btn btn-secondary" id="drawer-edit-btn">Edit profile</button>
+            <button class="btn btn-ghost" id="drawer-link-btn" data-admin-only>Link to family</button>
+            <button class="btn btn-ghost" id="drawer-divorce-btn" data-admin-only hidden>Mark as divorced</button>
+            <button class="btn btn-ghost" id="drawer-pwd-btn" data-admin-only>Reset password</button>
+            <button class="btn btn-danger-ghost" id="drawer-delete-btn" data-admin-only>Remove from tree</button>
+          </div>
+        </div>
+
+        <form id="drawer-edit" class="drawer-body" hidden>
+          <div class="grid-3">
+            <label class="field"><span>First name *</span><input name="firstName" required /></label>
+            <label class="field"><span>Middle name</span><input name="middleName" placeholder="(optional)" /></label>
+            <label class="field"><span>Last name *</span><input name="lastName" required /></label>
+          </div>
+          <label class="field"><span>Display name <span class="muted small">(optional — defaults to First Middle Last)</span></span><input name="displayName" placeholder="e.g. Teddy" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🌐</span>International name <span class="muted small">(optional — shown under the name on profile cards)</span></span><input name="internationalName" placeholder="e.g. 유태수 or Nguyễn Văn A" /></label>
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">🎂</span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">📱</span>Phone</span><input name="phone" type="tel" placeholder="(555) 123-4567" autocomplete="tel" /></label>
+          </div>
+          <div class="field">
+            <label class="field-check">
+              <input type="checkbox" id="edit-has-dod" />
+              <span><span class="kv-emoji" aria-hidden="true">🕊️</span>Deceased</span>
+              <small>Check to record a date of death — adds an "In loving memory" badge to the profile.</small>
+            </label>
+            <input name="dateOfDeath" id="edit-dod" type="date" hidden />
+          </div>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">📧</span>Email</span><input name="email" type="email" /></label>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">🎓</span>529 plan link <span class="muted small">(URL)</span></span>
+            <input name="plan529" type="url" placeholder="https://…" />
+          </label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🏠</span>Street address</span><textarea name="address" rows="2" placeholder="123 Main St"></textarea></label>
+          <div class="grid-zip">
+            <label class="field"><span>Zip / ZIP</span><input name="zip" id="edit-zip" inputmode="numeric" maxlength="10" placeholder="90210" autocomplete="postal-code" /></label>
+            <label class="field"><span>City</span><input name="city" id="edit-city" placeholder="Beverly Hills" autocomplete="address-level2" /></label>
+            <label class="field"><span>State</span><input name="state" id="edit-state" maxlength="3" placeholder="CA" autocomplete="address-level1" /></label>
+          </div>
+          <p id="edit-zip-status" class="muted small" style="margin-top:-6px;" hidden></p>
+          <label class="field" id="edit-anniversary-wrap" hidden>
+            <span><span class="kv-emoji" aria-hidden="true">❤️</span>Anniversary</span>
+            <input name="anniversary" id="edit-anniversary" type="date" />
+            <span class="muted small" id="edit-anniv-years"></span>
+          </label>
+          <div class="grid-2">
+            <label class="field"><span><span class="kv-emoji" aria-hidden="true">👥</span>Group</span><select name="group" id="edit-group"></select></label>
+            <label class="field" data-admin-only><span><span class="kv-emoji" aria-hidden="true">🔑</span>Role</span>
+              <select name="role">
+                <option value="user">User</option>
+                <option value="family">Family</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+          </div>
+          <label class="field-check" id="edit-group-events-wrap">
+            <input type="checkbox" name="includeInGroupEvents" id="edit-group-events" />
+            <span>Include in group invites</span>
+            <small>When checked, this person is added when an admin picks "+ Add by group…" on an event.</small>
+          </label>
+          <label class="field-check">
+            <input type="checkbox" name="excludeFromEventsList" id="edit-exclude-events" />
+            <span>Do not show in events list</span>
+            <small>Hides this person from the "+ Add member" picker on events so the dropdown stays scannable.</small>
+          </label>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">🌍</span>Ethnicity</span>
+            <div class="ethnicity-picker" data-picker="edit-ethnicity"></div>
+          </label>
+          <label class="field">
+            <span><span class="kv-emoji" aria-hidden="true">📝</span>Notes <span class="muted small">(personal notes, allergies, dietary preferences, etc.)</span></span>
+            <textarea name="notes" rows="4" placeholder=""></textarea>
+          </label>
+          <div class="grid-2">
+            <label class="field" data-admin-only><span>Gender</span>
+              <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
+            </label>
+            <label class="field">
+              <span><span class="kv-emoji" aria-hidden="true">🌱</span>Life stage <span class="muted small">(auto from birthday)</span></span>
+              <select name="ageGroup"><option value="adult">Adult</option><option value="child">Child</option><option value="baby">Baby</option></select>
+            </label>
+          </div>
+
+          <div class="field">
+            <span>Photo</span>
+            <div class="photo-row">
+              <div class="photo-preview" id="photo-preview"></div>
+              <div class="photo-actions">
+                <label class="btn btn-secondary btn-sm">
+                  Upload photo
+                  <input type="file" accept="image/*" id="photo-input" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="photo-recrop" hidden>Crop photo</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="photo-clear">Use silhouette</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-actions">
+            <button class="btn btn-primary" type="submit">Save changes</button>
+            <button class="btn btn-ghost" type="button" id="drawer-cancel">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </aside>
+
+    <!-- ===== MEMBER MODAL (Add / link) ===== -->
+    <div id="modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header class="modal-head">
+          <h3 id="modal-title">Add family member</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="member-form" class="modal-body">
+          <div id="modal-anchor" class="modal-anchor" hidden>
+            <div class="modal-anchor-avatar" id="modal-anchor-avatar"></div>
+            <div class="modal-anchor-text">
+              <span class="modal-anchor-eyebrow">Linking new member to</span>
+              <strong id="modal-anchor-name"></strong>
+            </div>
+          </div>
+          <div class="grid-3">
+            <label class="field"><span>First name *</span><input name="firstName" required /></label>
+            <label class="field"><span>Middle name</span><input name="middleName" placeholder="(optional)" /></label>
+            <label class="field"><span>Last name *</span><input name="lastName" required /></label>
+          </div>
+          <label class="field"><span>Display name <span class="muted small">(optional — defaults to First Middle Last)</span></span><input name="displayName" placeholder="e.g. Teddy" /></label>
+          <label class="field"><span><span class="kv-emoji" aria-hidden="true">🌐</span>International name <span class="muted small">(optional — shown under the name on profile cards)</span></span><input name="internationalName" placeholder="e.g. 유태수 or Nguyễn Văn A" /></label>
+          <div class="grid-2">
+            <label class="field"><span>Birthday</span><input name="birthday" type="date" /></label>
+            <label class="field"><span>Gender</span>
+              <select name="gender"><option value="female">Female</option><option value="male">Male</option></select>
+            </label>
+          </div>
+          <div class="grid-2">
+            <label class="field"><span>Life stage</span>
+              <select name="ageGroup"><option value="adult">Adult</option><option value="child">Child</option><option value="baby">Baby</option></select>
+            </label>
+            <label class="field"><span>Group</span><select name="group" id="modal-group"></select></label>
+          </div>
+          <label class="field">
+            <span>Email <span class="muted small">(optional — required to give them a login)</span></span>
+            <input name="email" type="email" placeholder="name@example.com" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Ethnicity</span>
+            <div class="ethnicity-picker" data-picker="modal-ethnicity"></div>
+          </label>
+
+          <fieldset class="rel-fieldset" id="modal-rel-fieldset">
+            <legend id="modal-rel-legend">Relationship to existing family</legend>
+            <div class="grid-2">
+              <label class="field">
+                <span id="modal-rel-type-label">Relationship type</span>
+                <select name="relType" id="modal-rel-type">
+                  <option value="root">Root (no relation yet)</option>
+                  <option value="child">Child of…</option>
+                  <option value="parent">Parent of…</option>
+                  <option value="spouse">Spouse of…</option>
+                  <option value="sibling">Sibling of…</option>
+                </select>
+              </label>
+              <label class="field" id="modal-rel-target-wrap" hidden>
+                <span>Connect to</span>
+                <select name="relTargetId" id="modal-rel-target"></select>
+              </label>
+            </div>
+            <label class="field" id="modal-rel-second-wrap" hidden>
+              <span>Other parent (optional)</span>
+              <select name="relSecondId" id="modal-rel-second"></select>
+            </label>
+            <label class="checkbox-row" id="modal-divorce-wrap" hidden>
+              <input type="checkbox" name="divorced" id="modal-divorced" />
+              <span>Mark as divorced — they share children but are no longer together</span>
+            </label>
+          </fieldset>
+
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Add &amp; create account</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+          <p class="muted small">If you provide an email, a login is created in Supabase and a randomized password is shown after saving. Without an email, you can add one later.</p>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== PASSWORD MODAL ===== -->
+    <div id="pwd-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="pwd-title">Account credentials</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="modal-body">
+          <p class="muted" id="pwd-note">Share these with the family member. They can change their password later.</p>
+          <div class="cred-block">
+            <div><span>Email</span><code id="pwd-username"></code></div>
+            <div><span>Password</span><code id="pwd-password"></code></div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="pwd-copy">Copy both</button>
+            <button class="btn btn-primary" type="button" data-close>Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PHOTO CROP MODAL ===== -->
+    <div id="crop-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="crop-title">
+        <header class="modal-head">
+          <h3 id="crop-title">Crop photo</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="modal-body">
+          <p class="muted small">Drag to reposition, scroll or use the slider to zoom.</p>
+          <div class="crop-stage" id="crop-stage">
+            <img id="crop-img" alt="" draggable="false" />
+            <div class="crop-mask" aria-hidden="true"></div>
+            <div class="crop-frame" aria-hidden="true"></div>
+          </div>
+          <div class="crop-controls">
+            <span class="muted small">Zoom</span>
+            <input id="crop-zoom" type="range" min="100" max="400" value="100" />
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" id="crop-apply" type="button">Use this crop</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== CHANGE / SET PASSWORD MODAL ===== -->
+    <div id="cpw-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3 id="cpw-title">Change password</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="cpw-form" class="modal-body">
+          <p class="muted small" id="cpw-subject"></p>
+          <label class="field"><span>New password</span><input name="next" type="password" required autocomplete="new-password" /></label>
+          <label class="field"><span>Confirm new password</span><input name="confirm" type="password" required autocomplete="new-password" /></label>
+          <p id="cpw-error" class="form-error" role="alert"></p>
+          <div class="modal-actions">
+            <button class="btn btn-primary" type="submit">Save password</button>
+            <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== GOOGLE CALENDAR MODAL ===== -->
+    <div id="gcal-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true" aria-labelledby="gcal-title">
+        <header class="modal-head">
+          <h3 id="gcal-title">Google Calendar</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="modal-body" id="gcal-body"></div>
+      </div>
+    </div>
+
+    <!-- ===== IDLE TIMEOUT WARNING ===== -->
+    <div id="idle-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-panel modal-sm" role="alertdialog" aria-modal="true" aria-labelledby="idle-title">
+        <header class="modal-head">
+          <h3 id="idle-title">Are you still there?</h3>
+        </header>
+        <div class="modal-body">
+          <p>You've been idle for an hour. For security, you'll be signed out in <strong><span id="idle-countdown">60</span></strong> seconds unless you continue your session.</p>
+          <div class="idle-bar"><div class="idle-bar-fill" id="idle-bar-fill"></div></div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" id="idle-continue">I'm still here</button>
+            <button class="btn btn-ghost" id="idle-logout-now">Sign out now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- toast -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
