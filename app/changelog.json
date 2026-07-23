@@ -1,5 +1,16 @@
 [
   {
+    "version": "4.74",
+    "date": "2026-07-22",
+    "title": "Chat — Slack-style channels (admin-only)",
+    "changes": [
+      "New Chat tab (right after Dashboard) with a channel sidebar, starting with #all-chat. Admins now land on Chat when they sign in.",
+      "Create channels and group them into named sections with an emoji. Type and send messages like a normal chat — Enter to send, Shift+Enter for a new line.",
+      "React to any message with emoji, edit your own messages (they show an \"(edited)\" note like Slack), delete messages, and attach images or files by clicking the paperclip or dragging them in.",
+      "Messages, edits, and reactions appear live for everyone in the channel — no refresh needed. Chat is visible to admins only."
+    ]
+  },
+  {
     "version": "4.73",
     "date": "2026-07-08",
     "title": "Connect Google Calendar with a shareable link",
