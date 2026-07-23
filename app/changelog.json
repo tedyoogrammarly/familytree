@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.80",
+    "date": "2026-07-23",
+    "title": "Chat fixes — thread replies, message-link preview cards",
+    "changes": [
+      "Fixed: thread replies no longer post into the channel as separate messages. (Note: threads require the chat threads database update to be run — replies now show a clear message if it hasn't been.)",
+      "Message links now show a preview card — the author, the channel, and a snippet of the message — instead of a plain URL.",
+      "The preview card has a 'View message' button that jumps straight to the original message and highlights it."
+    ]
+  },
+  {
     "version": "4.79",
     "date": "2026-07-23",
     "title": "Chat fixes — composer visibility, emoji placement, copy message link",

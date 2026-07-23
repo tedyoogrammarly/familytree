@@ -760,6 +760,17 @@ const ChatApi = {
     }
     return rows.map(m => this._shape(m, rxBy.get(m.id) || []));
   },
+  // Fetch one message by id (for link previews, #2). Tolerates missing newer
+  // columns pre-migration. Returns a shaped message or null.
+  async getMessage(id) {
+    if (!Backend.client || !id) return null;
+    let { data, error } = await Backend.client.from('chat_messages').select(this._MSG_COLS).eq('id', id).maybeSingle();
+    if (error && this._isMissingColumn(error)) {
+      ({ data, error } = await Backend.client.from('chat_messages').select(this._SAFE_COLS).eq('id', id).maybeSingle());
+    }
+    if (error || !data) { this._warn('getMessage', error); return null; }
+    return this._shape(data, []);
+  },
   // Normalize a raw DB row (+ its reactions) into the view's message shape.
   // Exposed so the realtime handler can shape freshly-inserted/updated rows.
   _shape(m, reactions = []) {
@@ -793,7 +804,13 @@ const ChatApi = {
     if (mentions && mentions.length) full.mentions = mentions;
     let { data, error } = await Backend.client.from('chat_messages').insert(full).select(this._MSG_COLS).single();
     if (error && this._isMissingColumn(error)) {
-      // Retry without the newer columns so sending still works pre-migration.
+      // A thread reply MUST keep its parent_id — never silently downgrade it to
+      // a channel message. If the threads column is missing, fail loudly so the
+      // user knows to run the migration (bug: replies were leaking to the channel).
+      if (parentId) {
+        return { ok: false, reason: 'Threads need the chat threads database update (2026-07-23-chat-threads.sql) to be run first.' };
+      }
+      // Otherwise only strip the cosmetic `mentions` column and retry.
       const safe = { channel_id: channelId, body: text || null, attachments: attachments || [] };
       ({ data, error } = await Backend.client.from('chat_messages').insert(safe).select(this._SAFE_COLS).single());
     }
@@ -11347,7 +11364,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.79';
+const APP_VERSION = '4.80';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
@@ -17447,6 +17464,7 @@ const ChatView = {
   mentionCounts: new Map(),// channelId -> unread @-mention count (#8)
   _mention: null,          // active @-autocomplete state for the composer
   drafts: new Map(),       // #5: channelId -> unsent composer text
+  _linkPreviews: new Map(),// #2: referenced messageId -> {authorName, snippet, channelId} | 'missing'
 
   init() {
     if (this.inited) return;
@@ -17720,10 +17738,24 @@ const ChatView = {
   // Scroll a message into view and flash a highlight.
   focusMessage(messageId) {
     const el = $(`#chat-messages [data-msg="${messageId}"]`);
-    if (!el) return;
+    if (!el) return false;
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el.classList.add('is-flash');
     setTimeout(() => el.classList.remove('is-flash'), 2000);
+    return true;
+  },
+  // #3: "View message" on a link preview → open the target channel (if it's a
+  // different one) then scroll to + flash the message.
+  async viewLinkedMessage(messageId) {
+    if (!messageId) return;
+    if (this.focusMessage(messageId)) return;   // already loaded in this channel
+    // Find the target channel from the cached preview, or fetch the message.
+    let channelId = this._linkPreviews.get(messageId)?.channelId;
+    if (!channelId) { const msg = await ChatApi.getMessage(messageId); channelId = msg?.channelId; }
+    if (!channelId) { toast('Message not found.', 'warn'); return; }
+    await this.openChannel(channelId);
+    // Give the render a tick, then focus.
+    setTimeout(() => this.focusMessage(messageId), 120);
   },
   _onRemoteUpdate(row) {
     if (!row) return;
@@ -18072,7 +18104,7 @@ const ChatView = {
       ${avatar}
       <div class="chat-msg-main">
         <div class="chat-msg-meta"><span class="chat-msg-author">${escape(m.authorName)}</span><span class="chat-msg-time">${time}</span>${edited}</div>
-        ${m.body ? `<div class="chat-msg-body">${this._highlightMentions(this._linkify(escape(m.body)))}</div>` : ''}
+        ${m.body ? `<div class="chat-msg-body">${this._renderBody(m.body)}</div>` : ''}
         ${attachments ? `<div class="chat-msg-attachments">${attachments}</div>` : ''}
         ${reactions}
         ${threadFooter}
@@ -18140,6 +18172,8 @@ const ChatView = {
     if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji, inThread); return; }
     const edit = e.target.closest('[data-edit]');
     if (edit) { this.startEdit(edit.dataset.edit); return; }
+    const view = e.target.closest('[data-view-msg]');
+    if (view) { this.viewLinkedMessage(view.dataset.viewMsg); return; }
     const copy = e.target.closest('[data-copy-link]');
     if (copy) { this.copyMessageLink(copy.dataset.copyLink); return; }
     const del = e.target.closest('[data-delete]');
@@ -18292,6 +18326,58 @@ const ChatView = {
   },
   _linkify(html) {
     return html.replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  },
+
+  // #2: render a message body, turning chat message-links into Slack-style
+  // preview cards. Non-chat links + mentions are handled as before.
+  _renderBody(body) {
+    // Match our own message links: .../app/#chat/<channelId>/<messageId>
+    const linkRe = /(https?:\/\/[^\s<]*#chat\/([^/\s]+)\/([^/\s]+))/g;
+    let hasChatLink = false;
+    // Replace each chat link with a preview card (or a loading placeholder).
+    const withCards = body.replace(linkRe, (full, url, channelId, messageId) => {
+      hasChatLink = true;
+      const cached = this._linkPreviews.get(messageId);
+      if (cached === undefined) { this._ensureLinkPreview(channelId, messageId); return this._previewCardHTML(messageId, null); }
+      if (cached === 'missing') return `<a href="${escape(url)}" target="_blank" rel="noopener">${escape(url)}</a>`;
+      return this._previewCardHTML(messageId, cached);
+    });
+    // Everything that ISN'T a card still gets escaped + linkified + mentions.
+    // We split on the card placeholders so we don't double-escape the card HTML.
+    if (!hasChatLink) return this._highlightMentions(this._linkify(escape(body)));
+    // Rebuild: escape+linkify+mention the plain-text segments, keep cards raw.
+    const parts = withCards.split(/(<div class="chat-linkcard"[\s\S]*?<\/div><\/div>|<a href="[^"]*#chat[^"]*"[\s\S]*?<\/a>)/);
+    return parts.map(seg => {
+      if (seg.startsWith('<div class="chat-linkcard"') || (seg.startsWith('<a href="') && seg.includes('#chat'))) return seg;
+      return this._highlightMentions(this._linkify(escape(seg)));
+    }).join('');
+  },
+  _previewCardHTML(messageId, data) {
+    if (!data) {
+      return `<div class="chat-linkcard is-loading" data-view-msg="${escape(messageId)}"><div class="chat-linkcard-body"><span class="muted small">Loading message…</span></div></div>`;
+    }
+    return `<div class="chat-linkcard" data-view-msg="${escape(messageId)}">
+      <div class="chat-linkcard-body">
+        <div class="chat-linkcard-author">${escape(data.authorName)}${data.channelName ? ` <span class="muted small">in #${escape(data.channelName)}</span>` : ''}</div>
+        <div class="chat-linkcard-snippet">${escape(data.snippet)}</div>
+        <button type="button" class="chat-linkcard-view" data-view-msg="${escape(messageId)}">View message</button>
+      </div>
+    </div>`;
+  },
+  // Fetch the referenced message once, cache a compact preview, then re-render.
+  async _ensureLinkPreview(channelId, messageId) {
+    if (this._linkPreviews.has(messageId)) return;
+    this._linkPreviews.set(messageId, undefined);   // in-flight sentinel via has()
+    const msg = await ChatApi.getMessage(messageId);
+    if (!msg) { this._linkPreviews.set(messageId, 'missing'); this.renderMessages(); return; }
+    const ch = this.channels.find(c => c.id === (msg.channelId || channelId));
+    const snippet = (msg.body || (msg.attachments?.length ? '📎 Attachment' : '')).slice(0, 140);
+    this._linkPreviews.set(messageId, {
+      authorName: msg.authorName, channelId: msg.channelId,
+      channelName: ch ? ch.name : null, snippet,
+    });
+    this.renderMessages();
+    if (this.threadRootId) this.renderThread();
   },
 
   // ---- @mentions (#8) ----

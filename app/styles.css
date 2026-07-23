@@ -6854,6 +6854,21 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 /* #3: highlighted item in the @mention autocomplete menu */
 .chat-mention-item.is-selected { background: var(--tint-100); color: var(--brand-700); font-weight: 600; }
 
+/* v4.80 #2: message-link preview card (Slack-style quoted message) */
+.chat-linkcard {
+  display: flex; margin-top: 6px; max-width: 460px;
+  border: 1px solid var(--hairline); border-left: 3px solid var(--brand-300);
+  border-radius: var(--radius-sm); background: var(--paper-soft);
+  overflow: hidden;
+}
+.chat-linkcard-body { padding: 8px 12px; min-width: 0; }
+.chat-linkcard-author { font-weight: 650; font-size: .85rem; color: var(--ink-900); margin-bottom: 2px; }
+.chat-linkcard-snippet { font-size: .88rem; color: var(--ink-700); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.chat-linkcard-view { margin-top: 6px; border: 0; background: transparent; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 600; color: var(--brand-500); padding: 0; }
+.chat-linkcard-view:hover { text-decoration: underline; }
+.chat-linkcard.is-loading .chat-linkcard-body { padding: 10px 12px; }
+.chat-linkcard.is-loading { border-left-color: var(--ink-200); }
+
 /* v4.79 #3: flash a message when arrived via a copied link */
 .chat-msg.is-flash { animation: chat-flash 2s var(--ease-out); }
 @keyframes chat-flash {
