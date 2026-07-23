@@ -1,5 +1,17 @@
 [
   {
+    "version": "4.75",
+    "date": "2026-07-23",
+    "title": "Chat polish — avatars, day dividers, easier reactions, edit channels",
+    "changes": [
+      "Messages now show each person's profile photo (or a colored initial) next to their name.",
+      "A date bubble (Today / Yesterday / the date) now separates conversations from different days.",
+      "Add a reaction more easily: there's now an always-visible reaction button under every message, plus a '＋ more' button in the hover bar that opens the full emoji picker — not just the six quick ones.",
+      "You can now rename a channel from the Edit button in the channel header.",
+      "Fixed: the emoji field when creating a section now has a Browse button that opens the full emoji picker."
+    ]
+  },
+  {
     "version": "4.74",
     "date": "2026-07-22",
     "title": "Chat — Slack-style channels (admin-only)",
