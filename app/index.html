@@ -1734,6 +1734,7 @@
               <h3 id="chat-channel-name">all-chat</h3>
             </div>
             <div class="chat-main-head-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-chat-files">Files</button>
               <button class="btn btn-ghost btn-sm" id="btn-chat-edit-channel">Edit</button>
               <button class="btn btn-ghost btn-sm" id="btn-chat-delete-channel" hidden>Delete channel</button>
             </div>
@@ -1762,6 +1763,39 @@
             <p class="chat-composer-hint">Enter to send · Shift+Enter for a new line</p>
           </form>
         </section>
+
+        <!-- Thread panel (#4): opens over the right side when viewing a thread -->
+        <aside class="chat-thread" id="chat-thread" hidden aria-label="Thread">
+          <header class="chat-thread-head">
+            <h3>Thread</h3>
+            <button class="icon-btn" id="btn-chat-thread-close" aria-label="Close thread">
+              <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+          </header>
+          <div class="chat-thread-body" id="chat-thread-body"></div>
+          <form class="chat-composer chat-thread-composer" id="chat-thread-composer">
+            <div class="chat-composer-attachments" id="chat-thread-attachments" hidden></div>
+            <div class="chat-composer-row">
+              <button type="button" class="icon-btn chat-attach-btn" id="btn-chat-thread-attach" title="Attach files" aria-label="Attach files">
+                <svg viewBox="0 0 16 16" width="16" height="16"><path d="M12 6.5l-4.5 4.5a2 2 0 01-2.8-2.8L9 3.9a3 3 0 014.2 4.2l-4.4 4.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <textarea id="chat-thread-input" class="chat-composer-input" rows="1" placeholder="Reply…" maxlength="4000"></textarea>
+              <button type="submit" class="btn btn-primary btn-sm chat-send-btn">Reply</button>
+            </div>
+            <input type="file" id="chat-thread-file-input" multiple accept="image/*,application/pdf,.doc,.docx,.txt,.csv,.xlsx,.pptx,.zip" hidden />
+          </form>
+        </aside>
+
+        <!-- Files hub (#13): all attachments in this channel, grouped by day -->
+        <aside class="chat-files" id="chat-files" hidden aria-label="Files">
+          <header class="chat-thread-head">
+            <h3>Files in <span id="chat-files-channel">#all-chat</span></h3>
+            <button class="icon-btn" id="btn-chat-files-close" aria-label="Close files">
+              <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+          </header>
+          <div class="chat-files-body" id="chat-files-body"></div>
+        </aside>
       </div>
     </main>
 
