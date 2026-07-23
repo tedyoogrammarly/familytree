@@ -6408,12 +6408,18 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
    Built on the app's design tokens: forest-green brand, warm cream
    paper, copper accent, Fraunces display + Inter body.
    ================================================================== */
+/* The chat view has no .container wrapper; the top nav is 65px (see .view).
+   Height = viewport minus nav minus a small breathing margin, so the composer
+   always sits inside the shell and on-screen (v4.79 fix #1). */
+#view-chat { padding: 16px 24px; box-sizing: border-box; }
 #view-chat .chat-shell {
   display: grid;
   grid-template-columns: 264px 1fr;
+  grid-template-rows: 100%;
   gap: 0;
-  height: calc(100vh - 132px);
-  min-height: 480px;
+  height: calc(100vh - 65px - 32px);
+  min-height: 420px;
+  max-height: calc(100vh - 65px - 32px);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   overflow: hidden;
@@ -6500,7 +6506,10 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .chat-add-channel:hover { background: rgba(255,255,255,.07); color: var(--paper); }
 
 /* ---- Main ---- */
-.chat-main { display: flex; flex-direction: column; min-width: 0; background: var(--paper); }
+/* min-height:0 lets .chat-messages (flex:1) scroll instead of pushing the
+   composer past the bottom of the shell (v4.79 fix #1). overflow:hidden keeps
+   the composer pinned inside the rounded shell. */
+.chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--paper); }
 .chat-main-head {
   display: flex;
   align-items: center;
@@ -6683,7 +6692,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 
 /* ---- Responsive ---- */
 @media (max-width: 860px) {
-  #view-chat .chat-shell { grid-template-columns: 200px 1fr; height: calc(100vh - 120px); }
+  #view-chat .chat-shell { grid-template-columns: 200px 1fr; height: calc(100vh - 65px - 32px); max-height: calc(100vh - 65px - 32px); }
   .chat-att-image img { max-width: 220px; }
 }
 /* ---- v4.75 polish ---- */
@@ -6844,6 +6853,13 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 
 /* #3: highlighted item in the @mention autocomplete menu */
 .chat-mention-item.is-selected { background: var(--tint-100); color: var(--brand-700); font-weight: 600; }
+
+/* v4.79 #3: flash a message when arrived via a copied link */
+.chat-msg.is-flash { animation: chat-flash 2s var(--ease-out); }
+@keyframes chat-flash {
+  0%, 40% { background: var(--accent-100); box-shadow: inset 3px 0 0 var(--accent-500); }
+  100% { background: transparent; box-shadow: none; }
+}
 
 /* #8: @mention autocomplete menu above the composer */
 .chat-composer { position: relative; }

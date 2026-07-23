@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.79",
+    "date": "2026-07-23",
+    "title": "Chat fixes — composer visibility, emoji placement, copy message link",
+    "changes": [
+      "Fixed: the message box at the bottom of a channel is always visible now, even with a full channel of messages.",
+      "The emoji picker now opens above the button when there isn't room below, so the emoji list is never cut off.",
+      "New: hover a message and click the 🔗 to copy a link straight to that message — open the link and it jumps to and highlights it."
+    ]
+  },
+  {
     "version": "4.78",
     "date": "2026-07-23",
     "title": "Chat fixes — reactions, drafts, mention keyboard, inline reply",

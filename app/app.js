@@ -6756,12 +6756,21 @@ const EmojiPicker = {
     this.activeInput = input;
     const pop = this.ensure();
     const rect = anchor.getBoundingClientRect();
-    pop.style.top  = (rect.bottom + window.scrollY + 6) + 'px';
     pop.style.left = (Math.max(8, Math.min(window.innerWidth - 360, rect.left + window.scrollX))) + 'px';
     pop.hidden = false;
     pop.querySelector('.emoji-search').value = '';
-    setTimeout(() => pop.querySelector('.emoji-search').focus(), 30);
     this.renderGrid();
+    // Position below by default, but flip ABOVE the anchor when there isn't
+    // enough room below (e.g. a message near the bottom of the chat). Measured
+    // after render so we know the popover's real height (v4.79 fix #2).
+    const ph = pop.offsetHeight || 320;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow < ph + 12 && rect.top > ph + 12) {
+      pop.style.top = (rect.top + window.scrollY - ph - 6) + 'px';
+    } else {
+      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+    }
+    setTimeout(() => pop.querySelector('.emoji-search').focus(), 30);
   },
   close() {
     if (this.popover) this.popover.hidden = true;
@@ -11338,7 +11347,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.78';
+const APP_VERSION = '4.79';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
@@ -17519,8 +17528,14 @@ const ChatView = {
     this._applyPrefsToToggles();
     await this.reloadSidebar();
     await this.refreshUnread();
-    // Pick the default channel (#all-chat) or the first, unless one is active.
-    if (!this.activeChannelId && this.channels.length) {
+    // #3: a shared message link (#chat/<channel>/<message>) wins over defaults.
+    const deep = this._pendingDeepLink();
+    if (deep && this.channels.some(c => c.id === deep.channelId)) {
+      await this.openChannel(deep.channelId);
+      this.focusMessage(deep.messageId);
+      try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    } else if (!this.activeChannelId && this.channels.length) {
+      // Pick the default channel (#all-chat) or the first, unless one is active.
       const def = this.channels.find(c => c.is_default) || this.channels[0];
       await this.openChannel(def.id);
     } else if (this.activeChannelId) {
@@ -17677,6 +17692,38 @@ const ChatView = {
     if (totalMentions > 0) document.title = `(${totalMentions}) ${this._baseTitle}`;
     else if (totalUnread > 0) document.title = `• ${this._baseTitle}`;
     else document.title = this._baseTitle;
+  },
+
+  // #3: copy a shareable deep link to a message. The link is a hash the app
+  // parses on load: <origin>/app/#chat/<channelId>/<messageId>. Opening it
+  // switches to Chat, opens the channel, and highlights the message.
+  async copyMessageLink(messageId) {
+    if (!messageId || !this.activeChannelId) return;
+    const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+    const link = `${base}#chat/${this.activeChannelId}/${messageId}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('Link to message copied.');
+    } catch (_) {
+      // Clipboard API can be blocked; fall back to a prompt so the user can copy.
+      window.prompt('Copy this link to the message:', link);
+    }
+  },
+  // Parse the boot hash and, if it targets a chat message, open + focus it.
+  // Called from render() once channels are loaded. Returns the channelId to
+  // open (or null).
+  _pendingDeepLink() {
+    const m = (location.hash || '').match(/^#chat\/([^/]+)\/([^/]+)$/);
+    if (!m) return null;
+    return { channelId: m[1], messageId: m[2] };
+  },
+  // Scroll a message into view and flash a highlight.
+  focusMessage(messageId) {
+    const el = $(`#chat-messages [data-msg="${messageId}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('is-flash');
+    setTimeout(() => el.classList.remove('is-flash'), 2000);
   },
   _onRemoteUpdate(row) {
     if (!row) return;
@@ -18006,6 +18053,7 @@ const ChatView = {
     const actions = `<div class="chat-msg-actions">
         <div class="chat-react-picker">${CHAT_REACTIONS.map(e => `<button class="chat-react-opt" data-react="${escape(m.id)}" data-emoji="${escape(e)}" title="React ${e}">${e}</button>`).join('')}<button class="chat-react-more" data-react-more="${escape(m.id)}" title="More emoji…">＋</button></div>
         ${replyBtn}
+        <button class="chat-msg-act" data-copy-link="${escape(m.id)}" title="Copy link to message">🔗</button>
         ${mine ? `<button class="chat-msg-act" data-edit="${escape(m.id)}" title="Edit">✎</button>` : ''}
         <button class="chat-msg-act" data-delete="${escape(m.id)}" title="Delete">🗑</button>
       </div>`;
@@ -18092,6 +18140,8 @@ const ChatView = {
     if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji, inThread); return; }
     const edit = e.target.closest('[data-edit]');
     if (edit) { this.startEdit(edit.dataset.edit); return; }
+    const copy = e.target.closest('[data-copy-link]');
+    if (copy) { this.copyMessageLink(copy.dataset.copyLink); return; }
     const del = e.target.closest('[data-delete]');
     if (del) { this.deleteMessage(del.dataset.delete, inThread); return; }
     const save = e.target.closest('[data-edit-save]');
