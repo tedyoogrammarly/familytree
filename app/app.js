@@ -470,11 +470,13 @@ const AlbumsApi = {
 // Cached in-session. Falls back to "Family member". Async warm-up: call
 // AuthorNames.warm() once on login so the synchronous nameFor() has data.
 const AuthorNames = {
-  _byUser: new Map(),   // user_id -> displayName
+  _byUser: new Map(),      // user_id -> displayName
+  _memberByUser: new Map(),// user_id -> member id (for avatar lookup)
   async warm() {
     if (!Backend.client) return;
     const { data } = await Backend.client.from('member_accounts').select('user_id, member_id');
     for (const row of (data || [])) {
+      this._memberByUser.set(row.user_id, row.member_id);
       const m = Store.byId(row.member_id);
       if (m) this._byUser.set(row.user_id, displayName(m));
     }
@@ -486,6 +488,13 @@ const AuthorNames = {
   nameFor(userId) {
     if (!userId) return 'Family member';
     return this._byUser.get(userId) || 'Family member';
+  },
+  // v4.75: resolve a user id to their linked member record (for the chat
+  // avatar). Member `photo` is a resolved URL string (not a bucket/path ref),
+  // so callers can pass it straight to cssUrl(). Returns null if unlinked.
+  memberFor(userId) {
+    const mid = this._memberByUser.get(userId);
+    return mid ? Store.byId(mid) : null;
   },
 };
 
@@ -11177,7 +11186,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.74';
+const APP_VERSION = '4.75';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
@@ -17457,16 +17466,41 @@ const ChatView = {
     if (!el) return;
     const has = this.messages.length > 0;
     $('#chat-empty').hidden = has || !this.activeChannelId;
-    el.innerHTML = this.messages.map(m => this._messageHTML(m)).join('');
+    // v4.75 (#11): insert a day-divider bubble whenever the calendar day
+    // changes between consecutive messages.
+    let html = '', lastDay = '';
+    for (const m of this.messages) {
+      const day = this._dayKey(m.createdAt);
+      if (day !== lastDay) {
+        html += `<div class="chat-day-divider"><span class="chat-day-label">${escape(this._dayLabel(m.createdAt))}</span></div>`;
+        lastDay = day;
+      }
+      html += this._messageHTML(m);
+    }
+    el.innerHTML = html;
+  },
+
+  // v4.75 (#5): avatar for a message author — member photo (a resolved URL) or
+  // a gender-tinted initial fallback. Mirrors the .mp-*-avatar pattern.
+  _avatarHTML(userId) {
+    const m = AuthorNames.memberFor(userId);
+    const gender = m?.gender || 'unknown';
+    if (m && m.photo) {
+      return `<div class="chat-msg-avatar is-${escape(gender)}" style="background-image:url('${cssUrl(m.photo)}')"></div>`;
+    }
+    const initial = escape((AuthorNames.nameFor(userId) || '?').trim().charAt(0).toUpperCase() || '?');
+    return `<div class="chat-msg-avatar is-${escape(gender)}">${initial}</div>`;
   },
 
   _messageHTML(m) {
     const mine = m.authorId === Backend.user?.id;
     const time = this._fmtTime(m.createdAt);
     const edited = m.editedAt ? ' <span class="chat-edited">(edited)</span>' : '';
+    const avatar = this._avatarHTML(m.authorId);
 
     if (this.editingId === m.id) {
       return `<div class="chat-msg" data-msg="${escape(m.id)}">
+        ${avatar}
         <div class="chat-msg-main">
           <div class="chat-msg-meta"><span class="chat-msg-author">${escape(m.authorName)}</span><span class="chat-msg-time">${time}</span></div>
           <div class="chat-edit">
@@ -17481,13 +17515,15 @@ const ChatView = {
 
     const attachments = (m.attachments || []).map(a => this._attachmentHTML(a)).join('');
     const reactions = this._reactionsHTML(m);
+    // Hover toolbar: quick reactions + a "more emoji" button (#3) + edit/delete.
     const actions = `<div class="chat-msg-actions">
-        <div class="chat-react-picker">${CHAT_REACTIONS.map(e => `<button class="chat-react-opt" data-react="${escape(m.id)}" data-emoji="${escape(e)}" title="React ${e}">${e}</button>`).join('')}</div>
+        <div class="chat-react-picker">${CHAT_REACTIONS.map(e => `<button class="chat-react-opt" data-react="${escape(m.id)}" data-emoji="${escape(e)}" title="React ${e}">${e}</button>`).join('')}<button class="chat-react-more" data-react-more="${escape(m.id)}" title="More emoji…">＋</button></div>
         ${mine ? `<button class="chat-msg-act" data-edit="${escape(m.id)}" title="Edit">✎</button>` : ''}
         <button class="chat-msg-act" data-delete="${escape(m.id)}" title="Delete">🗑</button>
       </div>`;
 
     return `<div class="chat-msg" data-msg="${escape(m.id)}">
+      ${avatar}
       <div class="chat-msg-main">
         <div class="chat-msg-meta"><span class="chat-msg-author">${escape(m.authorName)}</span><span class="chat-msg-time">${time}</span>${edited}</div>
         ${m.body ? `<div class="chat-msg-body">${this._linkify(escape(m.body))}</div>` : ''}
@@ -17509,14 +17545,16 @@ const ChatView = {
   },
 
   _reactionsHTML(m) {
-    if (!m.reactions.length) return '';
     const by = new Map();
     for (const r of m.reactions) by.set(r.emoji, (by.get(r.emoji) || []).concat(r.userId));
     const pills = [...by.entries()].map(([emoji, users]) => {
       const mine = users.includes(Backend.user?.id);
       return `<button class="chat-reaction${mine ? ' is-mine' : ''}" data-react="${escape(m.id)}" data-emoji="${escape(emoji)}">${emoji} <span>${users.length}</span></button>`;
     }).join('');
-    return `<div class="chat-reactions">${pills}</div>`;
+    // v4.75 (#12): always-visible "add reaction" affordance beneath the
+    // message, opening the full emoji picker. Shown even with zero reactions.
+    const add = `<button class="chat-reaction-add" data-react-more="${escape(m.id)}" title="Add reaction" aria-label="Add reaction"><span class="chat-reaction-add-face">🙂</span><span class="chat-reaction-add-plus">＋</span></button>`;
+    return `<div class="chat-reactions">${pills}${add}</div>`;
   },
 
   renderPending() {
@@ -17543,6 +17581,9 @@ const ChatView = {
 
   // ---- Delegated message-area clicks ----
   _onMessageClick(e) {
+    // "More emoji" / add-reaction → open the full emoji picker (#3, #12).
+    const more = e.target.closest('[data-react-more]');
+    if (more) { this.openReactionPicker(more.dataset.reactMore, more); return; }
     const react = e.target.closest('[data-react]');
     if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji); return; }
     const edit = e.target.closest('[data-edit]');
@@ -17554,31 +17595,78 @@ const ChatView = {
     if (e.target.closest('[data-edit-cancel]')) { this.cancelEdit(); return; }
   },
 
+  // v4.75 (#3): open the app's full EmojiPicker anchored to the clicked button.
+  // The picker writes into a sacrificial proxy input; on 'change' we apply the
+  // chosen emoji as a reaction (toggles, so re-picking the same removes it).
+  openReactionPicker(messageId, anchor) {
+    if (!messageId || !anchor) return;
+    let proxy = document.getElementById('chat-react-proxy');
+    if (!proxy) {
+      proxy = document.createElement('input');
+      proxy.id = 'chat-react-proxy';
+      proxy.type = 'text';
+      proxy.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:0;height:0;';
+      document.body.appendChild(proxy);
+      proxy.addEventListener('change', () => {
+        const emoji = proxy.value;
+        if (emoji && this._reactTargetId) this.toggleReaction(this._reactTargetId, emoji);
+        this._reactTargetId = null;
+        proxy.value = '';
+        EmojiPicker.close();
+      });
+    }
+    this._reactTargetId = messageId;
+    proxy.value = '';
+    EmojiPicker.open(proxy, anchor);
+  },
+
   // ---- Modals ----
   _bindModals() {
     const chModal = $('#chat-channel-modal');
     const secModal = $('#chat-section-modal');
     on(chModal, 'click', (e) => { if (e.target.closest('[data-close]')) chModal.setAttribute('aria-hidden', 'true'); });
     on(secModal, 'click', (e) => { if (e.target.closest('[data-close]')) secModal.setAttribute('aria-hidden', 'true'); });
-    on($('#chat-channel-form'), 'submit', (e) => { e.preventDefault(); this.createChannel(); });
+    on($('#chat-channel-form'), 'submit', (e) => { e.preventDefault(); this.submitChannel(); });
     on($('#chat-section-form'), 'submit', (e) => { e.preventDefault(); this.createSection(); });
+    // #2: Browse opens the app's full EmojiPicker into the section emoji input.
+    on($('#chat-section-emoji-browse'), 'click', (e) => {
+      e.stopPropagation();
+      EmojiPicker.open($('#chat-section-emoji-input'), $('#chat-section-emoji-browse'));
+    });
+    // #1: rename the active channel from the channel header.
+    on($('#btn-chat-edit-channel'), 'click', () => this.openChannelModal(this.activeChannelId));
   },
-  openChannelModal() {
+  // openChannelModal doubles as create (no id) and edit (#1: id supplied).
+  openChannelModal(editId = null) {
     const sel = $('#chat-channel-section-select');
     sel.innerHTML = '<option value="">No section</option>' +
-      this.sections.map(s => `<option value="${escape(s.id)}">${escape(s.emoji || '💬')} ${escape(s.name)}</option>`).join('');
-    $('#chat-channel-name-input').value = '';
+      this.sections.map(s => `<option value="${escape(s.id)}">${s.emoji || '💬'} ${escape(s.name)}</option>`).join('');
+    const ch = editId ? this.channels.find(c => c.id === editId) : null;
+    this._editingChannelId = ch ? ch.id : null;
+    $('#chat-channel-modal-title').textContent = ch ? 'Edit channel' : 'New channel';
+    $('#chat-channel-submit').textContent = ch ? 'Save' : 'Create channel';
+    $('#chat-channel-name-input').value = ch ? ch.name : '';
+    sel.value = ch ? (ch.section_id || '') : '';
     $('#chat-channel-modal').setAttribute('aria-hidden', 'false');
     setTimeout(() => $('#chat-channel-name-input').focus(), 30);
   },
-  async createChannel() {
+  async submitChannel() {
     const name = $('#chat-channel-name-input').value;
     const section_id = $('#chat-channel-section-select').value || null;
-    const res = await ChatApi.createChannel({ name, section_id });
-    if (!res.ok) { toast(res.reason || 'Could not create channel.', 'danger'); return; }
-    $('#chat-channel-modal').setAttribute('aria-hidden', 'true');
-    await this.reloadSidebar();
-    await this.openChannel(res.id);
+    if (this._editingChannelId) {
+      const res = await ChatApi.updateChannel(this._editingChannelId, { name, section_id });
+      if (!res.ok) { toast(res.reason || 'Could not update channel.', 'danger'); return; }
+      $('#chat-channel-modal').setAttribute('aria-hidden', 'true');
+      const id = this._editingChannelId; this._editingChannelId = null;
+      await this.reloadSidebar();
+      await this.openChannel(id);
+    } else {
+      const res = await ChatApi.createChannel({ name, section_id });
+      if (!res.ok) { toast(res.reason || 'Could not create channel.', 'danger'); return; }
+      $('#chat-channel-modal').setAttribute('aria-hidden', 'true');
+      await this.reloadSidebar();
+      await this.openChannel(res.id);
+    }
   },
   openSectionModal() {
     $('#chat-section-name-input').value = '';
@@ -17631,6 +17719,22 @@ const ChatView = {
     const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
     if (d >= today) return time;
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+  },
+  // v4.75 (#11): day-divider helpers. _dayKey groups by local calendar day;
+  // _dayLabel renders a friendly "Today / Yesterday / Weekday, Month D".
+  _dayKey(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  },
+  _dayLabel(ts) {
+    const d = new Date(ts); d.setHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - d) / 86400000);
+    if (diff === 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    const opts = { weekday: 'long', month: 'long', day: 'numeric' };
+    if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString(undefined, opts);
   },
   _linkify(html) {
     return html.replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);

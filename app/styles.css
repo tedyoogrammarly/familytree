@@ -6686,6 +6686,79 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   #view-chat .chat-shell { grid-template-columns: 200px 1fr; height: calc(100vh - 120px); }
   .chat-att-image img { max-width: 220px; }
 }
+/* ---- v4.75 polish ---- */
+/* #5: author avatar */
+.chat-msg-avatar {
+  flex: none;
+  width: 36px; height: 36px;
+  border-radius: var(--radius-sm);
+  background-size: cover; background-position: center;
+  background-color: var(--ink-200);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: .95rem; color: #fff;
+  margin-top: 2px;
+  user-select: none;
+}
+.chat-msg-avatar.is-male   { background-color: var(--rose-male); }
+.chat-msg-avatar.is-female { background-color: var(--rose-female); }
+.chat-msg-avatar.is-unknown{ background-color: var(--brand-500); }
+
+/* #1: channel header actions */
+.chat-main-head-actions { display: flex; gap: var(--space-2); align-items: center; }
+
+/* #11: day-divider bubble */
+.chat-day-divider {
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.chat-day-divider::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%;
+  border-top: 1px solid var(--hairline);
+}
+.chat-day-label {
+  position: relative;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 3px 14px;
+  font-size: .74rem; font-weight: 600;
+  color: var(--ink-500);
+  box-shadow: var(--shadow-soft);
+}
+
+/* #12: always-visible add-reaction affordance beneath a message */
+.chat-reaction-add {
+  display: inline-flex; align-items: center; gap: 1px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--paper-soft);
+  padding: 1px 7px 1px 5px;
+  cursor: pointer;
+  color: var(--ink-400);
+  opacity: .55;
+  transition: opacity .12s, border-color .12s, background .12s;
+}
+.chat-msg:hover .chat-reaction-add { opacity: 1; }
+.chat-reaction-add:hover { border-color: var(--brand-300); background: var(--tint-50); color: var(--brand-600); }
+.chat-reaction-add-face { font-size: .85rem; }
+.chat-reaction-add-plus { font-size: .8rem; font-weight: 700; }
+/* keep the add button off its own line when there are no reactions yet */
+.chat-reactions:empty { display: none; }
+
+/* #3: "more emoji" button inside the hover picker */
+.chat-react-more {
+  border: 0; background: transparent; cursor: pointer;
+  font-size: .95rem; font-weight: 700; color: var(--ink-400);
+  padding: 4px 6px; border-radius: var(--radius-xs);
+  border-left: 1px solid var(--hairline); margin-left: 2px;
+}
+.chat-react-more:hover { background: var(--paper-veil); color: var(--brand-600); }
+
+/* #2: section emoji picker row */
+.chat-emoji-pick { display: flex; gap: var(--space-2); align-items: center; }
+.chat-emoji-pick .chat-emoji-input { flex: 0 0 56px; }
+
 @media (max-width: 620px) {
   #view-chat .chat-shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .chat-sidebar { flex-direction: row; flex-wrap: wrap; align-items: center; padding: var(--space-2) var(--space-3); max-height: 132px; }

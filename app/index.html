@@ -1733,7 +1733,10 @@
               <span class="chat-hash">#</span>
               <h3 id="chat-channel-name">all-chat</h3>
             </div>
-            <button class="btn btn-ghost btn-sm" id="btn-chat-delete-channel" hidden>Delete channel</button>
+            <div class="chat-main-head-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-chat-edit-channel">Edit</button>
+              <button class="btn btn-ghost btn-sm" id="btn-chat-delete-channel" hidden>Delete channel</button>
+            </div>
           </header>
 
           <div class="chat-messages" id="chat-messages"></div>
@@ -1767,7 +1770,7 @@
       <div class="modal-backdrop" data-close></div>
       <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
         <header class="modal-head">
-          <h3>New channel</h3>
+          <h3 id="chat-channel-modal-title">New channel</h3>
           <button class="icon-btn" data-close aria-label="Close">
             <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           </button>
@@ -1783,7 +1786,7 @@
           </label>
           <div class="modal-actions">
             <button type="button" class="btn btn-ghost" data-close>Cancel</button>
-            <button type="submit" class="btn btn-primary">Create channel</button>
+            <button type="submit" class="btn btn-primary" id="chat-channel-submit">Create channel</button>
           </div>
         </form>
       </div>
@@ -1803,7 +1806,10 @@
           <div class="chat-section-fields">
             <label class="field chat-emoji-field">
               <span>Emoji</span>
-              <input type="text" id="chat-section-emoji-input" class="chat-emoji-input" value="💬" maxlength="4" autocomplete="off" />
+              <div class="chat-emoji-pick">
+                <input type="text" id="chat-section-emoji-input" class="chat-emoji-input" value="💬" maxlength="4" autocomplete="off" />
+                <button type="button" class="btn btn-ghost btn-sm" id="chat-section-emoji-browse">Browse…</button>
+              </div>
             </label>
             <label class="field">
               <span>Section name</span>
