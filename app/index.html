@@ -127,6 +127,7 @@
         </button>
         <nav class="nav" role="tablist">
           <button class="nav-tab" data-view="dashboard" data-admin-only role="tab">Dashboard</button>
+          <button class="nav-tab" data-view="chat" data-admin-only role="tab">Chat</button>
           <button class="nav-tab" data-view="calendar" data-admin-only data-family-allowed role="tab">Calendar</button>
           <button class="nav-tab is-active" data-view="tree" role="tab">Family Tree</button>
           <button class="nav-tab" data-view="myfamily" role="tab">My Family</button>
@@ -1709,6 +1710,113 @@
         <div class="panel" id="gift-reports-panel" hidden></div>
       </div>
     </main>
+
+    <!-- ===== CHAT (admin-only, Slack-style) ===== -->
+    <main id="view-chat" class="view" hidden>
+      <div class="chat-shell">
+        <!-- Sidebar: sections → channels -->
+        <aside class="chat-sidebar" aria-label="Channels">
+          <div class="chat-sidebar-head">
+            <h2><span class="page-emoji" data-page-emoji="chat"></span>Chat</h2>
+            <button class="icon-btn" id="btn-chat-add-section" title="New section" aria-label="New section">
+              <svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <nav class="chat-channels" id="chat-channels" aria-label="Channel list"></nav>
+          <button class="chat-add-channel" id="btn-chat-add-channel">+ Add channel</button>
+        </aside>
+
+        <!-- Main: header + messages + composer -->
+        <section class="chat-main" aria-live="polite">
+          <header class="chat-main-head">
+            <div class="chat-main-title">
+              <span class="chat-hash">#</span>
+              <h3 id="chat-channel-name">all-chat</h3>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="btn-chat-delete-channel" hidden>Delete channel</button>
+          </header>
+
+          <div class="chat-messages" id="chat-messages"></div>
+
+          <div class="chat-empty" id="chat-empty" hidden>
+            <div class="tree-empty-card">
+              <h3>No messages yet</h3>
+              <p>Say something to get <span id="chat-empty-channel">#all-chat</span> started.</p>
+            </div>
+          </div>
+
+          <!-- Composer — mirrors the Memories post/comment interaction -->
+          <form class="chat-composer" id="chat-composer">
+            <div class="chat-composer-attachments" id="chat-composer-attachments" hidden></div>
+            <div class="chat-composer-row">
+              <button type="button" class="icon-btn chat-attach-btn" id="btn-chat-attach" title="Attach files" aria-label="Attach files">
+                <svg viewBox="0 0 16 16" width="16" height="16"><path d="M12 6.5l-4.5 4.5a2 2 0 01-2.8-2.8L9 3.9a3 3 0 014.2 4.2l-4.4 4.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <textarea id="chat-composer-input" class="chat-composer-input" rows="1" placeholder="Message #all-chat" maxlength="4000"></textarea>
+              <button type="submit" class="btn btn-primary btn-sm chat-send-btn" id="btn-chat-send">Send</button>
+            </div>
+            <input type="file" id="chat-file-input" multiple accept="image/*,application/pdf,.doc,.docx,.txt,.csv,.xlsx,.pptx,.zip" hidden />
+            <p class="chat-composer-hint">Enter to send · Shift+Enter for a new line</p>
+          </form>
+        </section>
+      </div>
+    </main>
+
+    <!-- ===== CHAT: NEW CHANNEL MODAL ===== -->
+    <div id="chat-channel-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3>New channel</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="chat-channel-form" class="modal-body">
+          <label class="field">
+            <span>Channel name</span>
+            <div class="chat-name-field"><span class="chat-hash">#</span><input type="text" id="chat-channel-name-input" placeholder="marketing" maxlength="60" autocomplete="off" required /></div>
+          </label>
+          <label class="field">
+            <span>Section (optional)</span>
+            <select id="chat-channel-section-select"><option value="">No section</option></select>
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+            <button type="submit" class="btn btn-primary">Create channel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== CHAT: NEW SECTION MODAL ===== -->
+    <div id="chat-section-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3>New section</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="chat-section-form" class="modal-body">
+          <div class="chat-section-fields">
+            <label class="field chat-emoji-field">
+              <span>Emoji</span>
+              <input type="text" id="chat-section-emoji-input" class="chat-emoji-input" value="💬" maxlength="4" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Section name</span>
+              <input type="text" id="chat-section-name-input" placeholder="Projects" maxlength="60" autocomplete="off" required />
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+            <button type="submit" class="btn btn-primary">Create section</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ===== LINK FAMILY MODAL ===== -->
     <div id="link-modal" class="modal" aria-hidden="true">

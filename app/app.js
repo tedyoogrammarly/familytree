@@ -326,6 +326,51 @@ const Backend = {
       )
       .subscribe();
   },
+
+  // Realtime for Chat (v4.74). One postgres_changes channel per open
+  // conversation: message INSERT/UPDATE/DELETE + reaction INSERT/DELETE, all
+  // filtered to the active channel_id. Returns a handle the caller stores and
+  // passes to unsubscribeChat() on channel switch/teardown so we don't leak
+  // channels. `handlers` is { onMessage, onMessageUpdate, onMessageDelete,
+  // onReaction }. We forward our OWN echoes too (edits/reactions/deletes need
+  // to reconcile across our other devices); the view de-dupes by id.
+  subscribeChat(channelId, handlers = {}) {
+    if (!this.client || !channelId) return null;
+    const ch = this.client
+      .channel(`chat-${channelId}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `channel_id=eq.${channelId}` },
+        (p) => handlers.onMessage && handlers.onMessage(p.new))
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'chat_messages', filter: `channel_id=eq.${channelId}` },
+        (p) => handlers.onMessageUpdate && handlers.onMessageUpdate(p.new))
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'chat_messages' },
+        // DELETE payloads carry only the primary key (old.id); no channel filter
+        // is possible, so the view ignores ids it doesn't currently hold.
+        (p) => handlers.onMessageDelete && handlers.onMessageDelete(p.old))
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'chat_message_reactions' },
+        (p) => handlers.onReaction && handlers.onReaction(p))
+      .subscribe();
+    return ch;
+  },
+
+  // Realtime for the sidebar: channel + section INSERT/UPDATE/DELETE so a
+  // channel/section created on another device appears live. Single shared
+  // subscription for the whole Chat view (not per-channel).
+  subscribeChatSidebar(handler) {
+    if (!this.client) return null;
+    return this.client
+      .channel('chat-sidebar')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_channels' }, () => handler && handler())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_sections' }, () => handler && handler())
+      .subscribe();
+  },
+
+  unsubscribeChat(handle) {
+    if (this.client && handle) { try { this.client.removeChannel(handle); } catch (_) {} }
+  },
 };
 
 // -------------------- ALBUMS DATA ACCESS (v4.58) --------------------
@@ -547,6 +592,171 @@ const MemoriesApi = {
     const { error } = await Backend.client.from('memory_comment_reactions').delete()
       .eq('comment_id', commentId).eq('user_id', Backend.user?.id).eq('emoji', emoji);
     if (error) { this._warn('removeCommentReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+};
+
+// -------------------- CHAT DATA ACCESS (v4.74) --------------------
+// CRUD against the dedicated chat_* tables (admin-only, Slack-style channels).
+// Mirrors MemoriesApi/AlbumsApi: same _warn, same { ok, reason } returns, and
+// the SAME graceful-degradation contract — every method returns []/null/
+// { ok:false } if the tables aren't there yet, so the front-end is safe to
+// ship before the SQL migration (2026-07-22-chat.sql) is applied.
+//
+// Row shapes returned to the view:
+//   section  { id, name, emoji, sort_order }
+//   channel  { id, name, section_id, is_default, sort_order }
+//   message  { id, channelId, body, attachments, authorId, authorName,
+//              editedAt, createdAt, reactions:[{emoji,userId}] }
+const ChatApi = {
+  _warn(w, e) { if (e) console.warn(`ChatApi.${w}:`, e.message); },
+
+  // ---- Sections ----
+  async listSections() {
+    if (!Backend.client) return [];
+    const { data, error } = await Backend.client.from('chat_sections')
+      .select('id, name, emoji, sort_order, created_at')
+      .order('sort_order', { ascending: true }).order('created_at', { ascending: true });
+    if (error) { this._warn('listSections', error); return []; }
+    return data || [];
+  },
+  async createSection({ name, emoji }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await Backend.client.from('chat_sections')
+      .insert({ name, emoji: emoji || '💬' }).select('id').single();
+    if (error) { this._warn('createSection', error); return { ok: false, reason: error.message }; }
+    return { ok: true, id: data.id };
+  },
+  async updateSection(id, { name, emoji, sort_order }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const patch = {};
+    if (name !== undefined)       patch.name = name;
+    if (emoji !== undefined)      patch.emoji = emoji || '💬';
+    if (sort_order !== undefined) patch.sort_order = sort_order;
+    const { error } = await Backend.client.from('chat_sections').update(patch).eq('id', id);
+    if (error) { this._warn('updateSection', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+  async deleteSection(id) {
+    if (!Backend.client) return { ok: false };
+    // Channels in a deleted section fall back to "ungrouped" (FK on delete set null).
+    const { error } = await Backend.client.from('chat_sections').delete().eq('id', id);
+    if (error) { this._warn('deleteSection', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  // ---- Channels ----
+  async listChannels() {
+    if (!Backend.client) return [];
+    const { data, error } = await Backend.client.from('chat_channels')
+      .select('id, name, section_id, is_default, sort_order, created_at')
+      .order('sort_order', { ascending: true }).order('created_at', { ascending: true });
+    if (error) { this._warn('listChannels', error); return []; }
+    return data || [];
+  },
+  async createChannel({ name, section_id }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const clean = String(name || '').trim().replace(/^#+/, '');   // store without leading '#'
+    if (!clean) return { ok: false, reason: 'Channel name required.' };
+    const { data, error } = await Backend.client.from('chat_channels')
+      .insert({ name: clean, section_id: section_id || null }).select('id').single();
+    if (error) { this._warn('createChannel', error); return { ok: false, reason: error.message }; }
+    return { ok: true, id: data.id };
+  },
+  async updateChannel(id, { name, section_id, sort_order }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const patch = {};
+    if (name !== undefined)       patch.name = String(name).trim().replace(/^#+/, '');
+    if (section_id !== undefined) patch.section_id = section_id || null;
+    if (sort_order !== undefined) patch.sort_order = sort_order;
+    const { error } = await Backend.client.from('chat_channels').update(patch).eq('id', id);
+    if (error) { this._warn('updateChannel', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+  async deleteChannel(id) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('chat_channels').delete().eq('id', id);
+    if (error) { this._warn('deleteChannel', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  // ---- Messages ----
+  // Newest `limit` messages (optionally older than `before` for pagination),
+  // returned oldest→newest so the view can append and scroll to the bottom.
+  // Reactions are batch-fetched and stitched on, exactly like MemoriesApi.list().
+  async listMessages(channelId, { before, limit = 50 } = {}) {
+    if (!Backend.client || !channelId) return [];
+    let q = Backend.client.from('chat_messages')
+      .select('id, channel_id, author, body, attachments, edited_at, created_at')
+      .eq('channel_id', channelId)
+      .order('created_at', { ascending: false }).limit(limit);
+    if (before) q = q.lt('created_at', before);
+    const { data, error } = await q;
+    if (error) { this._warn('listMessages', error); return []; }
+    const rows = (data || []).slice().reverse();      // oldest → newest
+    if (!rows.length) return [];
+    const ids = rows.map(m => m.id);
+    const rx = await Backend.client.from('chat_message_reactions')
+      .select('message_id, user_id, emoji').in('message_id', ids);
+    if (rx.error) this._warn('listMessages(reactions)', rx.error);
+    const rxBy = new Map();
+    for (const r of (rx.data || [])) {
+      if (!rxBy.has(r.message_id)) rxBy.set(r.message_id, []);
+      rxBy.get(r.message_id).push({ emoji: r.emoji, userId: r.user_id });
+    }
+    return rows.map(m => this._shape(m, rxBy.get(m.id) || []));
+  },
+  // Normalize a raw DB row (+ its reactions) into the view's message shape.
+  // Exposed so the realtime handler can shape freshly-inserted/updated rows.
+  _shape(m, reactions = []) {
+    return {
+      id: m.id, channelId: m.channel_id, body: m.body || '',
+      attachments: m.attachments || [],
+      authorId: m.author, authorName: AuthorNames.nameFor(m.author),
+      editedAt: m.edited_at ? new Date(m.edited_at).getTime() : null,
+      createdAt: new Date(m.created_at).getTime(),
+      reactions,
+    };
+  },
+  async sendMessage(channelId, { body, attachments } = {}) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const text = (body || '').trim();
+    if (!text && !(attachments && attachments.length)) return { ok: false, reason: 'Nothing to send.' };
+    const { data, error } = await Backend.client.from('chat_messages')
+      .insert({ channel_id: channelId, body: text || null, attachments: attachments || [] })
+      .select('id, channel_id, author, body, attachments, edited_at, created_at').single();
+    if (error) { this._warn('sendMessage', error); return { ok: false, reason: error.message }; }
+    return { ok: true, message: this._shape(data, []) };
+  },
+  async editMessage(id, { body }) {
+    if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
+    const { data, error } = await Backend.client.from('chat_messages')
+      .update({ body: (body || '').trim() || null, edited_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, channel_id, author, body, attachments, edited_at, created_at').single();
+    if (error) { this._warn('editMessage', error); return { ok: false, reason: error.message }; }
+    return { ok: true, message: this._shape(data, []) };
+  },
+  async deleteMessage(id) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('chat_messages').delete().eq('id', id);
+    if (error) { this._warn('deleteMessage', error); return { ok: false, reason: error.message }; }
+    return { ok: true };
+  },
+
+  // ---- Reactions ----
+  async addReaction(messageId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('chat_message_reactions')
+      .insert({ message_id: messageId, emoji });
+    if (error) { this._warn('addReaction', error); return { ok: false }; }
+    return { ok: true };
+  },
+  async removeReaction(messageId, emoji) {
+    if (!Backend.client) return { ok: false };
+    const { error } = await Backend.client.from('chat_message_reactions').delete()
+      .eq('message_id', messageId).eq('user_id', Backend.user?.id).eq('emoji', emoji);
+    if (error) { this._warn('removeReaction', error); return { ok: false }; }
     return { ok: true };
   },
 };
@@ -3786,7 +3996,7 @@ const Views = {
     if (name === 'friend-tree') { name = 'admin'; pendingMemberTab = 'friends'; }
     // Family role gets Calendar (read-only); everything else in the
     // admin-only set still bounces them to Tree.
-    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history') && !Auth.isAdmin()) name = 'tree';
+    if ((name === 'admin' || name === 'gifts' || name === 'dashboard' || name === 'history' || name === 'chat') && !Auth.isAdmin()) name = 'tree';
     if (name === 'calendar' && !Auth.canViewCalendar()) name = 'tree';
     if (name === 'vault' && !Auth.canAccessVault()) name = 'tree';
     if (name === 'events' && !Auth.isAdmin() && !userEventsList().length) name = 'tree';
@@ -3814,8 +4024,11 @@ const Views = {
     $('#view-events').hidden       = name !== 'events';
     $('#view-calendar').hidden     = name !== 'calendar';
     $('#view-gifts').hidden        = name !== 'gifts';
+    $('#view-chat').hidden         = name !== 'chat';
     // Leaving the dashboard: stop its background clock interval (v4.56).
     if (name !== 'dashboard') DashboardView.stopClock();
+    // Leaving Chat: drop its realtime subscriptions so we don't leak channels.
+    if (name !== 'chat') ChatView.teardown();
     // Defer the heavy per-view render to a fresh task. The click handler
     // returns immediately and the browser paints the visibility change in
     // <50ms (good INP). The render — which can run 100ms+ on a populated
@@ -3840,6 +4053,7 @@ const Views = {
       if (name === 'mykids')    MyKidsView.render();
       if (name === 'recipes')   RecipesView.render();
       if (name === 'memories')  MemoriesView.showSubtab(MemoriesView.subtab);
+      if (name === 'chat')      ChatView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
       if (name === 'tree')      Canvas.renderAll();
@@ -10264,8 +10478,8 @@ function enterApp() {
   setTimeout(() => { if (Store.membersList().length) Canvas.fit(); }, 60);
   // Push stored page emojis into the H2 slots and nav tabs.
   PageEmojis.applyAll();
-  // Admins land on Dashboard; everyone else stays on the tree.
-  if (Auth.isAdmin()) Views.show('dashboard');
+  // Admins land on Chat (v4.74); everyone else stays on the tree.
+  if (Auth.isAdmin()) Views.show('chat');
 }
 
 async function init() {
@@ -10296,6 +10510,7 @@ async function init() {
   RecipesView.init();
   MemoriesView.init();
   AlbumsView.init();
+  ChatView.init();
   TimeCapsuleView.init();
   StoriesView.init();
   NewsletterView.init();
@@ -10962,7 +11177,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.73';
+const APP_VERSION = '4.74';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
@@ -16968,6 +17183,457 @@ const AlbumModal = {
       await AlbumsView.openAlbum(res.id);   // jump into the new album to add photos
       toast('Album created — now add some photos.');
     }
+  },
+};
+
+// -------------------- CHAT VIEW (v4.74 — admin-only, Slack-style) --------------------
+// Two-pane surface: sidebar (sections → channels) + main (header, message list,
+// composer). Data lives in the dedicated chat_* tables via ChatApi (NOT the
+// archive blob), exactly like Memories/Albums. Realtime keeps the open channel
+// and the sidebar live. All state is on the object; there is no global store.
+//
+// Composer mirrors the Memories interaction: a textarea (Enter to send,
+// Shift+Enter for newline), an attach button + drag-drop onto the message list,
+// optimistic append. Messages support emoji reactions, in-place edit (sets
+// edited_at → shows "(edited)"), delete, and inline image / file attachments.
+const CHAT_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
+
+const ChatView = {
+  inited: false,
+  loaded: false,
+  sections: [],
+  channels: [],
+  activeChannelId: null,
+  messages: [],            // for the active channel, oldest → newest
+  pending: [],             // { bucket, path, name, contentType, sizeBytes, isImage }
+  sub: null,               // per-channel realtime handle
+  sidebarSub: null,        // sidebar realtime handle
+  urlCache: new Map(),     // `${bucket}/${path}` → signed url (per session)
+  editingId: null,
+
+  init() {
+    if (this.inited) return;
+    this.inited = true;
+
+    // Composer: submit + Enter/Shift+Enter + auto-grow.
+    const form  = $('#chat-composer');
+    const input = $('#chat-composer-input');
+    on(form, 'submit', (e) => { e.preventDefault(); this.send(); });
+    on(input, 'keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); }
+    });
+    on(input, 'input', () => this._autogrow(input));
+
+    // Attachments.
+    on($('#btn-chat-attach'), 'click', () => $('#chat-file-input').click());
+    on($('#chat-file-input'), 'change', (e) => this.addFiles(e.target.files));
+    this._bindDropzone();
+
+    // Sidebar actions.
+    on($('#btn-chat-add-channel'), 'click', () => this.openChannelModal());
+    on($('#btn-chat-add-section'), 'click', () => this.openSectionModal());
+    on($('#btn-chat-delete-channel'), 'click', () => this.deleteActiveChannel());
+
+    // Channel list (delegated).
+    on($('#chat-channels'), 'click', (e) => {
+      const item = e.target.closest('[data-channel]');
+      if (item) this.openChannel(item.dataset.channel);
+    });
+
+    // Message list (delegated): reactions, edit, delete, attachment open.
+    on($('#chat-messages'), 'click', (e) => this._onMessageClick(e));
+
+    this._bindModals();
+  },
+
+  // ---- Data / lifecycle ----
+  async render() {
+    if (!Backend.client) { this._renderEmptyBackend(); return; }
+    await this.reloadSidebar();
+    // Pick the default channel (#all-chat) or the first, unless one is active.
+    if (!this.activeChannelId && this.channels.length) {
+      const def = this.channels.find(c => c.is_default) || this.channels[0];
+      await this.openChannel(def.id);
+    } else if (this.activeChannelId) {
+      await this.openChannel(this.activeChannelId);
+    } else {
+      this.renderChannels();
+      this.renderMessages();
+    }
+    this._subscribeSidebar();
+  },
+
+  async reloadSidebar() {
+    [this.sections, this.channels] = await Promise.all([
+      ChatApi.listSections(), ChatApi.listChannels(),
+    ]);
+    this.loaded = true;
+    this.renderChannels();
+  },
+
+  async openChannel(id) {
+    if (!id) return;
+    this.activeChannelId = id;
+    this.editingId = null;
+    this.renderChannels();                       // active highlight
+    const ch = this.channels.find(c => c.id === id);
+    const nm = ch ? ch.name : 'channel';
+    $('#chat-channel-name').textContent = nm;
+    $('#chat-composer-input').placeholder = `Message #${nm}`;
+    $('#chat-empty-channel').textContent = `#${nm}`;
+    $('#btn-chat-delete-channel').hidden = !ch || ch.is_default;
+    this.messages = await ChatApi.listMessages(id, { limit: 50 });
+    await this._warmUrls(this.messages);
+    this.renderMessages();
+    this._scrollToBottom();
+    this._subscribeChannel(id);
+  },
+
+  // ---- Realtime ----
+  _subscribeChannel(id) {
+    Backend.unsubscribeChat(this.sub);
+    this.sub = Backend.subscribeChat(id, {
+      onMessage: (row) => this._onRemoteInsert(row),
+      onMessageUpdate: (row) => this._onRemoteUpdate(row),
+      onMessageDelete: (row) => this._onRemoteDelete(row),
+      onReaction: (payload) => this._onRemoteReaction(payload),
+    });
+  },
+  _subscribeSidebar() {
+    if (this.sidebarSub) return;
+    this.sidebarSub = Backend.subscribeChatSidebar(() => this.reloadSidebar());
+  },
+  teardown() {
+    Backend.unsubscribeChat(this.sub);
+    Backend.unsubscribeChat(this.sidebarSub);
+    this.sub = null; this.sidebarSub = null;
+  },
+
+  async _onRemoteInsert(row) {
+    if (!row || row.channel_id !== this.activeChannelId) return;
+    if (this.messages.some(m => m.id === row.id)) return;   // our optimistic echo
+    const msg = ChatApi._shape(row, []);
+    this.messages.push(msg);
+    await this._warmUrls([msg]);
+    this.renderMessages();
+    this._scrollToBottom();
+  },
+  _onRemoteUpdate(row) {
+    if (!row) return;
+    const i = this.messages.findIndex(m => m.id === row.id);
+    if (i < 0) return;
+    const kept = this.messages[i].reactions;
+    this.messages[i] = ChatApi._shape(row, kept);
+    this.renderMessages();
+  },
+  _onRemoteDelete(row) {
+    if (!row || !row.id) return;
+    const before = this.messages.length;
+    this.messages = this.messages.filter(m => m.id !== row.id);
+    if (this.messages.length !== before) this.renderMessages();
+  },
+  async _onRemoteReaction(payload) {
+    // Reaction rows aren't channel-filtered; only act if the message is loaded.
+    const r = payload.new || payload.old;
+    if (!r) return;
+    const msg = this.messages.find(m => m.id === r.message_id);
+    if (!msg) return;
+    if (payload.eventType === 'INSERT' || payload.type === 'INSERT') {
+      if (!msg.reactions.some(x => x.emoji === r.emoji && x.userId === r.user_id))
+        msg.reactions.push({ emoji: r.emoji, userId: r.user_id });
+    } else {
+      msg.reactions = msg.reactions.filter(x => !(x.emoji === r.emoji && x.userId === r.user_id));
+    }
+    this.renderMessages();
+  },
+
+  // ---- Sending / editing ----
+  async send() {
+    const input = $('#chat-composer-input');
+    const body = input.value;
+    if (!body.trim() && !this.pending.length) return;
+    if (!this.activeChannelId) { toast('Pick a channel first.', 'warn'); return; }
+    const attachments = this.pending.slice();
+    input.value = ''; this._autogrow(input);
+    this.pending = []; this.renderPending();
+    const res = await ChatApi.sendMessage(this.activeChannelId, { body, attachments });
+    if (!res.ok) { toast(res.reason || 'Message failed to send.', 'danger'); return; }
+    // Optimistic append (realtime will skip the echo by id).
+    if (!this.messages.some(m => m.id === res.message.id)) {
+      this.messages.push(res.message);
+      await this._warmUrls([res.message]);
+      this.renderMessages();
+      this._scrollToBottom();
+    }
+  },
+
+  startEdit(id) {
+    this.editingId = id;
+    this.renderMessages();
+    const ta = $(`#chat-messages [data-edit-input="${id}"]`);
+    if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  },
+  cancelEdit() { this.editingId = null; this.renderMessages(); },
+  async saveEdit(id) {
+    const ta = $(`#chat-messages [data-edit-input="${id}"]`);
+    if (!ta) return;
+    const res = await ChatApi.editMessage(id, { body: ta.value });
+    if (!res.ok) { toast(res.reason || 'Edit failed.', 'danger'); return; }
+    const i = this.messages.findIndex(m => m.id === id);
+    if (i >= 0) this.messages[i] = { ...res.message, reactions: this.messages[i].reactions };
+    this.editingId = null;
+    this.renderMessages();
+  },
+  async deleteMessage(id) {
+    if (!confirm('Delete this message?')) return;
+    const res = await ChatApi.deleteMessage(id);
+    if (!res.ok) { toast('Delete failed.', 'danger'); return; }
+    this.messages = this.messages.filter(m => m.id !== id);
+    this.renderMessages();
+  },
+
+  // ---- Reactions ----
+  async toggleReaction(messageId, emoji) {
+    const msg = this.messages.find(m => m.id === messageId);
+    if (!msg) return;
+    const mine = msg.reactions.some(r => r.emoji === emoji && r.userId === Backend.user?.id);
+    if (mine) {
+      msg.reactions = msg.reactions.filter(r => !(r.emoji === emoji && r.userId === Backend.user?.id));
+      this.renderMessages();
+      await ChatApi.removeReaction(messageId, emoji);
+    } else {
+      msg.reactions.push({ emoji, userId: Backend.user?.id });
+      this.renderMessages();
+      await ChatApi.addReaction(messageId, emoji);
+    }
+  },
+
+  // ---- Attachments ----
+  async addFiles(fileList) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    for (const file of files) {
+      const isImage = /^image\//.test(file.type);
+      let toUpload = file;
+      if (isImage) {
+        try {
+          const blob = await downscaleImageToBlob(file, 2400, 0.85);
+          toUpload = new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+        } catch (_) { /* fall back to original */ }
+      }
+      const res = await Backend.uploadMedia(toUpload, {
+        bucket: 'family-photos', folder: 'chat', maxBytes: 25 * 1024 * 1024,
+      });
+      if (!res.ok) { toast(res.reason || 'Upload failed.', 'danger'); continue; }
+      this.pending.push({
+        bucket: res.bucket, path: res.path, name: file.name,
+        contentType: res.contentType || file.type || '', sizeBytes: res.sizeBytes || file.size,
+        isImage,
+      });
+    }
+    $('#chat-file-input').value = '';
+    await this._warmUrls(this.pending);
+    this.renderPending();
+  },
+  removePending(idx) { this.pending.splice(Number(idx), 1); this.renderPending(); },
+
+  // ---- Rendering ----
+  renderChannels() {
+    const el = $('#chat-channels');
+    if (!el) return;
+    const active = this.activeChannelId;
+    const link = (c) => `<button class="chat-channel${c.id === active ? ' is-active' : ''}" data-channel="${escape(c.id)}" role="tab" aria-selected="${c.id === active}"><span class="chat-hash">#</span>${escape(c.name)}</button>`;
+    const ungrouped = this.channels.filter(c => !c.section_id);
+    let html = ungrouped.map(link).join('');
+    for (const s of this.sections) {
+      const inSec = this.channels.filter(c => c.section_id === s.id);
+      html += `<div class="chat-section"><div class="chat-section-head"><span class="chat-section-emoji">${escape(s.emoji || '💬')}</span>${escape(s.name)}</div>${inSec.map(link).join('')}</div>`;
+    }
+    el.innerHTML = html || '<p class="chat-sidebar-empty muted small">No channels yet.</p>';
+  },
+
+  renderMessages() {
+    const el = $('#chat-messages');
+    if (!el) return;
+    const has = this.messages.length > 0;
+    $('#chat-empty').hidden = has || !this.activeChannelId;
+    el.innerHTML = this.messages.map(m => this._messageHTML(m)).join('');
+  },
+
+  _messageHTML(m) {
+    const mine = m.authorId === Backend.user?.id;
+    const time = this._fmtTime(m.createdAt);
+    const edited = m.editedAt ? ' <span class="chat-edited">(edited)</span>' : '';
+
+    if (this.editingId === m.id) {
+      return `<div class="chat-msg" data-msg="${escape(m.id)}">
+        <div class="chat-msg-main">
+          <div class="chat-msg-meta"><span class="chat-msg-author">${escape(m.authorName)}</span><span class="chat-msg-time">${time}</span></div>
+          <div class="chat-edit">
+            <textarea class="chat-edit-input" data-edit-input="${escape(m.id)}" rows="2">${escape(m.body)}</textarea>
+            <div class="chat-edit-actions">
+              <button class="btn btn-ghost btn-sm" data-edit-cancel>Cancel</button>
+              <button class="btn btn-primary btn-sm" data-edit-save="${escape(m.id)}">Save</button>
+            </div>
+          </div>
+        </div></div>`;
+    }
+
+    const attachments = (m.attachments || []).map(a => this._attachmentHTML(a)).join('');
+    const reactions = this._reactionsHTML(m);
+    const actions = `<div class="chat-msg-actions">
+        <div class="chat-react-picker">${CHAT_REACTIONS.map(e => `<button class="chat-react-opt" data-react="${escape(m.id)}" data-emoji="${escape(e)}" title="React ${e}">${e}</button>`).join('')}</div>
+        ${mine ? `<button class="chat-msg-act" data-edit="${escape(m.id)}" title="Edit">✎</button>` : ''}
+        <button class="chat-msg-act" data-delete="${escape(m.id)}" title="Delete">🗑</button>
+      </div>`;
+
+    return `<div class="chat-msg" data-msg="${escape(m.id)}">
+      <div class="chat-msg-main">
+        <div class="chat-msg-meta"><span class="chat-msg-author">${escape(m.authorName)}</span><span class="chat-msg-time">${time}</span>${edited}</div>
+        ${m.body ? `<div class="chat-msg-body">${this._linkify(escape(m.body))}</div>` : ''}
+        ${attachments ? `<div class="chat-msg-attachments">${attachments}</div>` : ''}
+        ${reactions}
+      </div>
+      ${actions}
+    </div>`;
+  },
+
+  _attachmentHTML(a) {
+    const url = this.urlCache.get(`${a.bucket}/${a.path}`) || '';
+    if (a.isImage) {
+      return `<a class="chat-att-image" href="${escape(url)}" target="_blank" rel="noopener"><img src="${escape(url)}" alt="${escape(a.name || 'image')}" loading="lazy" /></a>`;
+    }
+    const kb = a.sizeBytes ? ` · ${(a.sizeBytes / 1024).toFixed(0)} KB` : '';
+    return `<a class="chat-att-file" href="${escape(url)}" target="_blank" rel="noopener" download>
+      <span class="chat-att-icon">📎</span><span class="chat-att-name">${escape(a.name || 'file')}</span><span class="chat-att-size muted small">${kb}</span></a>`;
+  },
+
+  _reactionsHTML(m) {
+    if (!m.reactions.length) return '';
+    const by = new Map();
+    for (const r of m.reactions) by.set(r.emoji, (by.get(r.emoji) || []).concat(r.userId));
+    const pills = [...by.entries()].map(([emoji, users]) => {
+      const mine = users.includes(Backend.user?.id);
+      return `<button class="chat-reaction${mine ? ' is-mine' : ''}" data-react="${escape(m.id)}" data-emoji="${escape(emoji)}">${emoji} <span>${users.length}</span></button>`;
+    }).join('');
+    return `<div class="chat-reactions">${pills}</div>`;
+  },
+
+  renderPending() {
+    const wrap = $('#chat-composer-attachments');
+    if (!wrap) return;
+    wrap.hidden = !this.pending.length;
+    wrap.innerHTML = this.pending.map((a, i) => {
+      const url = this.urlCache.get(`${a.bucket}/${a.path}`) || '';
+      const thumb = a.isImage && url
+        ? `<img src="${escape(url)}" alt="" />`
+        : `<span class="chat-att-icon">📎</span>`;
+      return `<div class="chat-pending">${thumb}<span class="chat-pending-name">${escape(a.name)}</span><button type="button" class="chat-pending-remove" data-remove-pending="${i}" aria-label="Remove">×</button></div>`;
+    }).join('');
+    // Bind removes (fresh nodes each render).
+    wrap.querySelectorAll('[data-remove-pending]').forEach(btn =>
+      on(btn, 'click', () => this.removePending(btn.dataset.removePending)));
+  },
+
+  _renderEmptyBackend() {
+    $('#chat-messages').innerHTML = '';
+    $('#chat-empty').hidden = false;
+    $('#chat-empty-channel').textContent = 'chat';
+  },
+
+  // ---- Delegated message-area clicks ----
+  _onMessageClick(e) {
+    const react = e.target.closest('[data-react]');
+    if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji); return; }
+    const edit = e.target.closest('[data-edit]');
+    if (edit) { this.startEdit(edit.dataset.edit); return; }
+    const del = e.target.closest('[data-delete]');
+    if (del) { this.deleteMessage(del.dataset.delete); return; }
+    const save = e.target.closest('[data-edit-save]');
+    if (save) { this.saveEdit(save.dataset.editSave); return; }
+    if (e.target.closest('[data-edit-cancel]')) { this.cancelEdit(); return; }
+  },
+
+  // ---- Modals ----
+  _bindModals() {
+    const chModal = $('#chat-channel-modal');
+    const secModal = $('#chat-section-modal');
+    on(chModal, 'click', (e) => { if (e.target.closest('[data-close]')) chModal.setAttribute('aria-hidden', 'true'); });
+    on(secModal, 'click', (e) => { if (e.target.closest('[data-close]')) secModal.setAttribute('aria-hidden', 'true'); });
+    on($('#chat-channel-form'), 'submit', (e) => { e.preventDefault(); this.createChannel(); });
+    on($('#chat-section-form'), 'submit', (e) => { e.preventDefault(); this.createSection(); });
+  },
+  openChannelModal() {
+    const sel = $('#chat-channel-section-select');
+    sel.innerHTML = '<option value="">No section</option>' +
+      this.sections.map(s => `<option value="${escape(s.id)}">${escape(s.emoji || '💬')} ${escape(s.name)}</option>`).join('');
+    $('#chat-channel-name-input').value = '';
+    $('#chat-channel-modal').setAttribute('aria-hidden', 'false');
+    setTimeout(() => $('#chat-channel-name-input').focus(), 30);
+  },
+  async createChannel() {
+    const name = $('#chat-channel-name-input').value;
+    const section_id = $('#chat-channel-section-select').value || null;
+    const res = await ChatApi.createChannel({ name, section_id });
+    if (!res.ok) { toast(res.reason || 'Could not create channel.', 'danger'); return; }
+    $('#chat-channel-modal').setAttribute('aria-hidden', 'true');
+    await this.reloadSidebar();
+    await this.openChannel(res.id);
+  },
+  openSectionModal() {
+    $('#chat-section-name-input').value = '';
+    $('#chat-section-emoji-input').value = '💬';
+    $('#chat-section-modal').setAttribute('aria-hidden', 'false');
+    setTimeout(() => $('#chat-section-name-input').focus(), 30);
+  },
+  async createSection() {
+    const name = $('#chat-section-name-input').value;
+    const emoji = $('#chat-section-emoji-input').value;
+    const res = await ChatApi.createSection({ name, emoji });
+    if (!res.ok) { toast(res.reason || 'Could not create section.', 'danger'); return; }
+    $('#chat-section-modal').setAttribute('aria-hidden', 'true');
+    await this.reloadSidebar();
+  },
+  async deleteActiveChannel() {
+    const ch = this.channels.find(c => c.id === this.activeChannelId);
+    if (!ch || ch.is_default) return;
+    if (!confirm(`Delete #${ch.name} and all its messages?`)) return;
+    const res = await ChatApi.deleteChannel(ch.id);
+    if (!res.ok) { toast('Could not delete channel.', 'danger'); return; }
+    this.activeChannelId = null;
+    await this.reloadSidebar();
+    await this.render();
+  },
+
+  // ---- Helpers ----
+  _bindDropzone() {
+    const zone = $('#chat-messages');
+    if (!zone) return;
+    ['dragenter', 'dragover'].forEach(ev => on(zone, ev, (e) => { e.preventDefault(); zone.classList.add('is-dropping'); }));
+    ['dragleave', 'drop'].forEach(ev => on(zone, ev, (e) => { e.preventDefault(); zone.classList.remove('is-dropping'); }));
+    on(zone, 'drop', (e) => { if (e.dataTransfer?.files?.length) this.addFiles(e.dataTransfer.files); });
+  },
+  async _warmUrls(items) {
+    const refs = [];
+    for (const it of items) for (const a of (it.attachments || [it])) {
+      if (a && a.bucket && a.path && !this.urlCache.has(`${a.bucket}/${a.path}`)) refs.push(a);
+    }
+    await Promise.all(refs.map(async (a) => {
+      const url = await Backend.getMediaUrl(a.bucket, a.path);
+      if (url) this.urlCache.set(`${a.bucket}/${a.path}`, url);
+    }));
+  },
+  _autogrow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; },
+  _scrollToBottom() { const el = $('#chat-messages'); if (el) el.scrollTop = el.scrollHeight; },
+  _fmtTime(ts) {
+    const d = new Date(ts);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (d >= today) return time;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+  },
+  _linkify(html) {
+    return html.replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
   },
 };
 
