@@ -1,5 +1,17 @@
 [
   {
+    "version": "4.77",
+    "date": "2026-07-23",
+    "title": "Chat notifications, @mentions, and sounds",
+    "changes": [
+      "Unread messages now stand out: channels with new messages are highlighted in the sidebar, and the browser tab shows a dot (or a count for @mentions) so you notice from another tab.",
+      "@mentions: type @ and pick a name to mention someone. Mentions are highlighted in the message, and the channel shows a red count of unread mentions — with a distinct alert sound.",
+      "Sounds: a gentle chime plays for new messages and a different one for @mentions. Mute either from the two toggles at the top-left of the Chat sidebar.",
+      "Choose your alert sounds (with a Preview button) from the sound button next to the mute toggles.",
+      "Requires a quick database update (chat notifications migration) to be run once."
+    ]
+  },
+  {
     "version": "4.76",
     "date": "2026-07-23",
     "title": "Chat threads and a Files view",

@@ -6805,6 +6805,58 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .chat-file-name { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-files-empty { padding: var(--space-4); }
 
+/* ---- v4.77: notifications, mentions, sounds ---- */
+.chat-sidebar-tools { display: flex; align-items: center; gap: 2px; }
+.chat-sidebar-tools .icon-btn { color: var(--brand-300); width: 28px; height: 28px; }
+.chat-sidebar-tools .icon-btn:hover { color: var(--paper); background: rgba(255,255,255,.08); }
+#chat-mute-mentions { font-weight: 700; font-size: .95rem; }
+/* muted (on) state for the toggle buttons */
+.chat-toggle.is-on { color: var(--danger); background: rgba(179,65,65,.14); }
+.chat-toggle.is-on:hover { color: var(--danger); }
+
+/* #7: unread channel highlight */
+.chat-channel { justify-content: space-between; }
+.chat-channel-label { display: inline-flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-channel.is-unread { color: #fff; font-weight: 700; }
+.chat-channel.is-unread .chat-hash { opacity: .9; }
+.chat-channel.is-unread::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent-300); flex: none; margin-right: -2px;
+}
+/* #8: mention count badge */
+.chat-mention-badge {
+  flex: none;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger); color: #fff;
+  font-size: .72rem; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* #8: @mention chip inside message bodies */
+.chat-mention { color: var(--brand-600); font-weight: 600; background: var(--tint-100); border-radius: 4px; padding: 0 3px; }
+.chat-mention.is-me { color: var(--accent-700); background: var(--accent-100); }
+
+/* #8: @mention autocomplete menu above the composer */
+.chat-composer { position: relative; }
+.chat-mention-menu {
+  position: absolute; left: var(--space-5); right: var(--space-5); bottom: calc(100% - 4px);
+  background: var(--paper); border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lift);
+  overflow: hidden; z-index: 6; max-height: 210px; overflow-y: auto;
+}
+.chat-mention-item {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: .9rem; color: var(--ink-800);
+  padding: 8px var(--space-3);
+}
+.chat-mention-item:hover { background: var(--tint-50); color: var(--brand-600); }
+
+/* #10: sound settings rows */
+.chat-sound-row { display: flex; gap: var(--space-2); align-items: center; }
+.chat-sound-row select { flex: 1; }
+
 @media (max-width: 620px) {
   .chat-thread, .chat-files { width: 100%; max-width: 100%; }
   #view-chat .chat-shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
