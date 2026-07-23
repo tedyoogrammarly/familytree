@@ -1,5 +1,18 @@
 [
   {
+    "version": "4.78",
+    "date": "2026-07-23",
+    "title": "Chat fixes — reactions, drafts, mention keyboard, inline reply",
+    "changes": [
+      "Fixed: the add-reaction (🙂) button under a message now opens the emoji picker instead of closing instantly.",
+      "Fixed: sending a message no longer errors before the notifications database update is applied (it now degrades gracefully).",
+      "@mention list: the highlighted person is shown, and you can move with ↑/↓ and pick with Tab or Enter.",
+      "@mentions are now shown as a clearly highlighted name chip in the message.",
+      "Drafts stay per channel: start typing in one channel, switch to another, and your unsent text is waiting when you come back.",
+      "A 'Reply in thread' link now appears under each message, so you don't have to hover to the right to start a thread."
+    ]
+  },
+  {
     "version": "4.77",
     "date": "2026-07-23",
     "title": "Chat notifications, @mentions, and sounds",
