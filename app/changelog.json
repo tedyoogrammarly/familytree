@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.81",
+    "date": "2026-07-27",
+    "title": "Calendar — show a public Google Calendar with no setup",
+    "changes": [
+      "You can now add a public Google Calendar with just its link — the embed link (…/embed?src=…), the ?cid= link, or the iCal (.ics) URL all work. No Google API key required.",
+      "Ted's work calendar is built in and shows by default, so its events always appear on the shared calendar (under the Work filter).",
+      "Events are read directly from the calendar's public feed. Note: all-day and timed events both show; times display in your local timezone."
+    ]
+  },
+  {
     "version": "4.80",
     "date": "2026-07-23",
     "title": "Chat fixes — thread replies, message-link preview cards",

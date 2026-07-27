@@ -1389,6 +1389,22 @@ const Silhouettes = {
   }
 };
 
+// Built-in Google calendars, always present so their events show without any
+// setup (v4.81). Read keyless via the public .ics feed. `category:'work'` puts
+// them under the Work filter chip. Seeded into new archives (Store.defaults)
+// and back-filled into existing ones (GoogleCalendar.migrate → seedDefaults).
+const DEFAULT_GOOGLE_CALENDARS = [
+  {
+    id: 'ted.yoo@grammarly.com',
+    summary: 'Ted (Work)',
+    backgroundColor: '#4285f4',
+    enabled: true,
+    category: 'work',
+    link: 'https://calendar.google.com/calendar/embed?src=ted.yoo%40grammarly.com&ctz=America%2FLos_Angeles',
+    isDefault: true,
+  },
+];
+
 // -------------------- store --------------------
 const Store = {
   state: null,
@@ -1423,7 +1439,9 @@ const Store = {
       googleCalendar: {
         // v4.73: link-based. Each entry is one public calendar added by its
         // shareable link: { id, summary, backgroundColor, enabled, category, link }.
-        calendars: [],
+        // v4.81: seeded with Ted's work calendar as a built-in default (see
+        // DEFAULT_GOOGLE_CALENDARS) so its events always show.
+        calendars: DEFAULT_GOOGLE_CALENDARS.map(c => ({ ...c })),
         lastSync: 0,
         showEvents: true,
       },
@@ -7712,6 +7730,10 @@ function parseCalendarLink(input) {
   const ical = s.match(/\/calendar\/ical\/([^/]+)\//);
   if (ical) { try { return decodeURIComponent(ical[1]); } catch { return ical[1]; } }
 
+  // 1b) embed URL: /calendar/embed?src=<calId>  (v4.81 — public ICS path)
+  const embed = s.match(/[?&]src=([^&\s]+)/);
+  if (embed) { try { const v = decodeURIComponent(embed[1]); if (/@/.test(v) || /\.calendar\.google\.com$/.test(v)) return v; } catch { /* fall through */ } }
+
   // 2) cid= param (full URL or bare "cid=..."), base64 → calendar id
   const m = s.match(/[?&]cid=([^&\s]+)/);
   const cidToken = m ? m[1]
@@ -7738,6 +7760,11 @@ function parseCalendarLink(input) {
 // config.js, HTTP-referrer-restricted). Only public calendars are readable.
 const GoogleCalendar = {
   API_BASE: 'https://www.googleapis.com/calendar/v3',
+  // v4.81: keyless path — read a public calendar's iCal feed directly. Used
+  // whenever no GOOGLE_API_KEY is configured, so a public calendar (added by
+  // its embed/share link) works with zero setup. The .ics host is allowlisted
+  // in the page CSP (connect-src https://calendar.google.com).
+  ICS_BASE: 'https://calendar.google.com/calendar/ical',
   // Colors auto-assigned per calendar (Google no longer exposes a per-user
   // calendar color without OAuth).
   PALETTE: ['#4285f4', '#0b8043', '#8e24aa', '#e67c00', '#d81b60', '#3f51b5', '#00897b', '#c2185b'],
@@ -7746,7 +7773,78 @@ const GoogleCalendar = {
   config() { return Store.state.googleCalendar || {}; },
   apiKey() { return (window.GOOGLE_API_KEY || '').trim(); },
   hasKey() { return !!this.apiKey(); },
+  // With no API key we can still read public calendars via their .ics feed.
   isConfigured() { return (this.config().calendars || []).length > 0; },
+
+  // ---- Public iCal (.ics) path (no API key) ----
+  icsUrl(calId) {
+    return `${this.ICS_BASE}/${encodeURIComponent(calId)}/public/basic.ics`;
+  },
+  // Fetch + parse a public calendar's .ics, returning raw items shaped like the
+  // Google API's events.list `items` so normalizeEvent() works unchanged.
+  // Filters to [timeMin, timeMax]. Returns null on failure (kept out of cache).
+  async fetchOneCalendarICS(calId, timeMin, timeMax) {
+    let r;
+    try { r = await fetch(this.icsUrl(calId)); } catch { return null; }
+    if (!r.ok) return null;
+    let text;
+    try { text = await r.text(); } catch { return null; }
+    const min = timeMin ? new Date(timeMin).getTime() : -Infinity;
+    const max = timeMax ? new Date(timeMax).getTime() :  Infinity;
+    const items = [];
+    for (const ev of this._parseICS(text)) {
+      const t = ev.start?.dateTime || ev.start?.date;
+      const ms = t ? new Date(t).getTime() : NaN;
+      if (isNaN(ms) || ms < min || ms > max) continue;
+      items.push(ev);
+    }
+    return items;
+  },
+  // Minimal but robust iCS VEVENT parser: unfolds wrapped lines, reads
+  // SUMMARY / DTSTART / DTEND (with VALUE=DATE and TZID handling), and maps to
+  // the Google API event shape { id, summary, start, end }.
+  _parseICS(text) {
+    // Unfold: RFC 5545 continuation lines start with a space or tab.
+    const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '');
+    const out = [];
+    let cur = null;
+    for (const line of raw.split('\n')) {
+      if (line === 'BEGIN:VEVENT') { cur = {}; continue; }
+      if (line === 'END:VEVENT') { if (cur) out.push(this._icsEventToGoogle(cur)); cur = null; continue; }
+      if (!cur) continue;
+      const idx = line.indexOf(':');
+      if (idx < 0) continue;
+      const nameRaw = line.slice(0, idx);
+      const value = line.slice(idx + 1);
+      const [prop, ...paramParts] = nameRaw.split(';');
+      const params = {};
+      for (const p of paramParts) { const [k, v] = p.split('='); if (k) params[k.toUpperCase()] = v; }
+      if (prop === 'SUMMARY') cur.summary = this._icsUnescape(value);
+      else if (prop === 'UID') cur.uid = value;
+      else if (prop === 'DTSTART') cur.start = this._icsDate(value, params);
+      else if (prop === 'DTEND') cur.end = this._icsDate(value, params);
+    }
+    return out;
+  },
+  _icsUnescape(v) { return String(v).replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\'); },
+  // Returns { date: 'YYYY-MM-DD' } for all-day, or { dateTime: ISO } for timed.
+  _icsDate(value, params) {
+    if (params.VALUE === 'DATE' || /^\d{8}$/.test(value)) {
+      const d = value.slice(0, 8);
+      return { date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` };
+    }
+    // Timed: 20260127T183000Z or 20260127T183000 (local/TZID). Build an ISO.
+    const m = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
+    if (!m) return { dateTime: value };
+    const [, y, mo, da, h, mi, s, z] = m;
+    if (z) return { dateTime: `${y}-${mo}-${da}T${h}:${mi}:${s}Z` };
+    // No Z and no TZ conversion available client-side → treat as local time.
+    const dt = new Date(Number(y), Number(mo) - 1, Number(da), Number(h), Number(mi), Number(s));
+    return { dateTime: dt.toISOString() };
+  },
+  _icsEventToGoogle(ev) {
+    return { id: ev.uid || (ev.summary || '') + JSON.stringify(ev.start || {}), summary: ev.summary, start: ev.start, end: ev.end, htmlLink: '' };
+  },
 
   // Normalize any legacy (OAuth-era) config: strip token fields and drop
   // calendars that lack a shareable `link` (their ids came from calendarList
@@ -7774,15 +7872,39 @@ const GoogleCalendar = {
     this.eventCache.clear();
   },
 
+  // v4.81: ensure the built-in default calendars are present (back-fills
+  // existing archives whose googleCalendar predates the defaults). Idempotent:
+  // only adds a default whose id isn't already in the list. Also restores a
+  // default that was removed? No — respects user removal by keying on id only
+  // at seed time; if the user deletes it, it stays gone until a fresh archive.
+  seedDefaults() {
+    const cfg = Store.state.googleCalendar || (Store.state.googleCalendar = { calendars: [], lastSync: 0, showEvents: true });
+    cfg.calendars = cfg.calendars || [];
+    let changed = false;
+    for (const def of DEFAULT_GOOGLE_CALENDARS) {
+      // Skip if this default was already seeded before (tracked by a marker) or
+      // is currently present. We record seeded ids so a user delete sticks.
+      const seededIds = cfg._seededDefaults || (cfg._seededDefaults = []);
+      if (cfg.calendars.some(c => c.id === def.id)) { if (!seededIds.includes(def.id)) { seededIds.push(def.id); changed = true; } continue; }
+      if (seededIds.includes(def.id)) continue;   // user removed it — respect that
+      cfg.calendars.push({ ...def });
+      seededIds.push(def.id);
+      changed = true;
+    }
+    if (changed) { Store.state.googleCalendar = cfg; Store.save(); this.eventCache.clear(); }
+  },
+
   _pickColor() {
     const used = (this.config().calendars || []).length;
     return this.PALETTE[used % this.PALETTE.length];
   },
 
   // Read a public calendar's metadata (used to label it + validate access).
-  // Throws a coded Error: NO_KEY / NOT_PUBLIC / BAD_KEY / FETCH_FAILED.
+  // With an API key: Calendar API. Without: the .ics feed (reads X-WR-CALNAME
+  // for the label, and a successful fetch validates public access).
+  // Throws a coded Error: NOT_PUBLIC / BAD_KEY / FETCH_FAILED.
   async fetchCalendarMeta(calId) {
-    if (!this.hasKey()) throw new Error('NO_KEY');
+    if (!this.hasKey()) return this.fetchCalendarMetaICS(calId);
     const url = `${this.API_BASE}/calendars/${encodeURIComponent(calId)}?key=${encodeURIComponent(this.apiKey())}`;
     let r;
     try { r = await fetch(url); } catch { throw new Error('FETCH_FAILED'); }
@@ -7790,6 +7912,16 @@ const GoogleCalendar = {
     if (r.status === 400) throw new Error('BAD_KEY');
     if (!r.ok) throw new Error('FETCH_FAILED');
     return r.json(); // { id, summary, ... }
+  },
+  async fetchCalendarMetaICS(calId) {
+    let r;
+    try { r = await fetch(this.icsUrl(calId)); } catch { throw new Error('FETCH_FAILED'); }
+    if (r.status === 403 || r.status === 404) throw new Error('NOT_PUBLIC');
+    if (!r.ok) throw new Error('FETCH_FAILED');
+    let text = '';
+    try { text = await r.text(); } catch { throw new Error('FETCH_FAILED'); }
+    const name = (text.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '').match(/^X-WR-CALNAME:(.+)$/m) || [])[1];
+    return { id: calId, summary: (name || '').trim() || calId };
   },
 
   // Parse + validate a pasted link, then add it. Throws BAD_LINK / DUPLICATE
@@ -7868,7 +8000,8 @@ const GoogleCalendar = {
 
   async fetchEventsForMonth(year, month /* 0-11 */) {
     const cfg = this.config();
-    if (!this.hasKey() || !cfg.calendars?.length) return [];
+    // Works with an API key (Calendar API) OR without one (public .ics feed).
+    if (!cfg.calendars?.length) return [];
     const enabled = cfg.calendars.filter(c => c.enabled);
     if (!enabled.length) return [];
     // Buffer ±1 month so events that bleed into the displayed grid are included.
@@ -7895,7 +8028,8 @@ const GoogleCalendar = {
   },
 
   async fetchOneCalendar(calId, timeMin, timeMax) {
-    if (!this.hasKey()) return null;
+    // No API key → read the public .ics feed instead (v4.81).
+    if (!this.hasKey()) return this.fetchOneCalendarICS(calId, timeMin, timeMax);
     const params = new URLSearchParams({
       key: this.apiKey(), timeMin, timeMax,
       singleEvents: 'true', orderBy: 'startTime', maxResults: '250',
@@ -8434,7 +8568,8 @@ const CalendarView = {
 
   refreshGoogleIndicator() {
     const cfg = GoogleCalendar.config();
-    const connected = GoogleCalendar.hasKey() && (cfg.calendars?.length > 0);
+    // Connected if any calendar is added — via API key or the keyless ICS path.
+    const connected = (cfg.calendars?.length > 0);
     $('#cal-google-dot').hidden = !connected;
     $('#cal-google-label').textContent = connected ? 'Google · synced' : 'Google';
   },
@@ -8446,7 +8581,8 @@ const CalendarView = {
     // pulled Google events on the grid.
     if (!Auth.canUseGoogleCalendar()) return;
     const cfg = GoogleCalendar.config();
-    if (!GoogleCalendar.hasKey() || !cfg.calendars?.length || !cfg.showEvents) return;
+    // Runs with an API key or the keyless .ics path — only needs calendars + showEvents.
+    if (!cfg.calendars?.length || !cfg.showEvents) return;
 
     if (this.mode === 'week') {
       const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(this.weekStart); d.setDate(d.getDate() + i); return d; });
@@ -8540,7 +8676,7 @@ const CalendarView = {
     const configured = (cfg.calendars || []).length > 0;
 
     const errText = (code) => ({
-      BAD_LINK: "That doesn't look like a Google Calendar link. Paste the calendar's shareable link (it contains “?cid=”).",
+      BAD_LINK: "That doesn't look like a Google Calendar link. Paste the calendar's embed link (…/embed?src=…), its ?cid= link, its .ics URL, or the calendar address (you@example.com).",
       DUPLICATE: 'That calendar is already added.',
       NO_KEY: 'No Google API key is set. Add GOOGLE_API_KEY to config.js first.',
       NOT_PUBLIC: "This calendar isn't public. In Google Calendar → the calendar's Settings → “Access permissions”, tick “Make available to public”, then copy the shareable link again.",
@@ -8550,24 +8686,23 @@ const CalendarView = {
 
     if (!configured) {
       body.innerHTML = `
-        <p class="muted small">Display events from a public Google Calendar alongside family events. Read-only; nothing is written back to Google.</p>
-        ${hasKey ? '' : '<p class="form-error" role="alert" style="margin:8px 0;">No Google API key is set. Add <code>GOOGLE_API_KEY</code> to <code>config.js</code> to enable this.</p>'}
+        <p class="muted small">Display events from a public Google Calendar alongside family events. Read-only; nothing is written back to Google. No API key needed — public calendars are read directly.</p>
         <details class="gcal-setup">
-          <summary>How to get a shareable link</summary>
+          <summary>How to add a calendar</summary>
           <ol class="gcal-steps">
             <li>In <a href="https://calendar.google.com/" target="_blank" rel="noopener">Google Calendar</a>, hover the calendar in the left list → ⋮ → <strong>Settings and sharing</strong>.</li>
             <li>Under <strong>Access permissions</strong>, tick <strong>“Make available to public”</strong>.</li>
-            <li>Scroll to <strong>“Integrate calendar”</strong> and copy the <strong>Public URL to this calendar</strong> (the <code>…?cid=</code> link).</li>
+            <li>Copy any of its public links — the <strong>embed</strong> link (<code>…/embed?src=…</code>), the <strong>Public URL</strong> (<code>…?cid=…</code>), or the <strong>iCal</strong> (<code>…/public/basic.ics</code>). The calendar's address (like <code>you@example.com</code>) also works.</li>
             <li>Paste it below and press Add.</li>
           </ol>
         </details>
         <label class="field">
-          <span>Shareable link</span>
-          <input id="gcal-link" placeholder="https://calendar.google.com/calendar/u/0?cid=…" autocomplete="off" ${hasKey ? '' : 'disabled'} />
+          <span>Calendar link</span>
+          <input id="gcal-link" placeholder="https://calendar.google.com/calendar/embed?src=…" autocomplete="off" />
         </label>
         <p id="gcal-error" class="form-error" role="alert"></p>
         <div class="modal-actions">
-          <button class="btn btn-primary" id="gcal-add" ${hasKey ? '' : 'disabled'}>Add calendar</button>
+          <button class="btn btn-primary" id="gcal-add">Add calendar</button>
           <button class="btn btn-ghost" type="button" data-close>Cancel</button>
         </div>
       `;
@@ -9904,6 +10039,12 @@ async function onSignedIn() {
   try { Backend.lastSavedHash = hashStringFast(JSON.stringify(Store.state)); } catch {}
 
   Auth.applyAccount();
+  // v4.81: normalize any legacy Google Calendar config, then ensure the
+  // built-in default calendars (Ted's work calendar) are present. Only admins
+  // can persist to the archive blob (RLS) and only admins see Google events,
+  // so gate the seed on admin to avoid a rejected write for other accounts.
+  GoogleCalendar.migrate();
+  if (Auth.isAdmin()) GoogleCalendar.seedDefaults();
   // v4.58: warm the auth-id → display-name cache for Albums/Memories author
   // labels. Fire-and-forget; views re-render with names once it resolves.
   AuthorNames.warm().catch(e => console.warn('AuthorNames.warm:', e.message || e));
@@ -11364,7 +11505,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.80';
+const APP_VERSION = '4.81';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
