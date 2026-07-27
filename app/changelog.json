@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.76",
+    "date": "2026-07-23",
+    "title": "Chat threads and a Files view",
+    "changes": [
+      "Threads: hover a message and click the 💬 to reply in a thread (like Slack). Messages with replies show a 'N replies' link that opens the thread panel on the right, with its own reply box that supports attachments.",
+      "Files: the new Files button in the channel header opens a panel listing every image and file shared in that channel, grouped by day and showing who sent each one.",
+      "Requires a quick database update (chat threads migration) to be run once."
+    ]
+  },
+  {
     "version": "4.75",
     "date": "2026-07-23",
     "title": "Chat polish — avatars, day dividers, easier reactions, edit channels",

@@ -693,21 +693,62 @@ const ChatApi = {
   // Newest `limit` messages (optionally older than `before` for pagination),
   // returned oldest→newest so the view can append and scroll to the bottom.
   // Reactions are batch-fetched and stitched on, exactly like MemoriesApi.list().
+  // v4.76: root messages only (parent_id is null) with a reply count per root.
+  // Selects parent_id; if the threads migration hasn't run yet the column is
+  // absent and the query errors → we retry without it so the app still works.
+  _MSG_COLS: 'id, channel_id, author, body, attachments, edited_at, created_at, parent_id',
   async listMessages(channelId, { before, limit = 50 } = {}) {
     if (!Backend.client || !channelId) return [];
-    let q = Backend.client.from('chat_messages')
-      .select('id, channel_id, author, body, attachments, edited_at, created_at')
-      .eq('channel_id', channelId)
-      .order('created_at', { ascending: false }).limit(limit);
-    if (before) q = q.lt('created_at', before);
-    const { data, error } = await q;
-    if (error) { this._warn('listMessages', error); return []; }
+    const build = (cols, rootsOnly) => {
+      let q = Backend.client.from('chat_messages').select(cols).eq('channel_id', channelId);
+      if (rootsOnly) q = q.is('parent_id', null);
+      q = q.order('created_at', { ascending: false }).limit(limit);
+      if (before) q = q.lt('created_at', before);
+      return q;
+    };
+    let { data, error } = await build(this._MSG_COLS, true);
+    if (error) {   // pre-migration fallback: no parent_id column
+      ({ data, error } = await build('id, channel_id, author, body, attachments, edited_at, created_at', false));
+      if (error) { this._warn('listMessages', error); return []; }
+    }
     const rows = (data || []).slice().reverse();      // oldest → newest
     if (!rows.length) return [];
     const ids = rows.map(m => m.id);
     const rx = await Backend.client.from('chat_message_reactions')
       .select('message_id, user_id, emoji').in('message_id', ids);
     if (rx.error) this._warn('listMessages(reactions)', rx.error);
+    const rxBy = new Map();
+    for (const r of (rx.data || [])) {
+      if (!rxBy.has(r.message_id)) rxBy.set(r.message_id, []);
+      rxBy.get(r.message_id).push({ emoji: r.emoji, userId: r.user_id });
+    }
+    const shaped = rows.map(m => this._shape(m, rxBy.get(m.id) || []));
+    await this._attachReplyCounts(shaped);
+    return shaped;
+  },
+  // Count replies per root and stash on each message (degrades to 0 pre-migration).
+  async _attachReplyCounts(roots) {
+    if (!Backend.client || !roots.length) return;
+    const ids = roots.map(r => r.id);
+    const { data, error } = await Backend.client.from('chat_messages')
+      .select('parent_id').in('parent_id', ids);
+    if (error) return;   // no parent_id column yet → leave counts at 0
+    const counts = new Map();
+    for (const r of (data || [])) counts.set(r.parent_id, (counts.get(r.parent_id) || 0) + 1);
+    for (const m of roots) m.replyCount = counts.get(m.id) || 0;
+  },
+  // All replies to a parent, oldest→newest, with reactions stitched on.
+  async listReplies(parentId) {
+    if (!Backend.client || !parentId) return [];
+    const { data, error } = await Backend.client.from('chat_messages')
+      .select(this._MSG_COLS).eq('parent_id', parentId)
+      .order('created_at', { ascending: true });
+    if (error) { this._warn('listReplies', error); return []; }
+    const rows = data || [];
+    if (!rows.length) return [];
+    const ids = rows.map(m => m.id);
+    const rx = await Backend.client.from('chat_message_reactions')
+      .select('message_id, user_id, emoji').in('message_id', ids);
     const rxBy = new Map();
     for (const r of (rx.data || [])) {
       if (!rxBy.has(r.message_id)) rxBy.set(r.message_id, []);
@@ -724,16 +765,19 @@ const ChatApi = {
       authorId: m.author, authorName: AuthorNames.nameFor(m.author),
       editedAt: m.edited_at ? new Date(m.edited_at).getTime() : null,
       createdAt: new Date(m.created_at).getTime(),
+      parentId: m.parent_id || null,
+      replyCount: 0,
       reactions,
     };
   },
-  async sendMessage(channelId, { body, attachments } = {}) {
+  async sendMessage(channelId, { body, attachments, parentId } = {}) {
     if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
     const text = (body || '').trim();
     if (!text && !(attachments && attachments.length)) return { ok: false, reason: 'Nothing to send.' };
+    const row = { channel_id: channelId, body: text || null, attachments: attachments || [] };
+    if (parentId) row.parent_id = parentId;
     const { data, error } = await Backend.client.from('chat_messages')
-      .insert({ channel_id: channelId, body: text || null, attachments: attachments || [] })
-      .select('id, channel_id, author, body, attachments, edited_at, created_at').single();
+      .insert(row).select(this._MSG_COLS).single();
     if (error) { this._warn('sendMessage', error); return { ok: false, reason: error.message }; }
     return { ok: true, message: this._shape(data, []) };
   },
@@ -742,9 +786,26 @@ const ChatApi = {
     const { data, error } = await Backend.client.from('chat_messages')
       .update({ body: (body || '').trim() || null, edited_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, channel_id, author, body, attachments, edited_at, created_at').single();
+      .select(this._MSG_COLS).single();
     if (error) { this._warn('editMessage', error); return { ok: false, reason: error.message }; }
     return { ok: true, message: this._shape(data, []) };
+  },
+  // #13: every attachment in a channel, newest first, with author + timestamp.
+  async listAttachments(channelId) {
+    if (!Backend.client || !channelId) return [];
+    const { data, error } = await Backend.client.from('chat_messages')
+      .select('id, author, attachments, created_at')
+      .eq('channel_id', channelId)
+      .order('created_at', { ascending: false });
+    if (error) { this._warn('listAttachments', error); return []; }
+    const out = [];
+    for (const m of (data || [])) {
+      for (const a of (m.attachments || [])) {
+        out.push({ ...a, messageId: m.id, authorId: m.author,
+          authorName: AuthorNames.nameFor(m.author), createdAt: new Date(m.created_at).getTime() });
+      }
+    }
+    return out;
   },
   async deleteMessage(id) {
     if (!Backend.client) return { ok: false };
@@ -11186,7 +11247,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.75';
+const APP_VERSION = '4.76';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
@@ -17219,6 +17280,9 @@ const ChatView = {
   sidebarSub: null,        // sidebar realtime handle
   urlCache: new Map(),     // `${bucket}/${path}` → signed url (per session)
   editingId: null,
+  threadRootId: null,      // #4: open thread's root message id (null = closed)
+  threadReplies: [],       // replies for the open thread
+  threadPending: [],       // staged attachments for the thread composer
 
   init() {
     if (this.inited) return;
@@ -17251,6 +17315,21 @@ const ChatView = {
 
     // Message list (delegated): reactions, edit, delete, attachment open.
     on($('#chat-messages'), 'click', (e) => this._onMessageClick(e));
+
+    // #4: thread panel.
+    on($('#btn-chat-thread-close'), 'click', () => this.closeThread());
+    on($('#chat-thread-body'), 'click', (e) => this._onMessageClick(e, true));
+    on($('#chat-thread-composer'), 'submit', (e) => { e.preventDefault(); this.sendThreadReply(); });
+    on($('#chat-thread-input'), 'keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendThreadReply(); }
+    });
+    on($('#chat-thread-input'), 'input', () => this._autogrow($('#chat-thread-input')));
+    on($('#btn-chat-thread-attach'), 'click', () => $('#chat-thread-file-input').click());
+    on($('#chat-thread-file-input'), 'change', (e) => this.addFiles(e.target.files, 'thread'));
+
+    // #13: files hub.
+    on($('#btn-chat-files'), 'click', () => this.openFiles());
+    on($('#btn-chat-files-close'), 'click', () => { $('#chat-files').hidden = true; });
 
     this._bindModals();
   },
@@ -17320,8 +17399,21 @@ const ChatView = {
 
   async _onRemoteInsert(row) {
     if (!row || row.channel_id !== this.activeChannelId) return;
-    if (this.messages.some(m => m.id === row.id)) return;   // our optimistic echo
     const msg = ChatApi._shape(row, []);
+    // #4: a reply (parent_id set) belongs in a thread, not the channel timeline.
+    if (msg.parentId) {
+      // Bump the parent's reply count in the channel view.
+      this._applyToMessage(msg.parentId, (m) => { m.replyCount = (m.replyCount || 0) + 1; });
+      this.renderMessages();
+      if (this.threadRootId === msg.parentId && !this.threadReplies.some(m => m.id === msg.id)) {
+        this.threadReplies.push(msg);
+        await this._warmUrls([msg]);
+        this.renderThread();
+        const el = $('#chat-thread-body'); if (el) el.scrollTop = el.scrollHeight;
+      }
+      return;
+    }
+    if (this.messages.some(m => m.id === row.id)) return;   // our optimistic echo
     this.messages.push(msg);
     await this._warmUrls([msg]);
     this.renderMessages();
@@ -17379,48 +17471,72 @@ const ChatView = {
   startEdit(id) {
     this.editingId = id;
     this.renderMessages();
-    const ta = $(`#chat-messages [data-edit-input="${id}"]`);
+    if (this.threadRootId) this.renderThread();
+    const ta = $(`[data-edit-input="${id}"]`);
     if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   },
-  cancelEdit() { this.editingId = null; this.renderMessages(); },
+  cancelEdit() { this.editingId = null; this.renderMessages(); if (this.threadRootId) this.renderThread(); },
   async saveEdit(id) {
-    const ta = $(`#chat-messages [data-edit-input="${id}"]`);
+    const ta = $(`[data-edit-input="${id}"]`);
     if (!ta) return;
     const res = await ChatApi.editMessage(id, { body: ta.value });
     if (!res.ok) { toast(res.reason || 'Edit failed.', 'danger'); return; }
-    const i = this.messages.findIndex(m => m.id === id);
-    if (i >= 0) this.messages[i] = { ...res.message, reactions: this.messages[i].reactions };
+    this._applyToMessage(id, (m) => Object.assign(m, res.message, { reactions: m.reactions }));
     this.editingId = null;
     this.renderMessages();
+    if (this.threadRootId) this.renderThread();
   },
-  async deleteMessage(id) {
+  async deleteMessage(id, inThread = false) {
     if (!confirm('Delete this message?')) return;
     const res = await ChatApi.deleteMessage(id);
     if (!res.ok) { toast('Delete failed.', 'danger'); return; }
     this.messages = this.messages.filter(m => m.id !== id);
+    this.threadReplies = this.threadReplies.filter(m => m.id !== id);
+    // Deleting the thread root closes the panel; deleting a reply drops the count.
+    if (this.threadRootId === id) { this.closeThread(); }
+    else if (inThread && this.threadRootId) {
+      this._applyToMessage(this.threadRootId, (m) => { m.replyCount = Math.max(0, (m.replyCount || 1) - 1); });
+      this.renderThread();
+    }
     this.renderMessages();
   },
 
-  // ---- Reactions ----
-  async toggleReaction(messageId, emoji) {
-    const msg = this.messages.find(m => m.id === messageId);
-    if (!msg) return;
-    const mine = msg.reactions.some(r => r.emoji === emoji && r.userId === Backend.user?.id);
-    if (mine) {
-      msg.reactions = msg.reactions.filter(r => !(r.emoji === emoji && r.userId === Backend.user?.id));
-      this.renderMessages();
-      await ChatApi.removeReaction(messageId, emoji);
-    } else {
-      msg.reactions.push({ emoji, userId: Backend.user?.id });
-      this.renderMessages();
-      await ChatApi.addReaction(messageId, emoji);
+  // Find a message by id across both the channel list and the open thread, and
+  // apply a mutator to it wherever it lives (keeps the two views consistent).
+  _applyToMessage(id, fn) {
+    for (const arr of [this.messages, this.threadReplies]) {
+      const m = arr.find(x => x.id === id);
+      if (m) fn(m);
     }
   },
 
+  // ---- Reactions ----
+  async toggleReaction(messageId, emoji, inThread = false) {
+    let changed = false;
+    this._applyToMessage(messageId, (msg) => {
+      const mine = msg.reactions.some(r => r.emoji === emoji && r.userId === Backend.user?.id);
+      msg.reactions = mine
+        ? msg.reactions.filter(r => !(r.emoji === emoji && r.userId === Backend.user?.id))
+        : msg.reactions.concat({ emoji, userId: Backend.user?.id });
+      msg._removing = mine;
+      changed = true;
+    });
+    if (!changed) return;
+    const msg = this.messages.find(m => m.id === messageId) || this.threadReplies.find(m => m.id === messageId);
+    const removing = msg?._removing;
+    this.renderMessages();
+    if (this.threadRootId) this.renderThread();
+    if (removing) await ChatApi.removeReaction(messageId, emoji);
+    else await ChatApi.addReaction(messageId, emoji);
+  },
+
   // ---- Attachments ----
-  async addFiles(fileList) {
+  // target: 'main' (default) or 'thread' — decides which pending list/UI.
+  async addFiles(fileList, target = 'main') {
     const files = [...(fileList || [])];
     if (!files.length) return;
+    const bucket = 'family-photos';
+    const list = target === 'thread' ? this.threadPending : this.pending;
     for (const file of files) {
       const isImage = /^image\//.test(file.type);
       let toUpload = file;
@@ -17430,21 +17546,120 @@ const ChatView = {
           toUpload = new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
         } catch (_) { /* fall back to original */ }
       }
-      const res = await Backend.uploadMedia(toUpload, {
-        bucket: 'family-photos', folder: 'chat', maxBytes: 25 * 1024 * 1024,
-      });
+      const res = await Backend.uploadMedia(toUpload, { bucket, folder: 'chat', maxBytes: 25 * 1024 * 1024 });
       if (!res.ok) { toast(res.reason || 'Upload failed.', 'danger'); continue; }
-      this.pending.push({
+      list.push({
         bucket: res.bucket, path: res.path, name: file.name,
         contentType: res.contentType || file.type || '', sizeBytes: res.sizeBytes || file.size,
         isImage,
       });
     }
-    $('#chat-file-input').value = '';
-    await this._warmUrls(this.pending);
-    this.renderPending();
+    $(target === 'thread' ? '#chat-thread-file-input' : '#chat-file-input').value = '';
+    await this._warmUrls(list);
+    if (target === 'thread') this.renderThreadPending(); else this.renderPending();
   },
   removePending(idx) { this.pending.splice(Number(idx), 1); this.renderPending(); },
+  removeThreadPending(idx) { this.threadPending.splice(Number(idx), 1); this.renderThreadPending(); },
+
+  // ---- Threads (#4) ----
+  async openThread(rootId) {
+    if (!rootId) return;
+    $('#chat-files').hidden = true;
+    this.threadRootId = rootId;
+    this.threadReplies = await ChatApi.listReplies(rootId);
+    await this._warmUrls(this.threadReplies);
+    // Ensure the root is warmed for its attachments too.
+    const root = this.messages.find(m => m.id === rootId);
+    if (root) await this._warmUrls([root]);
+    $('#chat-thread').hidden = false;
+    this.renderThread();
+    const body = $('#chat-thread-body');
+    if (body) body.scrollTop = body.scrollHeight;
+    setTimeout(() => $('#chat-thread-input')?.focus(), 30);
+  },
+  closeThread() {
+    this.threadRootId = null;
+    this.threadReplies = [];
+    this.threadPending = [];
+    $('#chat-thread').hidden = true;
+    this.renderThreadPending();
+  },
+  renderThread() {
+    const body = $('#chat-thread-body');
+    if (!body || !this.threadRootId) return;
+    const root = this.messages.find(m => m.id === this.threadRootId);
+    const rootHTML = root ? this._messageHTML(root, true) : '';
+    const count = this.threadReplies.length;
+    const divider = `<div class="chat-thread-count">${count} ${count === 1 ? 'reply' : 'replies'}</div>`;
+    const replies = this.threadReplies.map(m => this._messageHTML(m, true)).join('');
+    body.innerHTML = `<div class="chat-thread-root">${rootHTML}</div>${divider}${replies}`;
+  },
+  async sendThreadReply() {
+    if (!this.threadRootId) return;
+    const input = $('#chat-thread-input');
+    const body = input.value;
+    if (!body.trim() && !this.threadPending.length) return;
+    const attachments = this.threadPending.slice();
+    input.value = ''; this._autogrow(input);
+    this.threadPending = []; this.renderThreadPending();
+    const res = await ChatApi.sendMessage(this.activeChannelId, { body, attachments, parentId: this.threadRootId });
+    if (!res.ok) { toast(res.reason || 'Reply failed to send.', 'danger'); return; }
+    if (!this.threadReplies.some(m => m.id === res.message.id)) {
+      this.threadReplies.push(res.message);
+      await this._warmUrls([res.message]);
+    }
+    // Bump the root's reply count in the channel timeline.
+    this._applyToMessage(this.threadRootId, (m) => { m.replyCount = (m.replyCount || 0) + 1; });
+    this.renderThread();
+    this.renderMessages();
+    const el = $('#chat-thread-body'); if (el) el.scrollTop = el.scrollHeight;
+  },
+  renderThreadPending() {
+    const wrap = $('#chat-thread-attachments');
+    if (!wrap) return;
+    wrap.hidden = !this.threadPending.length;
+    wrap.innerHTML = this.threadPending.map((a, i) => {
+      const url = this.urlCache.get(`${a.bucket}/${a.path}`) || '';
+      const thumb = a.isImage && url ? `<img src="${escape(url)}" alt="" />` : `<span class="chat-att-icon">📎</span>`;
+      return `<div class="chat-pending">${thumb}<span class="chat-pending-name">${escape(a.name)}</span><button type="button" class="chat-pending-remove" data-remove-tpending="${i}" aria-label="Remove">×</button></div>`;
+    }).join('');
+    wrap.querySelectorAll('[data-remove-tpending]').forEach(btn =>
+      on(btn, 'click', () => this.removeThreadPending(btn.dataset.removeTpending)));
+  },
+
+  // ---- Files hub (#13) ----
+  async openFiles() {
+    $('#chat-thread').hidden = true;
+    const ch = this.channels.find(c => c.id === this.activeChannelId);
+    $('#chat-files-channel').textContent = ch ? `#${ch.name}` : 'this channel';
+    const items = await ChatApi.listAttachments(this.activeChannelId);
+    await this._warmUrls(items.map(a => ({ attachments: [a] })));
+    this.renderFiles(items);
+    $('#chat-files').hidden = false;
+  },
+  renderFiles(items) {
+    const body = $('#chat-files-body');
+    if (!body) return;
+    if (!items.length) { body.innerHTML = '<p class="chat-files-empty muted small">No files shared in this channel yet.</p>'; return; }
+    // Group by calendar day (items already newest-first).
+    let html = '', lastDay = '';
+    for (const a of items) {
+      const day = this._dayKey(a.createdAt);
+      if (day !== lastDay) { html += `<div class="chat-files-day">${escape(this._dayLabel(a.createdAt))}</div>`; lastDay = day; }
+      const url = this.urlCache.get(`${a.bucket}/${a.path}`) || '';
+      const preview = a.isImage && url
+        ? `<span class="chat-file-thumb" style="background-image:url('${cssUrl(url)}')"></span>`
+        : `<span class="chat-file-thumb chat-file-thumb-doc">📎</span>`;
+      const kb = a.sizeBytes ? `${(a.sizeBytes / 1024).toFixed(0)} KB · ` : '';
+      html += `<a class="chat-file-row" href="${escape(url)}" target="_blank" rel="noopener" download>
+        ${preview}
+        <span class="chat-file-info">
+          <span class="chat-file-name">${escape(a.name || 'file')}</span>
+          <span class="chat-file-meta muted small">${kb}${escape(a.authorName)} · ${escape(this._fmtTime(a.createdAt))}</span>
+        </span></a>`;
+    }
+    body.innerHTML = html;
+  },
 
   // ---- Rendering ----
   renderChannels() {
@@ -17492,7 +17707,7 @@ const ChatView = {
     return `<div class="chat-msg-avatar is-${escape(gender)}">${initial}</div>`;
   },
 
-  _messageHTML(m) {
+  _messageHTML(m, inThread = false) {
     const mine = m.authorId === Backend.user?.id;
     const time = this._fmtTime(m.createdAt);
     const edited = m.editedAt ? ' <span class="chat-edited">(edited)</span>' : '';
@@ -17515,12 +17730,20 @@ const ChatView = {
 
     const attachments = (m.attachments || []).map(a => this._attachmentHTML(a)).join('');
     const reactions = this._reactionsHTML(m);
-    // Hover toolbar: quick reactions + a "more emoji" button (#3) + edit/delete.
+    // Hover toolbar: quick reactions + more-emoji (#3) + reply-in-thread (#4) +
+    // edit/delete. The reply affordance is hidden inside a thread (no nesting).
+    const replyBtn = inThread ? '' : `<button class="chat-msg-act" data-thread="${escape(m.id)}" title="Reply in thread">💬</button>`;
     const actions = `<div class="chat-msg-actions">
         <div class="chat-react-picker">${CHAT_REACTIONS.map(e => `<button class="chat-react-opt" data-react="${escape(m.id)}" data-emoji="${escape(e)}" title="React ${e}">${e}</button>`).join('')}<button class="chat-react-more" data-react-more="${escape(m.id)}" title="More emoji…">＋</button></div>
+        ${replyBtn}
         ${mine ? `<button class="chat-msg-act" data-edit="${escape(m.id)}" title="Edit">✎</button>` : ''}
         <button class="chat-msg-act" data-delete="${escape(m.id)}" title="Delete">🗑</button>
       </div>`;
+
+    // #4: "N replies" footer on a root message that has a thread.
+    const threadFooter = (!inThread && m.replyCount > 0)
+      ? `<button class="chat-thread-link" data-thread="${escape(m.id)}">💬 ${m.replyCount} ${m.replyCount === 1 ? 'reply' : 'replies'}</button>`
+      : '';
 
     return `<div class="chat-msg" data-msg="${escape(m.id)}">
       ${avatar}
@@ -17529,6 +17752,7 @@ const ChatView = {
         ${m.body ? `<div class="chat-msg-body">${this._linkify(escape(m.body))}</div>` : ''}
         ${attachments ? `<div class="chat-msg-attachments">${attachments}</div>` : ''}
         ${reactions}
+        ${threadFooter}
       </div>
       ${actions}
     </div>`;
@@ -17580,16 +17804,19 @@ const ChatView = {
   },
 
   // ---- Delegated message-area clicks ----
-  _onMessageClick(e) {
+  _onMessageClick(e, inThread = false) {
+    // Open/reply in thread (#4).
+    const thread = e.target.closest('[data-thread]');
+    if (thread) { this.openThread(thread.dataset.thread); return; }
     // "More emoji" / add-reaction → open the full emoji picker (#3, #12).
     const more = e.target.closest('[data-react-more]');
-    if (more) { this.openReactionPicker(more.dataset.reactMore, more); return; }
+    if (more) { this.openReactionPicker(more.dataset.reactMore, more, inThread); return; }
     const react = e.target.closest('[data-react]');
-    if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji); return; }
+    if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji, inThread); return; }
     const edit = e.target.closest('[data-edit]');
     if (edit) { this.startEdit(edit.dataset.edit); return; }
     const del = e.target.closest('[data-delete]');
-    if (del) { this.deleteMessage(del.dataset.delete); return; }
+    if (del) { this.deleteMessage(del.dataset.delete, inThread); return; }
     const save = e.target.closest('[data-edit-save]');
     if (save) { this.saveEdit(save.dataset.editSave); return; }
     if (e.target.closest('[data-edit-cancel]')) { this.cancelEdit(); return; }
