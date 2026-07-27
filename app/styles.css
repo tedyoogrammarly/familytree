@@ -6408,12 +6408,18 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
    Built on the app's design tokens: forest-green brand, warm cream
    paper, copper accent, Fraunces display + Inter body.
    ================================================================== */
+/* The chat view has no .container wrapper; the top nav is 65px (see .view).
+   Height = viewport minus nav minus a small breathing margin, so the composer
+   always sits inside the shell and on-screen (v4.79 fix #1). */
+#view-chat { padding: 16px 24px; box-sizing: border-box; }
 #view-chat .chat-shell {
   display: grid;
   grid-template-columns: 264px 1fr;
+  grid-template-rows: 100%;
   gap: 0;
-  height: calc(100vh - 132px);
-  min-height: 480px;
+  height: calc(100vh - 65px - 32px);
+  min-height: 420px;
+  max-height: calc(100vh - 65px - 32px);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   overflow: hidden;
@@ -6500,7 +6506,10 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .chat-add-channel:hover { background: rgba(255,255,255,.07); color: var(--paper); }
 
 /* ---- Main ---- */
-.chat-main { display: flex; flex-direction: column; min-width: 0; background: var(--paper); }
+/* min-height:0 lets .chat-messages (flex:1) scroll instead of pushing the
+   composer past the bottom of the shell (v4.79 fix #1). overflow:hidden keeps
+   the composer pinned inside the rounded shell. */
+.chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--paper); }
 .chat-main-head {
   display: flex;
   align-items: center;
@@ -6683,7 +6692,7 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 
 /* ---- Responsive ---- */
 @media (max-width: 860px) {
-  #view-chat .chat-shell { grid-template-columns: 200px 1fr; height: calc(100vh - 120px); }
+  #view-chat .chat-shell { grid-template-columns: 200px 1fr; height: calc(100vh - 65px - 32px); max-height: calc(100vh - 65px - 32px); }
   .chat-att-image img { max-width: 220px; }
 }
 /* ---- v4.75 polish ---- */
@@ -6794,6 +6803,11 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
   padding: 2px 0;
 }
 .chat-thread-link:hover { text-decoration: underline; }
+/* #6: the always-present "Reply in thread" link is muted until you hover the
+   message, so it's available without shouting on every row. */
+.chat-thread-link-empty { color: var(--ink-400); font-weight: 500; opacity: 0; transition: opacity .12s; }
+.chat-msg:hover .chat-thread-link-empty { opacity: 1; }
+.chat-thread-link-empty:hover { color: var(--brand-500); }
 
 /* Files hub rows */
 .chat-files-day { font-size: .74rem; font-weight: 700; color: var(--ink-500); text-transform: uppercase; letter-spacing: .05em; margin: var(--space-3) 0 var(--space-2); }
@@ -6804,6 +6818,83 @@ body.is-vault-authorized .nav-tab[data-vault-only] { display: inline-flex !impor
 .chat-file-info { min-width: 0; display: flex; flex-direction: column; }
 .chat-file-name { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-files-empty { padding: var(--space-4); }
+
+/* ---- v4.77: notifications, mentions, sounds ---- */
+.chat-sidebar-tools { display: flex; align-items: center; gap: 2px; }
+.chat-sidebar-tools .icon-btn { color: var(--brand-300); width: 28px; height: 28px; }
+.chat-sidebar-tools .icon-btn:hover { color: var(--paper); background: rgba(255,255,255,.08); }
+#chat-mute-mentions { font-weight: 700; font-size: .95rem; }
+/* muted (on) state for the toggle buttons */
+.chat-toggle.is-on { color: var(--danger); background: rgba(179,65,65,.14); }
+.chat-toggle.is-on:hover { color: var(--danger); }
+
+/* #7: unread channel highlight */
+.chat-channel { justify-content: space-between; }
+.chat-channel-label { display: inline-flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-channel.is-unread { color: #fff; font-weight: 700; }
+.chat-channel.is-unread .chat-hash { opacity: .9; }
+.chat-channel.is-unread::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent-300); flex: none; margin-right: -2px;
+}
+/* #8: mention count badge */
+.chat-mention-badge {
+  flex: none;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger); color: #fff;
+  font-size: .72rem; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* #8/#4: @mention chip inside message bodies — clearly highlighted */
+.chat-mention { color: var(--brand-700); font-weight: 700; background: var(--tint-200); border-radius: 5px; padding: 1px 5px; }
+.chat-mention.is-me { color: var(--accent-700); background: var(--accent-100); box-shadow: inset 0 0 0 1px var(--accent-300); }
+
+/* #3: highlighted item in the @mention autocomplete menu */
+.chat-mention-item.is-selected { background: var(--tint-100); color: var(--brand-700); font-weight: 600; }
+
+/* v4.80 #2: message-link preview card (Slack-style quoted message) */
+.chat-linkcard {
+  display: flex; margin-top: 6px; max-width: 460px;
+  border: 1px solid var(--hairline); border-left: 3px solid var(--brand-300);
+  border-radius: var(--radius-sm); background: var(--paper-soft);
+  overflow: hidden;
+}
+.chat-linkcard-body { padding: 8px 12px; min-width: 0; }
+.chat-linkcard-author { font-weight: 650; font-size: .85rem; color: var(--ink-900); margin-bottom: 2px; }
+.chat-linkcard-snippet { font-size: .88rem; color: var(--ink-700); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.chat-linkcard-view { margin-top: 6px; border: 0; background: transparent; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 600; color: var(--brand-500); padding: 0; }
+.chat-linkcard-view:hover { text-decoration: underline; }
+.chat-linkcard.is-loading .chat-linkcard-body { padding: 10px 12px; }
+.chat-linkcard.is-loading { border-left-color: var(--ink-200); }
+
+/* v4.79 #3: flash a message when arrived via a copied link */
+.chat-msg.is-flash { animation: chat-flash 2s var(--ease-out); }
+@keyframes chat-flash {
+  0%, 40% { background: var(--accent-100); box-shadow: inset 3px 0 0 var(--accent-500); }
+  100% { background: transparent; box-shadow: none; }
+}
+
+/* #8: @mention autocomplete menu above the composer */
+.chat-composer { position: relative; }
+.chat-mention-menu {
+  position: absolute; left: var(--space-5); right: var(--space-5); bottom: calc(100% - 4px);
+  background: var(--paper); border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lift);
+  overflow: hidden; z-index: 6; max-height: 210px; overflow-y: auto;
+}
+.chat-mention-item {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: .9rem; color: var(--ink-800);
+  padding: 8px var(--space-3);
+}
+.chat-mention-item:hover { background: var(--tint-50); color: var(--brand-600); }
+
+/* #10: sound settings rows */
+.chat-sound-row { display: flex; gap: var(--space-2); align-items: center; }
+.chat-sound-row select { flex: 1; }
 
 @media (max-width: 620px) {
   .chat-thread, .chat-files { width: 100%; max-width: 100%; }

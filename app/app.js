@@ -359,12 +359,16 @@ const Backend = {
   // Realtime for the sidebar: channel + section INSERT/UPDATE/DELETE so a
   // channel/section created on another device appears live. Single shared
   // subscription for the whole Chat view (not per-channel).
-  subscribeChatSidebar(handler) {
+  subscribeChatSidebar(handler, onAnyMessage) {
     if (!this.client) return null;
     return this.client
       .channel('chat-sidebar')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_channels' }, () => handler && handler())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_sections' }, () => handler && handler())
+      // v4.77: every new message (any channel) drives cross-channel unread
+      // counts, badges, tab title, and notification sounds.
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' },
+        (p) => onAnyMessage && onAnyMessage(p.new))
       .subscribe();
   },
 
@@ -696,7 +700,7 @@ const ChatApi = {
   // v4.76: root messages only (parent_id is null) with a reply count per root.
   // Selects parent_id; if the threads migration hasn't run yet the column is
   // absent and the query errors → we retry without it so the app still works.
-  _MSG_COLS: 'id, channel_id, author, body, attachments, edited_at, created_at, parent_id',
+  _MSG_COLS: 'id, channel_id, author, body, attachments, edited_at, created_at, parent_id, mentions',
   async listMessages(channelId, { before, limit = 50 } = {}) {
     if (!Backend.client || !channelId) return [];
     const build = (cols, rootsOnly) => {
@@ -756,6 +760,17 @@ const ChatApi = {
     }
     return rows.map(m => this._shape(m, rxBy.get(m.id) || []));
   },
+  // Fetch one message by id (for link previews, #2). Tolerates missing newer
+  // columns pre-migration. Returns a shaped message or null.
+  async getMessage(id) {
+    if (!Backend.client || !id) return null;
+    let { data, error } = await Backend.client.from('chat_messages').select(this._MSG_COLS).eq('id', id).maybeSingle();
+    if (error && this._isMissingColumn(error)) {
+      ({ data, error } = await Backend.client.from('chat_messages').select(this._SAFE_COLS).eq('id', id).maybeSingle());
+    }
+    if (error || !data) { this._warn('getMessage', error); return null; }
+    return this._shape(data, []);
+  },
   // Normalize a raw DB row (+ its reactions) into the view's message shape.
   // Exposed so the realtime handler can shape freshly-inserted/updated rows.
   _shape(m, reactions = []) {
@@ -767,26 +782,48 @@ const ChatApi = {
       createdAt: new Date(m.created_at).getTime(),
       parentId: m.parent_id || null,
       replyCount: 0,
+      mentions: m.mentions || [],
       reactions,
     };
   },
-  async sendMessage(channelId, { body, attachments, parentId } = {}) {
+  // Columns guaranteed by the base Chat migration (threads/notifications add
+  // parent_id + mentions later). Used as a fallback select/insert when the
+  // newer columns aren't in the schema yet (avoids "column not found" errors).
+  _SAFE_COLS: 'id, channel_id, author, body, attachments, edited_at, created_at',
+  // True when a Postgres/PostgREST error is about a missing column (pre-migration).
+  _isMissingColumn(error) {
+    const m = (error && error.message || '').toLowerCase();
+    return m.includes('column') && (m.includes('does not exist') || m.includes('schema cache') || m.includes('could not find'));
+  },
+  async sendMessage(channelId, { body, attachments, parentId, mentions } = {}) {
     if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
     const text = (body || '').trim();
     if (!text && !(attachments && attachments.length)) return { ok: false, reason: 'Nothing to send.' };
-    const row = { channel_id: channelId, body: text || null, attachments: attachments || [] };
-    if (parentId) row.parent_id = parentId;
-    const { data, error } = await Backend.client.from('chat_messages')
-      .insert(row).select(this._MSG_COLS).single();
+    const full = { channel_id: channelId, body: text || null, attachments: attachments || [] };
+    if (parentId) full.parent_id = parentId;
+    if (mentions && mentions.length) full.mentions = mentions;
+    let { data, error } = await Backend.client.from('chat_messages').insert(full).select(this._MSG_COLS).single();
+    if (error && this._isMissingColumn(error)) {
+      // A thread reply MUST keep its parent_id — never silently downgrade it to
+      // a channel message. If the threads column is missing, fail loudly so the
+      // user knows to run the migration (bug: replies were leaking to the channel).
+      if (parentId) {
+        return { ok: false, reason: 'Threads need the chat threads database update (2026-07-23-chat-threads.sql) to be run first.' };
+      }
+      // Otherwise only strip the cosmetic `mentions` column and retry.
+      const safe = { channel_id: channelId, body: text || null, attachments: attachments || [] };
+      ({ data, error } = await Backend.client.from('chat_messages').insert(safe).select(this._SAFE_COLS).single());
+    }
     if (error) { this._warn('sendMessage', error); return { ok: false, reason: error.message }; }
     return { ok: true, message: this._shape(data, []) };
   },
   async editMessage(id, { body }) {
     if (!Backend.client) return { ok: false, reason: 'Backend unavailable.' };
-    const { data, error } = await Backend.client.from('chat_messages')
-      .update({ body: (body || '').trim() || null, edited_at: new Date().toISOString() })
-      .eq('id', id)
-      .select(this._MSG_COLS).single();
+    const patch = { body: (body || '').trim() || null, edited_at: new Date().toISOString() };
+    let { data, error } = await Backend.client.from('chat_messages').update(patch).eq('id', id).select(this._MSG_COLS).single();
+    if (error && this._isMissingColumn(error)) {
+      ({ data, error } = await Backend.client.from('chat_messages').update(patch).eq('id', id).select(this._SAFE_COLS).single());
+    }
     if (error) { this._warn('editMessage', error); return { ok: false, reason: error.message }; }
     return { ok: true, message: this._shape(data, []) };
   },
@@ -828,6 +865,77 @@ const ChatApi = {
       .eq('message_id', messageId).eq('user_id', Backend.user?.id).eq('emoji', emoji);
     if (error) { this._warn('removeReaction', error); return { ok: false }; }
     return { ok: true };
+  },
+
+  // ---- Read state & unread counts (v4.77) ----
+  // My last-read timestamp per channel. Returns Map<channelId, ms>.
+  async myReads() {
+    if (!Backend.client) return new Map();
+    const { data, error } = await Backend.client.from('chat_reads')
+      .select('channel_id, last_read_at').eq('user_id', Backend.user?.id);
+    if (error) { this._warn('myReads', error); return new Map(); }
+    const m = new Map();
+    for (const r of (data || [])) m.set(r.channel_id, new Date(r.last_read_at).getTime());
+    return m;
+  },
+  // Mark a channel read up to `at` (defaults now). Upsert on (user, channel).
+  async markRead(channelId, at) {
+    if (!Backend.client || !channelId) return { ok: false };
+    const iso = at ? new Date(at).toISOString() : new Date().toISOString();
+    const { error } = await Backend.client.from('chat_reads')
+      .upsert({ channel_id: channelId, last_read_at: iso }, { onConflict: 'user_id,channel_id' });
+    if (error) { this._warn('markRead', error); return { ok: false }; }
+    return { ok: true };
+  },
+  // Per-channel unread + mention counts given my reads map. One query pulls
+  // recent messages' channel/created/author/mentions; we tally client-side.
+  async unreadCounts(reads) {
+    if (!Backend.client) return { unread: new Map(), mentions: new Map() };
+    const me = Backend.user?.id;
+    // Only count messages authored by others (my own aren't "unread" to me).
+    const { data, error } = await Backend.client.from('chat_messages')
+      .select('channel_id, created_at, author, mentions')
+      .order('created_at', { ascending: false }).limit(500);
+    if (error) { this._warn('unreadCounts', error); return { unread: new Map(), mentions: new Map() }; }
+    const unread = new Map(), mentions = new Map();
+    for (const m of (data || [])) {
+      if (m.author === me) continue;
+      const since = reads.get(m.channel_id) || 0;
+      if (new Date(m.created_at).getTime() <= since) continue;
+      unread.set(m.channel_id, (unread.get(m.channel_id) || 0) + 1);
+      if (Array.isArray(m.mentions) && m.mentions.includes(me)) {
+        mentions.set(m.channel_id, (mentions.get(m.channel_id) || 0) + 1);
+      }
+    }
+    return { unread, mentions };
+  },
+
+  // ---- Per-user chat preferences (mute toggles + sound choices) ----
+  async getPrefs() {
+    if (!Backend.client || !Backend.user) return {};
+    const { data, error } = await Backend.client.from('member_accounts')
+      .select('chat_prefs').eq('user_id', Backend.user.id).maybeSingle();
+    if (error) { this._warn('getPrefs', error); return {}; }
+    return (data && data.chat_prefs) || {};
+  },
+  async setPrefs(patch) {
+    if (!Backend.client || !Backend.user) return { ok: false };
+    const current = await this.getPrefs();
+    const next = { ...current, ...patch };
+    const { error } = await Backend.client.from('member_accounts')
+      .update({ chat_prefs: next }).eq('user_id', Backend.user.id);
+    if (error) { this._warn('setPrefs', error); return { ok: false }; }
+    return { ok: true, prefs: next };
+  },
+
+  // Mentionable users = admins (current scope). [{ userId, name }]
+  mentionables() {
+    const out = [];
+    for (const [userId, name] of AuthorNames._byUser.entries()) {
+      if (userId === Backend.user?.id) continue;
+      out.push({ userId, name });
+    }
+    return out;
   },
 };
 
@@ -6665,12 +6773,21 @@ const EmojiPicker = {
     this.activeInput = input;
     const pop = this.ensure();
     const rect = anchor.getBoundingClientRect();
-    pop.style.top  = (rect.bottom + window.scrollY + 6) + 'px';
     pop.style.left = (Math.max(8, Math.min(window.innerWidth - 360, rect.left + window.scrollX))) + 'px';
     pop.hidden = false;
     pop.querySelector('.emoji-search').value = '';
-    setTimeout(() => pop.querySelector('.emoji-search').focus(), 30);
     this.renderGrid();
+    // Position below by default, but flip ABOVE the anchor when there isn't
+    // enough room below (e.g. a message near the bottom of the chat). Measured
+    // after render so we know the popover's real height (v4.79 fix #2).
+    const ph = pop.offsetHeight || 320;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow < ph + 12 && rect.top > ph + 12) {
+      pop.style.top = (rect.top + window.scrollY - ph - 6) + 'px';
+    } else {
+      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+    }
+    setTimeout(() => pop.querySelector('.emoji-search').focus(), 30);
   },
   close() {
     if (this.popover) this.popover.hidden = true;
@@ -11247,7 +11364,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.76';
+const APP_VERSION = '4.80';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
@@ -17268,6 +17385,64 @@ const AlbumModal = {
 // edited_at → shows "(edited)"), delete, and inline image / file attachments.
 const CHAT_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
 
+// -------------------- CHAT SOUND (v4.77) --------------------
+// Notification chimes, synthesized live via Web Audio (no audio files shipped).
+// Each sound is a short, soft note sequence with a gentle envelope so it reads
+// as pleasant, not distracting. A separate, slightly richer set is used for
+// @mentions so they're distinguishable by ear. Selectable in My Profile.
+//   NOTE: chosen the synth route because we can't ship/verify royalty-free
+//   audio binaries here; real files can replace these later without UI change.
+const ChatSound = {
+  _ctx: null,
+  // name -> [ {f: freqHz, t: startSec, d: durSec}, ... ]
+  MESSAGE: {
+    ping:   [{ f: 880, t: 0, d: 0.18 }],
+    knock:  [{ f: 300, t: 0, d: 0.09 }, { f: 240, t: 0.1, d: 0.1 }],
+    bloop:  [{ f: 500, t: 0, d: 0.12 }, { f: 720, t: 0.09, d: 0.14 }],
+    chime:  [{ f: 660, t: 0, d: 0.16 }, { f: 990, t: 0.12, d: 0.22 }],
+  },
+  MENTION: {
+    sparkle:  [{ f: 784, t: 0, d: 0.12 }, { f: 1047, t: 0.1, d: 0.12 }, { f: 1319, t: 0.2, d: 0.2 }],
+    doubletap:[{ f: 660, t: 0, d: 0.1 }, { f: 660, t: 0.16, d: 0.14 }],
+    rise:     [{ f: 523, t: 0, d: 0.1 }, { f: 659, t: 0.09, d: 0.1 }, { f: 880, t: 0.18, d: 0.2 }],
+  },
+  MESSAGE_NAMES: ['ping', 'knock', 'bloop', 'chime'],
+  MENTION_NAMES: ['sparkle', 'doubletap', 'rise'],
+
+  _ensure() {
+    if (!this._ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) this._ctx = new AC();
+    }
+    // Autoplay policy: resume on first user gesture.
+    if (this._ctx && this._ctx.state === 'suspended') this._ctx.resume().catch(() => {});
+    return this._ctx;
+  },
+  _playNotes(notes) {
+    const ctx = this._ensure();
+    if (!ctx || !notes) return;
+    const now = ctx.currentTime;
+    for (const n of notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = n.f;
+      // Soft attack + exponential release so it's a chime, not a beep.
+      const start = now + n.t;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.14, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + n.d);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(start); osc.stop(start + n.d + 0.02);
+    }
+  },
+  play(kind, name) {
+    const table = kind === 'mention' ? this.MENTION : this.MESSAGE;
+    this._playNotes(table[name] || Object.values(table)[0]);
+  },
+  preview(kind, name) { this.play(kind, name); },
+};
+
 const ChatView = {
   inited: false,
   loaded: false,
@@ -17283,6 +17458,13 @@ const ChatView = {
   threadRootId: null,      // #4: open thread's root message id (null = closed)
   threadReplies: [],       // replies for the open thread
   threadPending: [],       // staged attachments for the thread composer
+  prefs: {},               // #6/#9/#10: this user's chat notification prefs
+  reads: new Map(),        // channelId -> last-read ms
+  unread: new Map(),       // channelId -> unread count (#7)
+  mentionCounts: new Map(),// channelId -> unread @-mention count (#8)
+  _mention: null,          // active @-autocomplete state for the composer
+  drafts: new Map(),       // #5: channelId -> unsent composer text
+  _linkPreviews: new Map(),// #2: referenced messageId -> {authorName, snippet, channelId} | 'missing'
 
   init() {
     if (this.inited) return;
@@ -17293,9 +17475,14 @@ const ChatView = {
     const input = $('#chat-composer-input');
     on(form, 'submit', (e) => { e.preventDefault(); this.send(); });
     on(input, 'keydown', (e) => {
+      // If the @mention menu is open, let it handle Enter/Tab (don't send).
+      if (this._mention && this._mention.input === input) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); }
     });
-    on(input, 'input', () => this._autogrow(input));
+    on(input, 'input', () => {
+      this._autogrow(input);
+      if (this.activeChannelId) this.drafts.set(this.activeChannelId, input.value);  // #5
+    });
 
     // Attachments.
     on($('#btn-chat-attach'), 'click', () => $('#chat-file-input').click());
@@ -17321,6 +17508,7 @@ const ChatView = {
     on($('#chat-thread-body'), 'click', (e) => this._onMessageClick(e, true));
     on($('#chat-thread-composer'), 'submit', (e) => { e.preventDefault(); this.sendThreadReply(); });
     on($('#chat-thread-input'), 'keydown', (e) => {
+      if (this._mention && this._mention.input === $('#chat-thread-input')) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendThreadReply(); }
     });
     on($('#chat-thread-input'), 'input', () => this._autogrow($('#chat-thread-input')));
@@ -17331,15 +17519,41 @@ const ChatView = {
     on($('#btn-chat-files'), 'click', () => this.openFiles());
     on($('#btn-chat-files-close'), 'click', () => { $('#chat-files').hidden = true; });
 
+    // #6/#9: mute toggles (top-left of the sidebar).
+    on($('#chat-mute-all'), 'click', () => this.toggleMuteAll());
+    on($('#chat-mute-mentions'), 'click', () => this.toggleMuteMentions());
+
+    // #8: @-mention autocomplete for both composers.
+    this._bindMentionAutocomplete($('#chat-composer-input'), $('#chat-mention-menu'));
+    this._bindMentionAutocomplete($('#chat-thread-input'), $('#chat-thread-mention-menu'));
+
+    // #10: sound settings modal.
+    on($('#btn-chat-sounds'), 'click', () => this.openSoundSettings());
+    const soundModal = $('#chat-sound-modal');
+    on(soundModal, 'click', (e) => { if (e.target.closest('[data-close]')) soundModal.setAttribute('aria-hidden', 'true'); });
+    on($('#chat-sound-form'), 'submit', (e) => { e.preventDefault(); this.saveSoundSettings(); });
+    on($('#chat-sound-preview-message'), 'click', () => ChatSound.preview('message', $('#chat-sound-message').value));
+    on($('#chat-sound-preview-mention'), 'click', () => ChatSound.preview('mention', $('#chat-sound-mention').value));
+
     this._bindModals();
   },
 
   // ---- Data / lifecycle ----
   async render() {
     if (!Backend.client) { this._renderEmptyBackend(); return; }
+    // Load prefs + read state up front so badges/sounds behave from the start.
+    this.prefs = await ChatApi.getPrefs();
+    this._applyPrefsToToggles();
     await this.reloadSidebar();
-    // Pick the default channel (#all-chat) or the first, unless one is active.
-    if (!this.activeChannelId && this.channels.length) {
+    await this.refreshUnread();
+    // #3: a shared message link (#chat/<channel>/<message>) wins over defaults.
+    const deep = this._pendingDeepLink();
+    if (deep && this.channels.some(c => c.id === deep.channelId)) {
+      await this.openChannel(deep.channelId);
+      this.focusMessage(deep.messageId);
+      try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    } else if (!this.activeChannelId && this.channels.length) {
+      // Pick the default channel (#all-chat) or the first, unless one is active.
       const def = this.channels.find(c => c.is_default) || this.channels[0];
       await this.openChannel(def.id);
     } else if (this.activeChannelId) {
@@ -17359,15 +17573,36 @@ const ChatView = {
     this.renderChannels();
   },
 
+  // #7/#8: recompute unread + mention counts and repaint badges + tab title.
+  async refreshUnread() {
+    this.reads = await ChatApi.myReads();
+    const { unread, mentions } = await ChatApi.unreadCounts(this.reads);
+    this.unread = unread;
+    this.mentionCounts = mentions;
+    this.renderChannels();
+    this._updateTabTitle();
+  },
+
   async openChannel(id) {
     if (!id) return;
+    // #5: stash the current channel's unsent draft before leaving it.
+    if (this.activeChannelId && this.activeChannelId !== id) {
+      const cur = $('#chat-composer-input');
+      if (cur) this.drafts.set(this.activeChannelId, cur.value);
+    }
     this.activeChannelId = id;
     this.editingId = null;
-    this.renderChannels();                       // active highlight
+    this._closeMentionMenu();
+    this.closeThread();
+    $('#chat-files').hidden = true;
     const ch = this.channels.find(c => c.id === id);
     const nm = ch ? ch.name : 'channel';
     $('#chat-channel-name').textContent = nm;
-    $('#chat-composer-input').placeholder = `Message #${nm}`;
+    const input = $('#chat-composer-input');
+    input.placeholder = `Message #${nm}`;
+    // #5: restore this channel's saved draft (empty string if none).
+    input.value = this.drafts.get(id) || '';
+    this._autogrow(input);
     $('#chat-empty-channel').textContent = `#${nm}`;
     $('#btn-chat-delete-channel').hidden = !ch || ch.is_default;
     this.messages = await ChatApi.listMessages(id, { limit: 50 });
@@ -17375,6 +17610,19 @@ const ChatView = {
     this.renderMessages();
     this._scrollToBottom();
     this._subscribeChannel(id);
+    // Opening a channel clears its unread + mentions (#7/#8).
+    await this._markActiveRead();
+  },
+
+  // Mark the active channel read now, clear its badges, repaint + tab title.
+  async _markActiveRead() {
+    if (!this.activeChannelId) return;
+    this.reads.set(this.activeChannelId, Date.now());
+    this.unread.delete(this.activeChannelId);
+    this.mentionCounts.delete(this.activeChannelId);
+    this.renderChannels();
+    this._updateTabTitle();
+    await ChatApi.markRead(this.activeChannelId);
   },
 
   // ---- Realtime ----
@@ -17389,7 +17637,10 @@ const ChatView = {
   },
   _subscribeSidebar() {
     if (this.sidebarSub) return;
-    this.sidebarSub = Backend.subscribeChatSidebar(() => this.reloadSidebar());
+    this.sidebarSub = Backend.subscribeChatSidebar(
+      () => this.reloadSidebar(),
+      (row) => this._onAnyMessage(row),
+    );
   },
   teardown() {
     Backend.unsubscribeChat(this.sub);
@@ -17418,6 +17669,93 @@ const ChatView = {
     await this._warmUrls([msg]);
     this.renderMessages();
     this._scrollToBottom();
+    // Someone else posted in the channel I'm viewing: chime + keep it read.
+    if (msg.authorId !== Backend.user?.id) {
+      const mentioned = Array.isArray(row.mentions) && row.mentions.includes(Backend.user?.id);
+      this._notify(mentioned);
+      this._markActiveRead();
+    }
+  },
+
+  // v4.77: any new message, in any channel (from the global sidebar sub).
+  // Drives cross-channel unread/mention badges, tab title, and sounds.
+  _onAnyMessage(row) {
+    if (!row) return;
+    if (row.author === Backend.user?.id) return;         // my own message
+    if (row.channel_id === this.activeChannelId) return; // handled by _onRemoteInsert
+    const mentioned = Array.isArray(row.mentions) && row.mentions.includes(Backend.user?.id);
+    this.unread.set(row.channel_id, (this.unread.get(row.channel_id) || 0) + 1);
+    if (mentioned) this.mentionCounts.set(row.channel_id, (this.mentionCounts.get(row.channel_id) || 0) + 1);
+    this.renderChannels();
+    this._updateTabTitle();
+    this._notify(mentioned);
+  },
+
+  // Play the right chime unless muted (#6/#9). Mentions use a distinct sound.
+  _notify(isMention) {
+    if (isMention) {
+      if (this.prefs.muteMentions) return;
+      ChatSound.play('mention', this.prefs.mentionSound || ChatSound.MENTION_NAMES[0]);
+    } else {
+      if (this.prefs.muteAll) return;
+      ChatSound.play('message', this.prefs.messageSound || ChatSound.MESSAGE_NAMES[0]);
+    }
+  },
+
+  // #7: reflect total unread / mentions in the browser tab title.
+  _updateTabTitle() {
+    const totalUnread = [...this.unread.values()].reduce((a, b) => a + b, 0);
+    const totalMentions = [...this.mentionCounts.values()].reduce((a, b) => a + b, 0);
+    if (!this._baseTitle) this._baseTitle = document.title.replace(/^\(\d+\)\s*|^•\s*/, '');
+    if (totalMentions > 0) document.title = `(${totalMentions}) ${this._baseTitle}`;
+    else if (totalUnread > 0) document.title = `• ${this._baseTitle}`;
+    else document.title = this._baseTitle;
+  },
+
+  // #3: copy a shareable deep link to a message. The link is a hash the app
+  // parses on load: <origin>/app/#chat/<channelId>/<messageId>. Opening it
+  // switches to Chat, opens the channel, and highlights the message.
+  async copyMessageLink(messageId) {
+    if (!messageId || !this.activeChannelId) return;
+    const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+    const link = `${base}#chat/${this.activeChannelId}/${messageId}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('Link to message copied.');
+    } catch (_) {
+      // Clipboard API can be blocked; fall back to a prompt so the user can copy.
+      window.prompt('Copy this link to the message:', link);
+    }
+  },
+  // Parse the boot hash and, if it targets a chat message, open + focus it.
+  // Called from render() once channels are loaded. Returns the channelId to
+  // open (or null).
+  _pendingDeepLink() {
+    const m = (location.hash || '').match(/^#chat\/([^/]+)\/([^/]+)$/);
+    if (!m) return null;
+    return { channelId: m[1], messageId: m[2] };
+  },
+  // Scroll a message into view and flash a highlight.
+  focusMessage(messageId) {
+    const el = $(`#chat-messages [data-msg="${messageId}"]`);
+    if (!el) return false;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('is-flash');
+    setTimeout(() => el.classList.remove('is-flash'), 2000);
+    return true;
+  },
+  // #3: "View message" on a link preview → open the target channel (if it's a
+  // different one) then scroll to + flash the message.
+  async viewLinkedMessage(messageId) {
+    if (!messageId) return;
+    if (this.focusMessage(messageId)) return;   // already loaded in this channel
+    // Find the target channel from the cached preview, or fetch the message.
+    let channelId = this._linkPreviews.get(messageId)?.channelId;
+    if (!channelId) { const msg = await ChatApi.getMessage(messageId); channelId = msg?.channelId; }
+    if (!channelId) { toast('Message not found.', 'warn'); return; }
+    await this.openChannel(channelId);
+    // Give the render a tick, then focus.
+    setTimeout(() => this.focusMessage(messageId), 120);
   },
   _onRemoteUpdate(row) {
     if (!row) return;
@@ -17455,9 +17793,12 @@ const ChatView = {
     if (!body.trim() && !this.pending.length) return;
     if (!this.activeChannelId) { toast('Pick a channel first.', 'warn'); return; }
     const attachments = this.pending.slice();
+    const mentions = this._parseMentions(body);
     input.value = ''; this._autogrow(input);
+    this.drafts.delete(this.activeChannelId);   // #5: draft consumed
+    this._closeMentionMenu();
     this.pending = []; this.renderPending();
-    const res = await ChatApi.sendMessage(this.activeChannelId, { body, attachments });
+    const res = await ChatApi.sendMessage(this.activeChannelId, { body, attachments, mentions });
     if (!res.ok) { toast(res.reason || 'Message failed to send.', 'danger'); return; }
     // Optimistic append (realtime will skip the echo by id).
     if (!this.messages.some(m => m.id === res.message.id)) {
@@ -17600,9 +17941,10 @@ const ChatView = {
     const body = input.value;
     if (!body.trim() && !this.threadPending.length) return;
     const attachments = this.threadPending.slice();
+    const mentions = this._parseMentions(body);
     input.value = ''; this._autogrow(input);
     this.threadPending = []; this.renderThreadPending();
-    const res = await ChatApi.sendMessage(this.activeChannelId, { body, attachments, parentId: this.threadRootId });
+    const res = await ChatApi.sendMessage(this.activeChannelId, { body, attachments, parentId: this.threadRootId, mentions });
     if (!res.ok) { toast(res.reason || 'Reply failed to send.', 'danger'); return; }
     if (!this.threadReplies.some(m => m.id === res.message.id)) {
       this.threadReplies.push(res.message);
@@ -17666,7 +18008,14 @@ const ChatView = {
     const el = $('#chat-channels');
     if (!el) return;
     const active = this.activeChannelId;
-    const link = (c) => `<button class="chat-channel${c.id === active ? ' is-active' : ''}" data-channel="${escape(c.id)}" role="tab" aria-selected="${c.id === active}"><span class="chat-hash">#</span>${escape(c.name)}</button>`;
+    // #7: bold/highlight channels with unread; #8: red mention-count badge.
+    const link = (c) => {
+      const unread = this.unread.get(c.id) || 0;
+      const mentions = this.mentionCounts.get(c.id) || 0;
+      const cls = 'chat-channel' + (c.id === active ? ' is-active' : '') + (unread && c.id !== active ? ' is-unread' : '');
+      const badge = mentions > 0 ? `<span class="chat-mention-badge">${mentions}</span>` : '';
+      return `<button class="${cls}" data-channel="${escape(c.id)}" role="tab" aria-selected="${c.id === active}"><span class="chat-channel-label"><span class="chat-hash">#</span>${escape(c.name)}</span>${badge}</button>`;
+    };
     const ungrouped = this.channels.filter(c => !c.section_id);
     let html = ungrouped.map(link).join('');
     for (const s of this.sections) {
@@ -17736,20 +18085,26 @@ const ChatView = {
     const actions = `<div class="chat-msg-actions">
         <div class="chat-react-picker">${CHAT_REACTIONS.map(e => `<button class="chat-react-opt" data-react="${escape(m.id)}" data-emoji="${escape(e)}" title="React ${e}">${e}</button>`).join('')}<button class="chat-react-more" data-react-more="${escape(m.id)}" title="More emoji…">＋</button></div>
         ${replyBtn}
+        <button class="chat-msg-act" data-copy-link="${escape(m.id)}" title="Copy link to message">🔗</button>
         ${mine ? `<button class="chat-msg-act" data-edit="${escape(m.id)}" title="Edit">✎</button>` : ''}
         <button class="chat-msg-act" data-delete="${escape(m.id)}" title="Delete">🗑</button>
       </div>`;
 
-    // #4: "N replies" footer on a root message that has a thread.
-    const threadFooter = (!inThread && m.replyCount > 0)
-      ? `<button class="chat-thread-link" data-thread="${escape(m.id)}">💬 ${m.replyCount} ${m.replyCount === 1 ? 'reply' : 'replies'}</button>`
-      : '';
+    // #4/#6: thread footer under every root message — "N replies" if it has a
+    // thread, otherwise an always-visible "Reply in thread" link so you don't
+    // need to hover/scroll right to start one.
+    let threadFooter = '';
+    if (!inThread) {
+      threadFooter = m.replyCount > 0
+        ? `<button class="chat-thread-link" data-thread="${escape(m.id)}">💬 ${m.replyCount} ${m.replyCount === 1 ? 'reply' : 'replies'}</button>`
+        : `<button class="chat-thread-link chat-thread-link-empty" data-thread="${escape(m.id)}">💬 Reply in thread</button>`;
+    }
 
     return `<div class="chat-msg" data-msg="${escape(m.id)}">
       ${avatar}
       <div class="chat-msg-main">
         <div class="chat-msg-meta"><span class="chat-msg-author">${escape(m.authorName)}</span><span class="chat-msg-time">${time}</span>${edited}</div>
-        ${m.body ? `<div class="chat-msg-body">${this._linkify(escape(m.body))}</div>` : ''}
+        ${m.body ? `<div class="chat-msg-body">${this._renderBody(m.body)}</div>` : ''}
         ${attachments ? `<div class="chat-msg-attachments">${attachments}</div>` : ''}
         ${reactions}
         ${threadFooter}
@@ -17809,12 +18164,18 @@ const ChatView = {
     const thread = e.target.closest('[data-thread]');
     if (thread) { this.openThread(thread.dataset.thread); return; }
     // "More emoji" / add-reaction → open the full emoji picker (#3, #12).
+    // stopPropagation so this same click doesn't hit EmojiPicker's document-
+    // level "click outside → close" handler and close it immediately (#1 bug).
     const more = e.target.closest('[data-react-more]');
-    if (more) { this.openReactionPicker(more.dataset.reactMore, more, inThread); return; }
+    if (more) { e.stopPropagation(); this.openReactionPicker(more.dataset.reactMore, more, inThread); return; }
     const react = e.target.closest('[data-react]');
     if (react) { this.toggleReaction(react.dataset.react, react.dataset.emoji, inThread); return; }
     const edit = e.target.closest('[data-edit]');
     if (edit) { this.startEdit(edit.dataset.edit); return; }
+    const view = e.target.closest('[data-view-msg]');
+    if (view) { this.viewLinkedMessage(view.dataset.viewMsg); return; }
+    const copy = e.target.closest('[data-copy-link]');
+    if (copy) { this.copyMessageLink(copy.dataset.copyLink); return; }
     const del = e.target.closest('[data-delete]');
     if (del) { this.deleteMessage(del.dataset.delete, inThread); return; }
     const save = e.target.closest('[data-edit-save]');
@@ -17965,6 +18326,186 @@ const ChatView = {
   },
   _linkify(html) {
     return html.replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+  },
+
+  // #2: render a message body, turning chat message-links into Slack-style
+  // preview cards. Non-chat links + mentions are handled as before.
+  _renderBody(body) {
+    // Match our own message links: .../app/#chat/<channelId>/<messageId>
+    const linkRe = /(https?:\/\/[^\s<]*#chat\/([^/\s]+)\/([^/\s]+))/g;
+    let hasChatLink = false;
+    // Replace each chat link with a preview card (or a loading placeholder).
+    const withCards = body.replace(linkRe, (full, url, channelId, messageId) => {
+      hasChatLink = true;
+      const cached = this._linkPreviews.get(messageId);
+      if (cached === undefined) { this._ensureLinkPreview(channelId, messageId); return this._previewCardHTML(messageId, null); }
+      if (cached === 'missing') return `<a href="${escape(url)}" target="_blank" rel="noopener">${escape(url)}</a>`;
+      return this._previewCardHTML(messageId, cached);
+    });
+    // Everything that ISN'T a card still gets escaped + linkified + mentions.
+    // We split on the card placeholders so we don't double-escape the card HTML.
+    if (!hasChatLink) return this._highlightMentions(this._linkify(escape(body)));
+    // Rebuild: escape+linkify+mention the plain-text segments, keep cards raw.
+    const parts = withCards.split(/(<div class="chat-linkcard"[\s\S]*?<\/div><\/div>|<a href="[^"]*#chat[^"]*"[\s\S]*?<\/a>)/);
+    return parts.map(seg => {
+      if (seg.startsWith('<div class="chat-linkcard"') || (seg.startsWith('<a href="') && seg.includes('#chat'))) return seg;
+      return this._highlightMentions(this._linkify(escape(seg)));
+    }).join('');
+  },
+  _previewCardHTML(messageId, data) {
+    if (!data) {
+      return `<div class="chat-linkcard is-loading" data-view-msg="${escape(messageId)}"><div class="chat-linkcard-body"><span class="muted small">Loading message…</span></div></div>`;
+    }
+    return `<div class="chat-linkcard" data-view-msg="${escape(messageId)}">
+      <div class="chat-linkcard-body">
+        <div class="chat-linkcard-author">${escape(data.authorName)}${data.channelName ? ` <span class="muted small">in #${escape(data.channelName)}</span>` : ''}</div>
+        <div class="chat-linkcard-snippet">${escape(data.snippet)}</div>
+        <button type="button" class="chat-linkcard-view" data-view-msg="${escape(messageId)}">View message</button>
+      </div>
+    </div>`;
+  },
+  // Fetch the referenced message once, cache a compact preview, then re-render.
+  async _ensureLinkPreview(channelId, messageId) {
+    if (this._linkPreviews.has(messageId)) return;
+    this._linkPreviews.set(messageId, undefined);   // in-flight sentinel via has()
+    const msg = await ChatApi.getMessage(messageId);
+    if (!msg) { this._linkPreviews.set(messageId, 'missing'); this.renderMessages(); return; }
+    const ch = this.channels.find(c => c.id === (msg.channelId || channelId));
+    const snippet = (msg.body || (msg.attachments?.length ? '📎 Attachment' : '')).slice(0, 140);
+    this._linkPreviews.set(messageId, {
+      authorName: msg.authorName, channelId: msg.channelId,
+      channelName: ch ? ch.name : null, snippet,
+    });
+    this.renderMessages();
+    if (this.threadRootId) this.renderThread();
+  },
+
+  // ---- @mentions (#8) ----
+  // Match a typed name against a mentionable's display name. We match by the
+  // full name with spaces collapsed to allow "@Alex Rivera" or "@AlexRivera".
+  _parseMentions(text) {
+    const people = ChatApi.mentionables();
+    const ids = new Set();
+    // For each mentionable, see if "@<name>" (case-insensitive) appears.
+    for (const p of people) {
+      const name = p.name.trim();
+      if (!name) continue;
+      const re = new RegExp('@' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      if (re.test(text)) ids.add(p.userId);
+    }
+    return [...ids];
+  },
+  // Highlight @Name tokens in a rendered (already-escaped) body. Names that
+  // match a mentionable get a chip; if I'm the one mentioned it's emphasized.
+  _highlightMentions(escapedBody) {
+    const people = ChatApi.mentionables();
+    const me = AuthorNames.nameFor(Backend.user?.id);
+    const all = people.map(p => p.name).concat(me ? [me] : []);
+    let out = escapedBody;
+    for (const name of all) {
+      if (!name) continue;
+      const esc = escape(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const isMe = name === me;
+      out = out.replace(new RegExp('@' + esc, 'gi'),
+        (m) => `<span class="chat-mention${isMe ? ' is-me' : ''}">${m}</span>`);
+    }
+    return out;
+  },
+  // Composer @-autocomplete: on input, if the caret is in an "@frag" token,
+  // show a menu of matching admins; clicking inserts "@Name ".
+  _bindMentionAutocomplete(input, menu) {
+    on(input, 'input', () => this._updateMentionMenu(input, menu));
+    // #3: keyboard nav — arrows move the highlight, Tab/Enter pick the
+    // highlighted person, Esc dismisses. Handled in capture-ish order before
+    // the composer's own Enter-to-send so a mention pick doesn't send.
+    on(input, 'keydown', (e) => {
+      if (!this._mention || this._mention.input !== input) return;
+      const n = this._mention.matches.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); this._mention.sel = (this._mention.sel + 1) % n; this._paintMentionMenu(menu); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this._mention.sel = (this._mention.sel - 1 + n) % n; this._paintMentionMenu(menu); }
+      else if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        this._applyMention(input, menu, this._mention.matches[this._mention.sel].name);
+      } else if (e.key === 'Escape') { e.preventDefault(); this._closeMentionMenu(menu); }
+    });
+    on(menu, 'click', (e) => {
+      const item = e.target.closest('[data-mention-pick]');
+      if (item) this._applyMention(input, menu, item.dataset.mentionPick);
+    });
+  },
+  _updateMentionMenu(input, menu) {
+    const val = input.value;
+    const caret = input.selectionStart;
+    const upto = val.slice(0, caret);
+    const m = upto.match(/@([\p{L}\p{N}]*)$/u);
+    if (!m) { this._closeMentionMenu(menu); return; }
+    const frag = m[1].toLowerCase();
+    const matches = ChatApi.mentionables().filter(p => p.name.toLowerCase().includes(frag)).slice(0, 6);
+    if (!matches.length) { this._closeMentionMenu(menu); return; }
+    this._mention = { input, menu, start: caret - m[0].length, end: caret, matches, sel: 0 };
+    this._paintMentionMenu(menu);
+    menu.hidden = false;
+  },
+  _paintMentionMenu(menu) {
+    if (!this._mention) return;
+    const { matches, sel } = this._mention;
+    menu.innerHTML = matches.map((p, i) =>
+      `<button type="button" class="chat-mention-item${i === sel ? ' is-selected' : ''}" data-mention-pick="${escape(p.name)}">@${escape(p.name)}</button>`).join('');
+  },
+  _applyMention(input, menu, name) {
+    if (!this._mention) return;
+    const { start, end } = this._mention;
+    const val = input.value;
+    input.value = val.slice(0, start) + '@' + name + ' ' + val.slice(end);
+    const pos = start + name.length + 2;
+    input.setSelectionRange(pos, pos);
+    input.focus();
+    this._closeMentionMenu(menu);
+    this._autogrow(input);
+  },
+  _closeMentionMenu(menu) {
+    this._mention = null;
+    const el = menu || $('#chat-mention-menu');
+    if (el) { el.hidden = true; el.innerHTML = ''; }
+    // Also clear the thread menu if we don't know which one.
+    if (!menu) { const t = $('#chat-thread-mention-menu'); if (t) { t.hidden = true; t.innerHTML = ''; } }
+  },
+
+  // ---- Notification prefs / mute toggles (#6/#9) ----
+  _applyPrefsToToggles() {
+    const a = $('#chat-mute-all'), m = $('#chat-mute-mentions');
+    if (a) a.classList.toggle('is-on', !!this.prefs.muteAll);
+    if (m) m.classList.toggle('is-on', !!this.prefs.muteMentions);
+  },
+  async toggleMuteAll() {
+    this.prefs.muteAll = !this.prefs.muteAll;
+    this._applyPrefsToToggles();
+    await ChatApi.setPrefs({ muteAll: this.prefs.muteAll });
+    toast(this.prefs.muteAll ? 'Message sounds muted.' : 'Message sounds on.');
+  },
+  async toggleMuteMentions() {
+    this.prefs.muteMentions = !this.prefs.muteMentions;
+    this._applyPrefsToToggles();
+    await ChatApi.setPrefs({ muteMentions: this.prefs.muteMentions });
+    toast(this.prefs.muteMentions ? '@mention sounds muted.' : '@mention sounds on.');
+  },
+
+  // ---- My Profile sound picker (#10) ----
+  openSoundSettings() {
+    const modal = $('#chat-sound-modal');
+    if (!modal) return;
+    $('#chat-sound-message').value = this.prefs.messageSound || ChatSound.MESSAGE_NAMES[0];
+    $('#chat-sound-mention').value = this.prefs.mentionSound || ChatSound.MENTION_NAMES[0];
+    modal.setAttribute('aria-hidden', 'false');
+  },
+  async saveSoundSettings() {
+    const messageSound = $('#chat-sound-message').value;
+    const mentionSound = $('#chat-sound-mention').value;
+    this.prefs.messageSound = messageSound;
+    this.prefs.mentionSound = mentionSound;
+    await ChatApi.setPrefs({ messageSound, mentionSound });
+    $('#chat-sound-modal').setAttribute('aria-hidden', 'true');
+    toast('Sound settings saved.');
   },
 };
 

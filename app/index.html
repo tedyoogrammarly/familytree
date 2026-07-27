@@ -1718,9 +1718,19 @@
         <aside class="chat-sidebar" aria-label="Channels">
           <div class="chat-sidebar-head">
             <h2><span class="page-emoji" data-page-emoji="chat"></span>Chat</h2>
-            <button class="icon-btn" id="btn-chat-add-section" title="New section" aria-label="New section">
-              <svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            </button>
+            <div class="chat-sidebar-tools">
+              <!-- #6/#9: mute toggles + #10: sound settings -->
+              <button class="icon-btn chat-toggle" id="chat-mute-all" title="Mute all message sounds" aria-label="Mute message sounds">
+                <svg viewBox="0 0 16 16" width="15" height="15"><path d="M3 6h2l3-2.5v9L5 10H3z" fill="currentColor"/><path d="M10.5 6.5l3 3M13.5 6.5l-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              </button>
+              <button class="icon-btn chat-toggle" id="chat-mute-mentions" title="Mute @mention sounds" aria-label="Mute mention sounds">@</button>
+              <button class="icon-btn" id="btn-chat-sounds" title="Notification sounds" aria-label="Notification sounds">
+                <svg viewBox="0 0 16 16" width="15" height="15"><path d="M8 2a4 4 0 00-4 4v2.5L3 11h10l-1-2.5V6a4 4 0 00-4-4z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.5 13a1.5 1.5 0 003 0" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+              </button>
+              <button class="icon-btn" id="btn-chat-add-section" title="New section" aria-label="New section">
+                <svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              </button>
+            </div>
           </div>
           <nav class="chat-channels" id="chat-channels" aria-label="Channel list"></nav>
           <button class="chat-add-channel" id="btn-chat-add-channel">+ Add channel</button>
@@ -1751,6 +1761,7 @@
 
           <!-- Composer — mirrors the Memories post/comment interaction -->
           <form class="chat-composer" id="chat-composer">
+            <div class="chat-mention-menu" id="chat-mention-menu" hidden></div>
             <div class="chat-composer-attachments" id="chat-composer-attachments" hidden></div>
             <div class="chat-composer-row">
               <button type="button" class="icon-btn chat-attach-btn" id="btn-chat-attach" title="Attach files" aria-label="Attach files">
@@ -1774,6 +1785,7 @@
           </header>
           <div class="chat-thread-body" id="chat-thread-body"></div>
           <form class="chat-composer chat-thread-composer" id="chat-thread-composer">
+            <div class="chat-mention-menu" id="chat-thread-mention-menu" hidden></div>
             <div class="chat-composer-attachments" id="chat-thread-attachments" hidden></div>
             <div class="chat-composer-row">
               <button type="button" class="icon-btn chat-attach-btn" id="btn-chat-thread-attach" title="Attach files" aria-label="Attach files">
@@ -1853,6 +1865,48 @@
           <div class="modal-actions">
             <button type="button" class="btn btn-ghost" data-close>Cancel</button>
             <button type="submit" class="btn btn-primary">Create section</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===== CHAT: NOTIFICATION SOUNDS MODAL (My Profile #10) ===== -->
+    <div id="chat-sound-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel modal-sm" role="dialog" aria-modal="true">
+        <header class="modal-head">
+          <h3>Notification sounds</h3>
+          <button class="icon-btn" data-close aria-label="Close">
+            <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <form id="chat-sound-form" class="modal-body">
+          <label class="field">
+            <span>New message sound</span>
+            <div class="chat-sound-row">
+              <select id="chat-sound-message">
+                <option value="ping">Ping</option>
+                <option value="knock">Knock</option>
+                <option value="bloop">Bloop</option>
+                <option value="chime">Chime</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" id="chat-sound-preview-message">▶ Preview</button>
+            </div>
+          </label>
+          <label class="field">
+            <span>@mention sound</span>
+            <div class="chat-sound-row">
+              <select id="chat-sound-mention">
+                <option value="sparkle">Sparkle</option>
+                <option value="doubletap">Double tap</option>
+                <option value="rise">Rise</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" id="chat-sound-preview-mention">▶ Preview</button>
+            </div>
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+            <button type="submit" class="btn btn-primary">Save sounds</button>
           </div>
         </form>
       </div>
