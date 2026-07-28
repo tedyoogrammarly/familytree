@@ -357,6 +357,11 @@
             <label class="field"><span>Location</span><input name="location" autocomplete="off" /></label>
           </div>
           <label class="field"><span>Notes</span><textarea name="description" rows="2"></textarea></label>
+          <label class="appt-toggle">
+            <input type="checkbox" name="addToEvents" id="appt-add-to-events" />
+            <span>Also add to the <strong>Events</strong> page</span>
+          </label>
+          <p class="muted small appt-toggle-hint">Off = shows on the Calendar only. On = also appears as an event under Events (with attendance, expenses, etc.).</p>
           <p class="form-error" id="appt-error" role="alert"></p>
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit">Save appointment</button>

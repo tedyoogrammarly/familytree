@@ -2952,6 +2952,21 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   z-index: 100;
 }
 .toast.is-show { opacity: 1; transform: translate(-50%, 0); }
+/* Toast with an action button (Undo). (v4.88) */
+.toast { display: flex; align-items: center; gap: 14px; }
+.toast-action {
+  background: none; border: none; padding: 2px 4px; margin: 0;
+  color: var(--accent-300); font: 600 14px var(--font-sans); cursor: pointer;
+  pointer-events: auto; text-decoration: underline; white-space: nowrap;
+}
+.toast-action:hover { color: #fff; }
+/* Appointment "add to Events" toggle (v4.88) */
+.appt-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-800, #2a2a2a); cursor: pointer; margin-top: 2px; }
+.appt-toggle input { width: 16px; height: 16px; }
+.appt-toggle-hint { margin: 2px 0 0; line-height: 1.4; }
+/* Deleted-events restore rows (v4.88) */
+.gcal-deleted-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gcal-deleted-row .gcal-cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Severity styling so a failed save no longer looks like a success.
    Dark warm/maroon grounds keep the toast aesthetic; the inset bar + glyph
    carry the meaning. Driven by toast(msg, 'warn' | 'error'). */

@@ -6871,8 +6871,10 @@ const EventsView = {
     });
   },
   render() {
-    // Users only see events they're part of.
-    const events = userEventsList().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // Users only see events they're part of. Calendar-only appointments
+    // (calendarOnly) are excluded from the Events page — they live on the
+    // Calendar only. (v4.88)
+    const events = userEventsList().filter(e => !e.calendarOnly).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const list = $('#event-list');
 
     refreshEventsNav();
@@ -7306,10 +7308,22 @@ const EventsView = {
       on($('#event-edit'),   'click', () => this.openModal(ev.id));
       on($('#event-delete'), 'click', () => {
         if (!confirm(`Delete event "${ev.name}"?`)) return;
+        // Snapshot the removed event (and its position) so it can be undone. (v4.88)
+        const idx = Store.state.events.findIndex(x => x.id === ev.id);
+        const removed = Store.state.events[idx];
         Store.state.events = Store.state.events.filter(x => x.id !== ev.id);
         Store.save();
         this.selectedId = null;
         this.render();
+        if (typeof CalendarUndo !== 'undefined' && removed) {
+          CalendarUndo.push(`Deleted event "${ev.name}"`, () => {
+            Store.state.events ||= [];
+            Store.state.events.splice(Math.max(0, idx), 0, removed);
+            Store.save();
+            this.render();
+            if (typeof CalendarView !== 'undefined') CalendarView.render();
+          });
+        }
       });
 
       // Detail-view segmented toggle (Attendees / Expenses)
@@ -8119,6 +8133,59 @@ const GoogleCalendar = {
     const o = map[seriesId];
     if (o && !o.title && !o.hidden && !o.color) delete map[seriesId];
   },
+  // Capture a series' current override so a change can be reverted exactly.
+  // Returns a restore() that puts the override back to how it was (including
+  // "was absent"). Used by the undo stack. (v4.88)
+  snapshotSeries(seriesId) {
+    const map = this.overridesMap();
+    const prev = map[seriesId] ? { ...map[seriesId] } : null;
+    return () => {
+      const m = this.overridesMap();
+      if (prev) m[seriesId] = { ...prev }; else delete m[seriesId];
+      Store.state.googleCalendar = this.config();
+      Store.save();
+      this.eventCache.clear();
+    };
+  },
+  // List every series that currently has a `hidden` override — i.e. the events
+  // the user has "deleted". Used by the Deleted-events restore list. (v4.88)
+  hiddenSeriesIds() {
+    const map = this.overridesMap();
+    return Object.keys(map).filter(k => map[k] && map[k].hidden);
+  },
+  // Resolve display info { summary, startTime } for a set of series ids by
+  // scanning raw (pre-override) events across a wide window (this month ±3),
+  // enough to catch weekly/biweekly/monthly recurrences. Used to label deleted
+  // events in the restore list. (v4.88)
+  async seriesNames(ids) {
+    const want = new Set(ids);
+    const found = {};
+    const cfg = this.config();
+    const enabled = (cfg.calendars || []).filter(c => c.enabled);
+    if (!enabled.length) return found;
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth();
+    // Scan a spread of months so recurring series (even monthly) get caught.
+    const months = [-3, -1, 0, 1, 2, 4].map(off => [y, m + off]);
+    for (const [yy, mm] of months) {
+      if (!want.size) break;
+      const timeMin = new Date(yy, mm - 1, 1).toISOString();
+      const timeMax = new Date(yy, mm + 2, 1).toISOString();
+      for (const cal of enabled) {
+        let items;
+        try { items = await this.fetchOneCalendar(cal.id, timeMin, timeMax); } catch { items = null; }
+        if (!items) continue;
+        for (const ev of items) {
+          const norm = this.normalizeEvent(ev, cal); // has seriesId, but ignore overrides
+          if (want.has(norm.seriesId) && !found[norm.seriesId]) {
+            found[norm.seriesId] = { summary: norm.summary, startTime: norm.startTime, date: norm.date };
+            want.delete(norm.seriesId);
+          }
+        }
+      }
+    }
+    return found;
+  },
   renameSeries(seriesId, title) {
     if (!seriesId) return;
     const map = this.overridesMap();
@@ -8315,6 +8382,18 @@ const CalendarView = {
     // Static weekday header
     const wkLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     $('#cal-weekdays').innerHTML = wkLabels.map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    // Cmd/Ctrl+Z undoes the last calendar change while the Calendar is open and
+    // you're not typing in a field. (v4.88)
+    on(document, 'keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        if (Views.current !== 'calendar') return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (!CalendarUndo.canUndo()) return;
+        e.preventDefault();
+        CalendarUndo.undo();
+      }
+    });
   },
   startOfWeek(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - x.getDay()); return x; },
   setMode(mode) {
@@ -8727,6 +8806,7 @@ const CalendarView = {
 
   // Renders Google events on whichever view is active (month chips or week
   // time-grid blocks). Replaces the old month-only renderGoogleEvents(). (v4.72)
+  _gToken: 0,
   async renderGoogleEventsUnified() {
     // Google Calendar integration is admin-only. Family / User never see
     // pulled Google events on the grid.
@@ -8735,11 +8815,18 @@ const CalendarView = {
     // Runs with an API key or the keyless .ics path — only needs calendars + showEvents.
     if (!cfg.calendars?.length || !cfg.showEvents) return;
 
+    // Monotonic token: every call bumps it and captures its own value. After the
+    // async fetch we bail if a newer call has since started — this prevents a
+    // stale, still-in-flight render (e.g. from before a hide/rename cleared the
+    // cache) from resolving and repainting old data over the fresh render. The
+    // old key-by-date guard couldn't catch this because two renders of the SAME
+    // view shared a key. Combined with re-seeding the week store from the
+    // authoritative fetch below. (v4.88)
+    const token = ++this._gToken;
+
     if (this.mode === 'week') {
       const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(this.weekStart); d.setDate(d.getDate() + i); return d; });
       const weekIsos = new Set(days.map(toIsoDate));
-      const renderKey = `week-${toIsoDate(this.weekStart)}`;
-      this._renderKey = renderKey;
       // fetch covers the month(s) spanning this week
       const months = new Set(days.map(d => `${d.getFullYear()}-${d.getMonth()}`));
       let all = [];
@@ -8747,7 +8834,7 @@ const CalendarView = {
         const [y, m] = key.split('-').map(Number);
         try { all = all.concat(await GoogleCalendar.fetchEventsForMonth(y, m)); } catch {}
       }
-      if (this._renderKey !== renderKey) return; // user navigated away
+      if (this._gToken !== token) return; // superseded by a newer render
       // v4.84 FIX (week duplicates): a boundary week spans two months, and each
       // month's fetch buffers ±1 month — so an event in the overlap is returned
       // by BOTH fetches and concatenated twice. Dedupe by id+date+startTime
@@ -8792,15 +8879,13 @@ const CalendarView = {
     }
 
     // MONTH branch: existing chip-append code (with the Task-4 filter guard).
-    const renderKey = `${this.year}-${this.month}`;
-    this._renderKey = renderKey;
     let events;
     try {
       events = await GoogleCalendar.fetchEventsForMonth(this.year, this.month);
     } catch {
       return;
     }
-    if (this._renderKey !== renderKey) return; // user navigated away
+    if (this._gToken !== token) return; // superseded by a newer render
     // Idempotent: clear any Google chips a prior (possibly still-in-flight)
     // render appended, so re-renders never stack duplicates. (v4.83 FIX)
     document.querySelectorAll('#cal-grid .cal-chip-google').forEach(c => c.remove());
@@ -8889,7 +8974,13 @@ const CalendarView = {
     const close = () => { menu.remove(); document.removeEventListener('mousedown', onDoc, true); };
     const onDoc = (e) => { if (!menu.contains(e.target) && e.target !== anchor) close(); };
     setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
-    const doRename = () => { GoogleCalendar.renameSeries(ev.seriesId, input.value); close(); GoogleCalendar.eventCache.clear(); this.render(); };
+    const doRename = () => {
+      const newName = input.value.trim();
+      if (newName === (ev.summary || '')) { close(); return; } // no change
+      const restore = GoogleCalendar.snapshotSeries(ev.seriesId);
+      GoogleCalendar.renameSeries(ev.seriesId, input.value); close(); GoogleCalendar.eventCache.clear(); this.render();
+      CalendarUndo.push(`Renamed to "${newName}"`, () => { restore(); this.render(); });
+    };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doRename(); } if (e.key === 'Escape') close(); });
     menu.addEventListener('click', (e) => {
       // Color swatch: apply instantly, re-render the grid, keep the popover open
@@ -8897,17 +8988,27 @@ const CalendarView = {
       const sw = e.target.closest('.gcal-swatch');
       if (sw) {
         const key = sw.dataset.color || '';
+        const restore = GoogleCalendar.snapshotSeries(ev.seriesId);
         GoogleCalendar.setColorSeries(ev.seriesId, key);
         menu.querySelectorAll('.gcal-swatch').forEach(s => s.classList.toggle('is-active', (s.dataset.color || '') === key));
         GoogleCalendar.eventCache.clear();
         this.render();
+        CalendarUndo.push(key ? `Colored "${ev.summary}"` : `Reset color of "${ev.summary}"`, () => { restore(); this.render(); });
         return;
       }
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'rename') doRename();
-      else if (act === 'hide') { GoogleCalendar.hideSeries(ev.seriesId); close(); GoogleCalendar.eventCache.clear(); this.render(); toast('Event hidden'); }
-      else if (act === 'reset') { GoogleCalendar.resetSeries(ev.seriesId); close(); GoogleCalendar.eventCache.clear(); this.render(); toast('Restored'); }
+      else if (act === 'hide') {
+        const restore = GoogleCalendar.snapshotSeries(ev.seriesId);
+        GoogleCalendar.hideSeries(ev.seriesId); close(); GoogleCalendar.eventCache.clear(); this.render();
+        CalendarUndo.push(`Deleted "${ev.summary}"`, () => { restore(); this.render(); });
+      }
+      else if (act === 'reset') {
+        const restore = GoogleCalendar.snapshotSeries(ev.seriesId);
+        GoogleCalendar.resetSeries(ev.seriesId); close(); GoogleCalendar.eventCache.clear(); this.render();
+        CalendarUndo.push(`Reset "${ev.summary}"`, () => { restore(); this.render(); });
+      }
       else if (act === 'open') { if (ev.htmlLink) window.open(ev.htmlLink, '_blank', 'noopener'); close(); }
     });
   },
@@ -8998,6 +9099,11 @@ const CalendarView = {
           `).join('')}
         </div>
       </div>
+      <div class="field" id="gcal-deleted-wrap" hidden>
+        <span>Deleted events</span>
+        <p class="muted small" style="margin:2px 0 6px;">Events you've deleted are hidden from the calendar (your Google Calendar is unchanged). Restore any of them here.</p>
+        <div class="gcal-list" id="gcal-deleted-list"></div>
+      </div>
       <label class="field">
         <span>Add another calendar</span>
         <input id="gcal-link" placeholder="https://calendar.google.com/calendar/u/0?cid=…" autocomplete="off" />
@@ -9052,6 +9158,41 @@ const CalendarView = {
       this.refreshGoogleIndicator();
       this.render();
     });
+    // Populate the "Deleted events" restore list (async — needs event names). (v4.88)
+    this._populateDeletedList();
+  },
+
+  // Fill the Deleted-events section with the currently-hidden series, resolving
+  // each series' name from a raw (pre-override) fetch across a wide window.
+  // (v4.88)
+  async _populateDeletedList() {
+    const wrap = $('#gcal-deleted-wrap'); const list = $('#gcal-deleted-list');
+    if (!wrap || !list) return;
+    const hidden = GoogleCalendar.hiddenSeriesIds();
+    if (!hidden.length) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    list.innerHTML = `<p class="muted small">Loading…</p>`;
+    // Resolve names by scanning a few months of raw events (ignoring overrides).
+    const names = await GoogleCalendar.seriesNames(hidden);
+    list.innerHTML = hidden.map(sid => {
+      const info = names[sid] || {};
+      const label = info.summary || 'Deleted event';
+      const when = info.startTime ? ` · ${this.fmtTime12(info.startTime)}` : '';
+      return `<div class="gcal-cal-row gcal-deleted-row">
+        <span class="gcal-cal-name">${escape(label)}${escape(when)}</span>
+        <button type="button" class="btn btn-secondary btn-sm" data-restore-sid="${escape(sid)}">Restore</button>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('[data-restore-sid]').forEach(b => on(b, 'click', () => {
+      const sid = b.dataset.restoreSid;
+      const restore = GoogleCalendar.snapshotSeries(sid);
+      GoogleCalendar.resetSeries(sid);
+      GoogleCalendar.eventCache.clear();
+      this.render();
+      this._populateDeletedList();
+      CalendarUndo.push('Restored a deleted event', () => { restore(); this.render(); this._populateDeletedList(); });
+      toast('Event restored.');
+    }));
   },
 
   // Shared "Add calendar" handler for the empty + configured modal states.
@@ -9100,24 +9241,39 @@ const AppointmentModal = {
     const date = (fd.get('date') || '').toString();
     const startTime = (fd.get('startTime') || '').toString();
     if (!name || !date || !startTime) { $('#appt-error').textContent = 'Title, date, and start time are required.'; return; }
+    // "Also add to the Events page" unchecked → calendar-only appointment. (v4.88)
+    const addToEvents = !!fd.get('addToEvents');
     this.saveFrom({ name, date, startTime,
       endTime: (fd.get('endTime') || '').toString(),
       location: (fd.get('location') || '').toString().trim(),
-      description: (fd.get('description') || '').toString().trim() });
+      description: (fd.get('description') || '').toString().trim(),
+      calendarOnly: !addToEvents });
     this.close();
-    toast('Appointment added.');
+    // saveFrom shows an Undo toast; don't stomp it with a plain toast.
   },
   // Pure persistence path (also called by the harness). (v4.72)
+  // v4.88: `calendarOnly` marks an appointment that shows on the Calendar but is
+  // hidden from the Events page (see userEventsList / EventsView).
   saveFrom(data) {
     Store.state.events ||= [];
+    const newId = uid('evt');
     Store.state.events.unshift({
-      id: uid('evt'), name: data.name, date: data.date,
+      id: newId, name: data.name, date: data.date,
       startTime: data.startTime, endTime: data.endTime || '',
       location: data.location || '', description: data.description || '',
       category: 'personal', icon: '📌', attendees: [],
+      calendarOnly: !!data.calendarOnly,
     });
     Store.save();
     if (typeof CalendarView !== 'undefined') CalendarView.render();
+    if (typeof CalendarUndo !== 'undefined') {
+      CalendarUndo.push(`Added "${data.name}"`, () => {
+        Store.state.events = (Store.state.events || []).filter(e => e.id !== newId);
+        Store.save();
+        if (typeof CalendarView !== 'undefined') CalendarView.render();
+        if (typeof EventsView !== 'undefined' && Views.current === 'events') EventsView.render();
+      });
+    }
   },
 };
 
@@ -10890,6 +11046,58 @@ function toast(msg, kind = 'ok') {
   toastTimer = setTimeout(() => t.classList.remove('is-show'), kind === 'ok' ? 2400 : 4200);
 }
 
+// Toast variant with an action button (e.g. "Undo"). Clicking the action runs
+// `fn` and dismisses. Stays up longer than a plain toast so there's time to
+// react. (v4.88)
+function toastAction(msg, actionLabel, fn) {
+  const t = $('#toast');
+  t.classList.remove('is-warn', 'is-error');
+  t.setAttribute('aria-live', 'polite');
+  t.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toast-action';
+  btn.textContent = actionLabel;
+  btn.addEventListener('click', () => {
+    clearTimeout(toastTimer);
+    t.classList.remove('is-show');
+    try { fn(); } catch (e) { console.error(e); }
+    // Restore textContent behavior for later plain toasts.
+    setTimeout(() => { t.innerHTML = ''; }, 260);
+  });
+  t.append(span, btn);
+  t.classList.add('is-show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.classList.remove('is-show'); setTimeout(() => { t.innerHTML = ''; }, 260); }, 6000);
+}
+
+// -------------------- CALENDAR UNDO --------------------
+// A small snapshot-based undo stack for calendar mutations (Google event
+// rename/delete/recolor AND appointment/event add/delete). Each entry captures
+// a restore function that puts the affected state back. We keep a short history
+// so Cmd/Ctrl+Z works even after the toast is gone. (v4.88)
+const CalendarUndo = {
+  _stack: [],
+  MAX: 25,
+  // Record an undoable action. `restore` must fully revert it. `label` is shown
+  // in the toast. Immediately shows an "Undo" toast.
+  push(label, restore) {
+    this._stack.push({ label, restore });
+    if (this._stack.length > this.MAX) this._stack.shift();
+    toastAction(label, 'Undo', () => this.undo());
+  },
+  canUndo() { return this._stack.length > 0; },
+  undo() {
+    const entry = this._stack.pop();
+    if (!entry) { toast('Nothing to undo'); return; }
+    try { entry.restore(); toast(`Undone: ${entry.label}`); }
+    catch (e) { console.error(e); toast('Could not undo', 'error'); }
+  },
+  clear() { this._stack = []; },
+};
+
 // -------------------- USER EVENT VISIBILITY --------------------
 // Returns the events the currently-logged-in user is an attendee of.
 // Admins see everything; users see only events containing them.
@@ -11756,7 +11964,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.87';
+const APP_VERSION = '4.88';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
