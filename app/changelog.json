@@ -1,5 +1,14 @@
 [
   {
+    "version": "4.86",
+    "date": "2026-07-28",
+    "title": "Calendar — recolor an event + taller Week blocks",
+    "changes": [
+      "Click an event and pick a color — Red, Yellow, or Gray — to make a specific event (like your recurring Lunch) stand out. The color applies to the whole series in both Month and Week views, and 'Default' or 'Reset to original' puts it back. Like renaming, it's local to the Family Archive and never changes your Google Calendar.",
+      "Fixed: short (30-minute) events in the Week view no longer clip their name — event blocks are now tall enough to show both the time and the full title."
+    ]
+  },
+  {
     "version": "4.85",
     "date": "2026-07-28",
     "title": "Calendar polish — event order, durations, Week duplicates, Work color",

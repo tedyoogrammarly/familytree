@@ -8099,14 +8099,25 @@ const GoogleCalendar = {
     const cfg = this.config();
     return cfg.overrides || (cfg.overrides = {});
   },
+  // Named color choices for the per-event override (v4.85). Keys are stored in
+  // the override; values are the actual chip/block colors.
+  EVENT_COLORS: { red: 'hsl(4 68% 52%)', yellow: 'hsl(42 88% 50%)', gray: 'hsl(220 8% 52%)' },
   // Apply any override to a normalized event. Returns the event, or null if it
-  // should be hidden. (v4.83)
+  // should be hidden. Sets `summary` (rename) and `color` (recolor). (v4.83/4.85)
   applyOverride(ev) {
     const o = this.overridesMap()[ev.seriesId];
     if (!o) return ev;
     if (o.hidden) return null;
-    if (o.title) return { ...ev, summary: o.title, _renamed: true };
-    return ev;
+    let out = ev;
+    if (o.title) out = { ...out, summary: o.title, _renamed: true };
+    if (o.color && this.EVENT_COLORS[o.color]) out = { ...out, color: this.EVENT_COLORS[o.color], colorKey: o.color };
+    return out;
+  },
+  // Remove an override entry if it no longer carries any change. (v4.85)
+  _pruneOverride(seriesId) {
+    const map = this.overridesMap();
+    const o = map[seriesId];
+    if (o && !o.title && !o.hidden && !o.color) delete map[seriesId];
   },
   renameSeries(seriesId, title) {
     if (!seriesId) return;
@@ -8114,7 +8125,17 @@ const GoogleCalendar = {
     const t = String(title || '').trim();
     if (!t) { if (map[seriesId]) delete map[seriesId].title; }
     else { (map[seriesId] || (map[seriesId] = {})).title = t; }
-    if (map[seriesId] && !map[seriesId].title && !map[seriesId].hidden) delete map[seriesId];
+    this._pruneOverride(seriesId);
+    Store.state.googleCalendar = this.config();
+    Store.save();
+  },
+  // Set (or clear, with a falsy key) the color of a series. (v4.85)
+  setColorSeries(seriesId, colorKey) {
+    if (!seriesId) return;
+    const map = this.overridesMap();
+    if (colorKey && this.EVENT_COLORS[colorKey]) { (map[seriesId] || (map[seriesId] = {})).color = colorKey; }
+    else if (map[seriesId]) { delete map[seriesId].color; }
+    this._pruneOverride(seriesId);
     Store.state.googleCalendar = this.config();
     Store.save();
   },
@@ -8138,7 +8159,7 @@ const GoogleCalendar = {
 };
 
 // -------------------- CALENDAR VIEW --------------------
-const WEEK_START_HOUR = 0, WEEK_END_HOUR = 24, HOUR_PX = 48;
+const WEEK_START_HOUR = 0, WEEK_END_HOUR = 24, HOUR_PX = 56;
 const CalendarView = {
   year: null,
   month: null, // 0..11
@@ -8606,12 +8627,19 @@ const CalendarView = {
     this.layoutDayColumns(items);
     items.forEach(it => {
       const top = ((it.startMin - WEEK_START_HOUR * 60) / 60) * HOUR_PX;
-      const height = Math.max(16, ((it.endMin - it.startMin) / 60) * HOUR_PX - 2);
+      // Floor at 38px so short (e.g. 30-min) events still fit the time + title
+      // lines without clipping. Short blocks extend slightly past their slot,
+      // same as Google Calendar. (v4.85)
+      const height = Math.max(38, ((it.endMin - it.startMin) / 60) * HOUR_PX - 2);
       const widthPct = 100 / it._ncols;
       const el = document.createElement('button');
       el.type = 'button';
       el.className = `cal-wk-event cal-wk-${it.group}`;
-      el.style.cssText = `top:${top}px;height:${height}px;left:${it._col * widthPct}%;width:calc(${widthPct}% - 3px);`;
+      let bg = '';
+      // Per-event color override (v4.85): a recolored Google event paints its own
+      // background instead of the group color.
+      if (it.kind === 'google' && it.gEvent?.colorKey) bg = `background:${it.gEvent.color};`;
+      el.style.cssText = `top:${top}px;height:${height}px;left:${it._col * widthPct}%;width:calc(${widthPct}% - 3px);${bg}`;
       el.innerHTML = `<span class="cal-wk-ev-time">${this.minToLabel(it.startMin)}</span><span class="cal-wk-ev-title">${escape(it.label)}</span>`;
       if (it.kind === 'event' && it.id) on(el, 'click', () => EventsView.openModal(it.id));
       if (it.kind === 'google') on(el, 'click', (e) => { e.stopPropagation(); this.openGoogleEventMenu(it.gEvent || { summary: it.label, seriesId: '', htmlLink: it.htmlLink, calendarName: '', category: it.group }, el); });
@@ -8782,6 +8810,9 @@ const CalendarView = {
       chip.dataset.googleId = ev.id;
       chip.dataset.seriesId = ev.seriesId || '';
       chip.style.setProperty('--gcal-color', ev.color);
+      // If the user recolored this series, tint the whole chip (bg + text) to
+      // match — not just the left bar — so it stands out. (v4.85)
+      if (ev.colorKey) { chip.classList.add('is-recolored'); chip.style.setProperty('--gcal-tint', ev.color); }
       const timeStr = (!ev.allDay && ev.startTime) ? this.fmtTime12(ev.startTime) : '';
       chip.title = `${timeStr ? timeStr + ' · ' : ''}${ev.summary} (${ev.calendarName}) — click to edit`;
       chip.innerHTML = `<span class="cal-chip-icon cal-chip-gicon" aria-hidden="true">
@@ -8809,15 +8840,25 @@ const CalendarView = {
     menu.id = 'gcal-event-menu';
     menu.className = 'gcal-event-menu';
     const whenLine = this.eventWhenLine(ev);
+    const curColor = o.color || '';
+    const swatch = (key, css, label) =>
+      `<button type="button" class="gcal-swatch${curColor === key ? ' is-active' : ''}" data-color="${key}" title="${label}" aria-label="${label}"${css ? ` style="background:${css}"` : ''}>${key === '' ? '<span class="gcal-swatch-x">×</span>' : ''}</button>`;
     menu.innerHTML = `
       <div class="gcal-menu-title">${escape(ev.summary)}</div>
       ${whenLine ? `<div class="gcal-menu-when">🕐 ${escape(whenLine)}</div>` : ''}
       <input type="text" class="gcal-menu-input" value="${escape(ev.summary)}" aria-label="Event name" />
+      <div class="gcal-menu-swatches" role="group" aria-label="Event color">
+        <span class="gcal-swatch-label">Color</span>
+        ${swatch('', '', 'Default')}
+        ${swatch('red', this.EVENT_COLORS.red, 'Red')}
+        ${swatch('yellow', this.EVENT_COLORS.yellow, 'Yellow')}
+        ${swatch('gray', this.EVENT_COLORS.gray, 'Gray')}
+      </div>
       <div class="gcal-menu-actions">
         <button type="button" class="btn small" data-act="rename">Save name</button>
         <button type="button" class="btn small btn-danger" data-act="hide">Delete</button>
       </div>
-      ${o.title || o.hidden ? `<button type="button" class="gcal-menu-reset" data-act="reset">Reset to original</button>` : ''}
+      ${o.title || o.hidden || o.color ? `<button type="button" class="gcal-menu-reset" data-act="reset">Reset to original</button>` : ''}
       ${ev.htmlLink ? `<button type="button" class="gcal-menu-open" data-act="open">Open in Google Calendar ↗</button>` : ''}
       <p class="gcal-menu-note muted">Changes apply to every day this event repeats, and only here — your Google Calendar isn't changed.</p>
     `;
@@ -8834,6 +8875,17 @@ const CalendarView = {
     const doRename = () => { GoogleCalendar.renameSeries(ev.seriesId, input.value); close(); GoogleCalendar.eventCache.clear(); this.render(); };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doRename(); } if (e.key === 'Escape') close(); });
     menu.addEventListener('click', (e) => {
+      // Color swatch: apply instantly, re-render the grid, keep the popover open
+      // so the user can try colors. (v4.85)
+      const sw = e.target.closest('.gcal-swatch');
+      if (sw) {
+        const key = sw.dataset.color || '';
+        GoogleCalendar.setColorSeries(ev.seriesId, key);
+        menu.querySelectorAll('.gcal-swatch').forEach(s => s.classList.toggle('is-active', (s.dataset.color || '') === key));
+        GoogleCalendar.eventCache.clear();
+        this.render();
+        return;
+      }
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'rename') doRename();
@@ -11687,7 +11739,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.85';
+const APP_VERSION = '4.86';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
