@@ -1982,6 +1982,10 @@
             <label class="field"><span>Date</span><input name="date" type="date" /></label>
             <label class="field"><span>Location</span><input name="location" /></label>
           </div>
+          <div class="grid-2">
+            <label class="field"><span>Start time <span class="muted small">(optional)</span></span><input name="startTime" type="time" /></label>
+            <label class="field"><span>End time <span class="muted small">(optional)</span></span><input name="endTime" type="time" /></label>
+          </div>
 
           <label class="checkbox-row">
             <input type="checkbox" name="isTrip" id="event-is-trip" />
@@ -2029,6 +2033,7 @@
           <div class="modal-actions">
             <button class="btn btn-primary" type="submit">Save event</button>
             <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+            <button class="btn btn-danger-ghost" type="button" id="event-modal-delete" hidden style="margin-left:auto;">Delete</button>
           </div>
         </form>
       </div>

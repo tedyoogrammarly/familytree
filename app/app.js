@@ -6840,6 +6840,31 @@ const EventsView = {
     on($('#event-add-itin'), 'click', () => this._addItineraryRow());
     on($('#event-modal'), 'click', (e) => { if (e.target.closest('[data-close]')) this.closeModal(); });
     on($('#event-form'), 'submit', (e) => { e.preventDefault(); this.saveModal(); });
+    // Delete from within the edit modal — the only way to remove a
+    // calendar-only appointment (it never appears on the Events page). (v4.89)
+    on($('#event-modal-delete'), 'click', () => {
+      const editId = $('#event-form').dataset.editId;
+      if (!editId) return;
+      const idx = Store.state.events.findIndex(e => e.id === editId);
+      if (idx < 0) return;
+      const ev = Store.state.events[idx];
+      if (!confirm(`Delete "${ev.name || 'this event'}"?`)) return;
+      Store.state.events.splice(idx, 1);
+      Store.save();
+      if (this.selectedId === editId) this.selectedId = null;
+      this.closeModal();
+      this.render();
+      if (typeof CalendarView !== 'undefined') CalendarView.render();
+      if (typeof CalendarUndo !== 'undefined') {
+        CalendarUndo.push(`Deleted "${ev.name || 'event'}"`, () => {
+          Store.state.events ||= [];
+          Store.state.events.splice(Math.max(0, idx), 0, ev);
+          Store.save();
+          this.render();
+          if (typeof CalendarView !== 'undefined') CalendarView.render();
+        });
+      }
+    });
 
     // full emoji picker — opens on Browse button click
     on($('#event-icon-browse'), 'click', (e) => {
@@ -7546,11 +7571,16 @@ const EventsView = {
     f.dataset.cover = '';
     $('#event-cover-preview').style.backgroundImage = '';
     $('#event-itin-rows').innerHTML = '';
+    // Delete button only makes sense when editing an existing event. (v4.89)
+    const delBtn = $('#event-modal-delete');
+    if (delBtn) delBtn.hidden = !editId || !Auth.isAdmin();
     if (editId) {
       const ev = Store.state.events.find(e => e.id === editId);
       $('#event-modal-title').textContent = 'Edit event';
       f.name.value = ev.name || '';
       f.date.value = ev.date || '';
+      if (f.startTime) f.startTime.value = ev.startTime || '';
+      if (f.endTime)   f.endTime.value   = ev.endTime || '';
       f.location.value = ev.location || '';
       f.description.value = ev.description || '';
       $('#event-icon').value = ev.icon || '';
@@ -7612,6 +7642,8 @@ const EventsView = {
     const data = {
       name,
       date: (fd.get('date') || '').toString(),
+      startTime: (fd.get('startTime') || '').toString(),
+      endTime: (fd.get('endTime') || '').toString(),
       location: (fd.get('location') || '').toString().trim(),
       description: (fd.get('description') || '').toString().trim(),
       icon: ((fd.get('icon') || '').toString().trim() || ''),
@@ -8678,11 +8710,12 @@ const CalendarView = {
     source.forEach(ev => {
       if (!ev.date || !weekIsos.has(ev.date)) return;
       if (!this.filterOn(this.groupOf('event', ev.category))) return;
+      const label = this._eventLabel(ev);
       const startMin = this.timeToMin(ev.startTime);
-      if (startMin == null) { this.addAllDayChip(ev.date, ev.name || '(event)', this.groupOf('event', ev.category)); return; }
+      if (startMin == null) { this.addAllDayChip(ev.date, label, this.groupOf('event', ev.category)); return; }
       let endMin = this.timeToMin(ev.endTime);
       if (endMin == null || endMin <= startMin) endMin = startMin + 30;
-      timedByDay.get(ev.date).push({ startMin, endMin, label: ev.name || '(event)', group: this.groupOf('event', ev.category), kind: 'event', id: ev.id });
+      timedByDay.get(ev.date).push({ startMin, endMin, label, group: this.groupOf('event', ev.category), kind: 'event', id: ev.id });
     });
 
     // Birthdays / anniversaries / holidays → all-day row under Family filter.
@@ -8742,6 +8775,12 @@ const CalendarView = {
     });
   },
   minToLabel(min) { const h = Math.floor(min/60), m = min%60; const am = h<12; const hr=(h%12)||12; return `${hr}${m?':'+String(m).padStart(2,'0'):''} ${am?'am':'pm'}`; },
+  // Event display label with its emoji prepended (if any). Used on the week and
+  // month grids so a chosen icon actually shows next to the name. (v4.89)
+  _eventLabel(ev) {
+    const name = ev.name || '(event)';
+    return ev.icon ? `${ev.icon} ${name}` : name;
+  },
   addAllDayChip(iso, label, group) {
     const cell = $(`#cal-week .cal-wk-allcell[data-date="${iso}"]`);
     if (!cell) return;
@@ -11964,7 +12003,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.88';
+const APP_VERSION = '4.89';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {

@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.89",
+    "date": "2026-07-28",
+    "title": "Calendar events — edit time, show the emoji, and delete from the edit view",
+    "changes": [
+      "You can now set and edit an event's start and end time in the event editor (previously you could only set the date).",
+      "The emoji you pick for an event now shows next to its name in the Week view too (Month already showed it).",
+      "Added a Delete button in the event editor, so a calendar-only appointment (one that isn't on the Events page) can be removed. Deletes are undoable."
+    ]
+  },
+  {
     "version": "4.88",
     "date": "2026-07-28",
     "title": "Calendar — Undo, restore deleted events, and calendar-only appointments",
