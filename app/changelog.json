@@ -1,5 +1,15 @@
 [
   {
+    "version": "4.83",
+    "date": "2026-07-27",
+    "title": "Calendar — no more duplicate events, edit/hide events, times in Month view",
+    "changes": [
+      "Fixed: Google Calendar events no longer show up twice on the grid.",
+      "You can now rename or delete a Google event — click it and choose 'Save name' or 'Delete'. Renaming a recurring event (like a daily 'Busy') applies to every day it repeats, so you can turn all your noon 'Busy' blocks into 'Lunch' in one go. 'Reset to original' undoes it. These edits are local to the Family Archive — your actual Google Calendar is never changed.",
+      "Month view now shows the start time next to each timed event (e.g. '12pm Lunch') instead of just the title."
+    ]
+  },
+  {
     "version": "4.82",
     "date": "2026-07-27",
     "title": "Calendar fix — work calendar events now actually show",

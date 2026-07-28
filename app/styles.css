@@ -3867,6 +3867,52 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 }
 .cal-chip-google:hover { background: rgba(66, 133, 244, .18); }
 .cal-chip-gicon { display: inline-flex; align-items: center; }
+/* Time prefix on month Google chips (v4.83) */
+.cal-chip-time { font-variant-numeric: tabular-nums; font-weight: 600; opacity: .85; margin-right: 2px; }
+
+/* Edit/delete popover for a pulled Google event (v4.83) */
+.gcal-event-menu {
+  position: absolute;
+  z-index: 1200;
+  width: 268px;
+  max-width: calc(100vw - 24px);
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-veil);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-float);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gcal-menu-title {
+  font-weight: 700;
+  color: var(--brand-900);
+  font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gcal-menu-input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--brand-100);
+  border-radius: var(--radius-xs);
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  color: var(--brand-900);
+}
+.gcal-menu-input:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
+.gcal-menu-actions { display: flex; gap: 8px; }
+.gcal-menu-actions .btn { flex: 1; }
+.gcal-menu-actions .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.gcal-menu-actions .btn-danger:hover { filter: brightness(.94); }
+.gcal-menu-reset, .gcal-menu-open {
+  background: none; border: none; padding: 2px 0;
+  color: var(--brand-700); font: inherit; font-size: 12px;
+  text-align: left; cursor: pointer;
+}
+.gcal-menu-reset:hover, .gcal-menu-open:hover { color: var(--brand-900); text-decoration: underline; }
+.gcal-menu-note { font-size: 11px; line-height: 1.4; margin: 2px 0 0; }
 
 /* Toolbar Google button connected-indicator dot */
 #cal-google-btn { position: relative; }
