@@ -1,5 +1,16 @@
 [
   {
+    "version": "4.85",
+    "date": "2026-07-28",
+    "title": "Calendar polish — event order, durations, Week duplicates, Work color",
+    "changes": [
+      "Month view now lists each day's events in time order (earliest first) instead of the order they arrived from Google.",
+      "Click an event to see when it is: the date, start–end time, and how long it lasts (e.g. 'Wed, Jul 1 · 8:00 AM – 8:30 AM · 30m').",
+      "Fixed: Week view was showing every event two or three times. (Weeks that straddle two months were pulling the same events from both months.)",
+      "The Work calendar is now blue (matching 'Event') instead of green, so it no longer looks like the green Birthday color."
+    ]
+  },
+  {
     "version": "4.84",
     "date": "2026-07-28",
     "title": "Calendar — fix Google events disappearing (v4.83 regression)",
