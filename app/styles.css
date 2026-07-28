@@ -3869,6 +3869,15 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
 }
 .cal-chip-google:hover { background: rgba(66, 133, 244, .18); }
 .cal-chip-gicon { display: inline-flex; align-items: center; }
+/* Recolored Google event (v4.85): the whole chip takes the chosen color as a
+   soft fill with a solid left bar, so it stands out from the default blue. */
+.cal-chip-google.is-recolored {
+  background: color-mix(in srgb, var(--gcal-tint) 20%, transparent);
+  color: color-mix(in srgb, var(--gcal-tint) 72%, #1c1c1c);
+  border-left-color: var(--gcal-tint);
+}
+.cal-chip-google.is-recolored:hover { background: color-mix(in srgb, var(--gcal-tint) 32%, transparent); }
+.cal-chip-google.is-recolored .cal-chip-gicon { display: none; }
 /* Time prefix on month Google chips (v4.83) */
 .cal-chip-time { font-variant-numeric: tabular-nums; font-weight: 600; opacity: .85; margin-right: 2px; }
 
@@ -3910,6 +3919,18 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   color: var(--brand-900);
 }
 .gcal-menu-input:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
+/* Per-event color picker in the popover (v4.85) */
+.gcal-menu-swatches { display: flex; align-items: center; gap: 7px; }
+.gcal-swatch-label { font-size: 12px; color: var(--ink-600, #424b61); margin-right: 2px; }
+.gcal-swatch {
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid var(--paper-veil); cursor: pointer; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #fff; transition: transform .08s ease, box-shadow .08s ease;
+}
+.gcal-swatch:hover { transform: scale(1.12); }
+.gcal-swatch.is-active { box-shadow: 0 0 0 2px var(--brand-700); border-color: #fff; }
+.gcal-swatch-x { color: var(--ink-500); font-size: 14px; line-height: 1; font-weight: 700; }
 .gcal-menu-actions { display: flex; gap: 8px; }
 .gcal-menu-actions .btn { flex: 1; }
 .gcal-menu-actions .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
