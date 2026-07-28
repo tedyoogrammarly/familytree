@@ -7849,7 +7849,13 @@ const GoogleCalendar = {
     return { dateTime: dt.toISOString() };
   },
   _icsEventToGoogle(ev) {
-    return { id: ev.uid || (ev.summary || '') + JSON.stringify(ev.start || {}), summary: ev.summary, start: ev.start, end: ev.end, htmlLink: '' };
+    // Google expands recurring events into per-instance VEVENTs that share a
+    // base UID; modified instances get a "_R<recurrence-id>" suffix. Strip that
+    // suffix to get a stable SERIES id, used to apply whole-series local edits
+    // (rename/hide) regardless of which instance the user clicked. (v4.83)
+    const uid = ev.uid || (ev.summary || '') + JSON.stringify(ev.start || {});
+    const seriesId = String(uid).replace(/_R\d{8}T\d{6}Z?(?=@|$)/, '');
+    return { id: uid, seriesId, summary: ev.summary, start: ev.start, end: ev.end, htmlLink: '' };
   },
 
   // Normalize any legacy (OAuth-era) config: strip token fields and drop
@@ -7988,11 +7994,16 @@ const GoogleCalendar = {
       return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     };
     const date = ev.start?.date || (startIso ? startIso.slice(0, 10) : null);
+    // Stable series id for whole-series local edits: the ICS path sets
+    // ev.seriesId; the API path exposes ev.recurringEventId on instances.
+    // Fall back to the instance id so one-off events still get a key. (v4.83)
+    const seriesId = 'g:' + (ev.seriesId || ev.recurringEventId || ev.id ||
+      (ev.summary || '') + (ev.start?.dateTime || ev.start?.date || ''));
     return {
       // Real Google events always carry an id; fall back to a deterministic
       // key (summary+start) so a missing id never collides as 'g:undefined'.
       id: 'g:' + (ev.id || (ev.summary || '') + (ev.start?.dateTime || ev.start?.date || '')),
-      date,
+      seriesId,
       summary: ev.summary || '(untitled)',
       htmlLink: ev.htmlLink || '',
       color: cal.backgroundColor || cal.color || 'var(--accent-500)',
@@ -8027,7 +8038,8 @@ const GoogleCalendar = {
       items.forEach(ev => {
         const norm = this.normalizeEvent(ev, cal);
         if (!norm.date) return; // skip events with no resolvable date
-        out.push(norm);
+        const final = this.applyOverride(norm); // local rename/hide (v4.83)
+        if (final) out.push(final);
       });
     }
     return out;
@@ -8075,6 +8087,48 @@ const GoogleCalendar = {
     Store.save();
   },
 
+  // ---- Local overrides for pulled Google events (v4.83) ----
+  // Google events are read-only; we can't write back. Instead we keep local,
+  // admin-managed overrides keyed by SERIES id (from normalizeEvent.seriesId)
+  // so a rename/hide applies to the whole recurring series (e.g. every daily
+  // "Busy" at noon → "Lunch"). Stored in the archive blob under
+  // googleCalendar.overrides = { [seriesId]: { title?, hidden? } }. These never
+  // touch Google — nothing is written back.
+  overridesMap() {
+    const cfg = this.config();
+    return cfg.overrides || (cfg.overrides = {});
+  },
+  // Apply any override to a normalized event. Returns the event, or null if it
+  // should be hidden. (v4.83)
+  applyOverride(ev) {
+    const o = this.overridesMap()[ev.seriesId];
+    if (!o) return ev;
+    if (o.hidden) return null;
+    if (o.title) return { ...ev, summary: o.title, _renamed: true };
+    return ev;
+  },
+  renameSeries(seriesId, title) {
+    if (!seriesId) return;
+    const map = this.overridesMap();
+    const t = String(title || '').trim();
+    if (!t) { if (map[seriesId]) delete map[seriesId].title; }
+    else { (map[seriesId] || (map[seriesId] = {})).title = t; }
+    if (map[seriesId] && !map[seriesId].title && !map[seriesId].hidden) delete map[seriesId];
+    Store.state.googleCalendar = this.config();
+    Store.save();
+  },
+  hideSeries(seriesId) {
+    if (!seriesId) return;
+    (this.overridesMap()[seriesId] || (this.overridesMap()[seriesId] = {})).hidden = true;
+    Store.state.googleCalendar = this.config();
+    Store.save();
+  },
+  // Undo a hide/rename entirely (restore the original Google event). (v4.83)
+  resetSeries(seriesId) {
+    const map = this.overridesMap();
+    if (map[seriesId]) { delete map[seriesId]; Store.state.googleCalendar = this.config(); Store.save(); }
+  },
+
   disconnect() {
     Store.state.googleCalendar = { calendars: [], showEvents: true, lastSync: 0 };
     Store.save();
@@ -8099,6 +8153,16 @@ const CalendarView = {
     if (!hhmm || typeof hhmm !== 'string') return null;
     const [h, m] = hhmm.split(':').map(Number);
     return (h * 60) + (m || 0);
+  },
+  // "13:00" → "1pm", "13:30" → "1:30pm" (compact for month chips). (v4.83)
+  fmtTime12(hhmm) {
+    if (!hhmm || typeof hhmm !== 'string') return '';
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+    if (!m) return '';
+    let h = +m[1]; const mm = m[2];
+    const ap = h >= 12 ? 'pm' : 'am';
+    h = h % 12 || 12;
+    return mm === '00' ? `${h}${ap}` : `${h}:${mm}${ap}`;
   },
   // Assigns _col (column index) and _ncols (columns in the overlap cluster) to
   // each timed item so the week grid can place side-by-side overlaps. (v4.72)
@@ -8513,7 +8577,7 @@ const CalendarView = {
       el.style.cssText = `top:${top}px;height:${height}px;left:${it._col * widthPct}%;width:calc(${widthPct}% - 3px);`;
       el.innerHTML = `<span class="cal-wk-ev-time">${this.minToLabel(it.startMin)}</span><span class="cal-wk-ev-title">${escape(it.label)}</span>`;
       if (it.kind === 'event' && it.id) on(el, 'click', () => EventsView.openModal(it.id));
-      if (it.kind === 'google' && it.htmlLink) on(el, 'click', () => window.open(it.htmlLink, '_blank', 'noopener'));
+      if (it.kind === 'google') on(el, 'click', (e) => { e.stopPropagation(); this.openGoogleEventMenu(it.gEvent || { summary: it.label, seriesId: '', htmlLink: it.htmlLink, calendarName: '', category: it.group }, el); });
       col.appendChild(el);
     });
   },
@@ -8611,7 +8675,7 @@ const CalendarView = {
         const startMin = this.timeToMin(ev.startTime);
         let endMin = this.timeToMin(ev.endTime);
         if (endMin == null || endMin <= startMin) endMin = startMin + 30;
-        byDay.get(ev.date).push({ startMin, endMin, label: ev.summary, group: this.groupOf('google', ev.category), kind: 'google', htmlLink: ev.htmlLink, id: ev.id });
+        byDay.get(ev.date).push({ startMin, endMin, label: ev.summary, group: this.groupOf('google', ev.category), kind: 'google', htmlLink: ev.htmlLink, id: ev.id, gEvent: ev });
       });
       // Merge into the shared per-day store (dedupe by id — guards against a
       // re-resolved same-week fetch double-appending, e.g. after a manual
@@ -8640,30 +8704,79 @@ const CalendarView = {
       return;
     }
     if (this._renderKey !== renderKey) return; // user navigated away
+    // Idempotent: clear any Google chips a prior (possibly still-in-flight)
+    // render appended, so re-renders never stack duplicates. (v4.83 FIX)
+    document.querySelectorAll('#cal-grid .cal-chip-google').forEach(c => c.remove());
     events.forEach(ev => {
       if (!this.filterOn(this.groupOf('google', ev.category))) return; // v4.72 filter
       const cell = document.querySelector(`#cal-grid .cal-cell[data-date="${ev.date}"]`);
       if (!cell) return;
       const chips = cell.querySelector('.cal-chips');
-      if (chips.querySelector(`[data-google-id="${ev.id}"]`)) return;
+      // Belt-and-suspenders dedupe within this pass (guards the async race). Use
+      // a data-attr scan rather than a CSS selector so ids with @ / _ are safe.
+      if ([...chips.querySelectorAll('.cal-chip-google')].some(c => c.dataset.googleId === ev.id)) return;
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'cal-chip cal-chip-google';
       chip.dataset.googleId = ev.id;
+      chip.dataset.seriesId = ev.seriesId || '';
       chip.style.setProperty('--gcal-color', ev.color);
-      chip.title = `${ev.summary} (${ev.calendarName}) — open in Google Calendar`;
+      const timeStr = (!ev.allDay && ev.startTime) ? this.fmtTime12(ev.startTime) : '';
+      chip.title = `${timeStr ? timeStr + ' · ' : ''}${ev.summary} (${ev.calendarName}) — click to edit`;
       chip.innerHTML = `<span class="cal-chip-icon cal-chip-gicon" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="11" height="11">
           <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.19 3.32v2.77h3.55c2.08-1.92 3.28-4.74 3.28-8.1Z"/>
           <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.65l-3.55-2.77c-.98.66-2.24 1.05-3.73 1.05-2.86 0-5.29-1.93-6.15-4.53H2.18v2.84A11 11 0 0 0 12 23Z"/>
           <path fill="#FBBC05" d="M5.85 14.1A6.55 6.55 0 0 1 5.5 12c0-.73.13-1.43.35-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.78.43 3.46 1.18 4.94l3.67-2.84Z"/>
           <path fill="#EA4335" d="M12 5.38c1.62 0 3.07.56 4.21 1.65l3.15-3.15C17.45 2.12 14.97 1 12 1A11 11 0 0 0 2.18 7.07L5.85 9.9C6.71 7.31 9.14 5.38 12 5.38Z"/>
-        </svg></span><span class="cal-chip-text">${escape(ev.summary)}</span>`;
+        </svg></span>${timeStr ? `<span class="cal-chip-time">${timeStr}</span> ` : ''}<span class="cal-chip-text">${escape(ev.summary)}</span>`;
       chip.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (ev.htmlLink) window.open(ev.htmlLink, '_blank', 'noopener');
+        this.openGoogleEventMenu(ev, chip);
       });
       chips.appendChild(chip);
+    });
+  },
+
+  // Popover for a pulled Google event: rename / hide (whole series) / open in
+  // Google. Edits are stored as local overrides — Google is never written to.
+  // (v4.83)
+  openGoogleEventMenu(ev, anchor) {
+    document.querySelector('#gcal-event-menu')?.remove();
+    const o = GoogleCalendar.overridesMap()[ev.seriesId] || {};
+    const menu = document.createElement('div');
+    menu.id = 'gcal-event-menu';
+    menu.className = 'gcal-event-menu';
+    menu.innerHTML = `
+      <div class="gcal-menu-title">${escape(ev.summary)}</div>
+      <input type="text" class="gcal-menu-input" value="${escape(ev.summary)}" aria-label="Event name" />
+      <div class="gcal-menu-actions">
+        <button type="button" class="btn small" data-act="rename">Save name</button>
+        <button type="button" class="btn small btn-danger" data-act="hide">Delete</button>
+      </div>
+      ${o.title || o.hidden ? `<button type="button" class="gcal-menu-reset" data-act="reset">Reset to original</button>` : ''}
+      ${ev.htmlLink ? `<button type="button" class="gcal-menu-open" data-act="open">Open in Google Calendar ↗</button>` : ''}
+      <p class="gcal-menu-note muted">Changes apply to every day this event repeats, and only here — your Google Calendar isn't changed.</p>
+    `;
+    document.body.appendChild(menu);
+    // Position near the clicked chip.
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = `${Math.min(r.bottom + 6 + window.scrollY, window.scrollY + window.innerHeight - menu.offsetHeight - 8)}px`;
+    menu.style.left = `${Math.min(r.left + window.scrollX, window.scrollX + window.innerWidth - menu.offsetWidth - 8)}px`;
+    const input = menu.querySelector('.gcal-menu-input');
+    input.focus(); input.select();
+    const close = () => { menu.remove(); document.removeEventListener('mousedown', onDoc, true); };
+    const onDoc = (e) => { if (!menu.contains(e.target) && e.target !== anchor) close(); };
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+    const doRename = () => { GoogleCalendar.renameSeries(ev.seriesId, input.value); close(); GoogleCalendar.eventCache.clear(); this.render(); };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doRename(); } if (e.key === 'Escape') close(); });
+    menu.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'rename') doRename();
+      else if (act === 'hide') { GoogleCalendar.hideSeries(ev.seriesId); close(); GoogleCalendar.eventCache.clear(); this.render(); toast('Event hidden'); }
+      else if (act === 'reset') { GoogleCalendar.resetSeries(ev.seriesId); close(); GoogleCalendar.eventCache.clear(); this.render(); toast('Restored'); }
+      else if (act === 'open') { if (ev.htmlLink) window.open(ev.htmlLink, '_blank', 'noopener'); close(); }
     });
   },
 
@@ -11511,7 +11624,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.82';
+const APP_VERSION = '4.83';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
