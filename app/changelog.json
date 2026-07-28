@@ -1,5 +1,13 @@
 [
   {
+    "version": "4.82",
+    "date": "2026-07-27",
+    "title": "Calendar fix — work calendar events now actually show",
+    "changes": [
+      "Fixed: the built-in work calendar showed as 'synced' but its events never appeared on the grid. Google blocks browsers from reading calendar feeds directly, so the app now loads them through the site's own server. Your work events (and any public Google Calendar you add) now show up as expected."
+    ]
+  },
+  {
     "version": "4.81",
     "date": "2026-07-27",
     "title": "Calendar — show a public Google Calendar with no setup",
