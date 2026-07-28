@@ -7762,9 +7762,13 @@ const GoogleCalendar = {
   API_BASE: 'https://www.googleapis.com/calendar/v3',
   // v4.81: keyless path — read a public calendar's iCal feed directly. Used
   // whenever no GOOGLE_API_KEY is configured, so a public calendar (added by
-  // its embed/share link) works with zero setup. The .ics host is allowlisted
-  // in the page CSP (connect-src https://calendar.google.com).
-  ICS_BASE: 'https://calendar.google.com/calendar/ical',
+  // its embed/share link) works with zero setup.
+  //
+  // v4.82: fetches go through our OWN serverless proxy (/api/ics), NOT directly
+  // to Google. Google's ical host returns the feed with no CORS headers, so a
+  // direct browser fetch is blocked by the same-origin policy (curl works, the
+  // browser doesn't). The proxy re-serves it same-origin with CORS allowed.
+  ICS_BASE: '/api/ics',
   // Colors auto-assigned per calendar (Google no longer exposes a per-user
   // calendar color without OAuth).
   PALETTE: ['#4285f4', '#0b8043', '#8e24aa', '#e67c00', '#d81b60', '#3f51b5', '#00897b', '#c2185b'],
@@ -7778,7 +7782,9 @@ const GoogleCalendar = {
 
   // ---- Public iCal (.ics) path (no API key) ----
   icsUrl(calId) {
-    return `${this.ICS_BASE}/${encodeURIComponent(calId)}/public/basic.ics`;
+    // Same-origin proxy: /api/ics?src=<calId>. The proxy fetches Google's
+    // public/basic.ics server-side and returns it with CORS allowed.
+    return `${this.ICS_BASE}?src=${encodeURIComponent(calId)}`;
   },
   // Fetch + parse a public calendar's .ics, returning raw items shaped like the
   // Google API's events.list `items` so normalizeEvent() works unchanged.
@@ -11505,7 +11511,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.81';
+const APP_VERSION = '4.82';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
