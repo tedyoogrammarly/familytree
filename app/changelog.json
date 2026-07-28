@@ -1,5 +1,13 @@
 [
   {
+    "version": "4.84",
+    "date": "2026-07-28",
+    "title": "Calendar — fix Google events disappearing (v4.83 regression)",
+    "changes": [
+      "Fixed: Google Calendar events stopped showing after the v4.83 update. A code change accidentally dropped each event's date, so every event was filtered off the grid. Events (and the rename/delete + month-view times from v4.83) now work as intended."
+    ]
+  },
+  {
     "version": "4.83",
     "date": "2026-07-27",
     "title": "Calendar — no more duplicate events, edit/hide events, times in Month view",

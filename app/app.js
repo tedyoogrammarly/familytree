@@ -8004,6 +8004,7 @@ const GoogleCalendar = {
       // key (summary+start) so a missing id never collides as 'g:undefined'.
       id: 'g:' + (ev.id || (ev.summary || '') + (ev.start?.dateTime || ev.start?.date || '')),
       seriesId,
+      date,
       summary: ev.summary || '(untitled)',
       htmlLink: ev.htmlLink || '',
       color: cal.backgroundColor || cal.color || 'var(--accent-500)',
@@ -11624,7 +11625,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.83';
+const APP_VERSION = '4.84';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
