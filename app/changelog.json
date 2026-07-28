@@ -1,5 +1,16 @@
 [
   {
+    "version": "4.87",
+    "date": "2026-07-28",
+    "title": "Calendar — fix clicking events, stacked-event spacing, clipped names + add Green",
+    "changes": [
+      "Fixed: clicking a calendar event did nothing (the event popover failed to open). It now opens correctly with the details, color picker, and rename/delete.",
+      "Fixed: back-to-back short events in the Week view overlapped with no gap. They now sit side-by-side (or with clear spacing) so each one is visible and clickable, like Google Calendar.",
+      "Fixed: longer event names (like 'Daycare Dropoff') were getting cut off in narrow Week-view blocks. Blocks are now tall enough to show the full name.",
+      "Added Green to the event color picker — a lighter green, so it's distinct from the Birthday color. The picker is now Default, Red, Yellow, Green, Gray."
+    ]
+  },
+  {
     "version": "4.86",
     "date": "2026-07-28",
     "title": "Calendar — recolor an event + taller Week blocks",

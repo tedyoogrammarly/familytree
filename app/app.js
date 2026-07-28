@@ -8101,7 +8101,7 @@ const GoogleCalendar = {
   },
   // Named color choices for the per-event override (v4.85). Keys are stored in
   // the override; values are the actual chip/block colors.
-  EVENT_COLORS: { red: 'hsl(4 68% 52%)', yellow: 'hsl(42 88% 50%)', gray: 'hsl(220 8% 52%)' },
+  EVENT_COLORS: { red: 'hsl(4 68% 52%)', yellow: 'hsl(42 88% 50%)', green: 'hsl(142 52% 55%)', gray: 'hsl(220 8% 52%)' },
   // Apply any override to a normalized event. Returns the event, or null if it
   // should be hidden. Sets `summary` (rename) and `color` (recolor). (v4.83/4.85)
   applyOverride(ev) {
@@ -8159,7 +8159,7 @@ const GoogleCalendar = {
 };
 
 // -------------------- CALENDAR VIEW --------------------
-const WEEK_START_HOUR = 0, WEEK_END_HOUR = 24, HOUR_PX = 56;
+const WEEK_START_HOUR = 0, WEEK_END_HOUR = 24, HOUR_PX = 64;
 const CalendarView = {
   year: null,
   month: null, // 0..11
@@ -8222,26 +8222,39 @@ const CalendarView = {
     const range = to ? `${from} – ${to}` : from;
     return `${dateLabel ? dateLabel + ' · ' : ''}${range}${dur ? ` · ${dur}` : ''}`;
   },
+  // Minimum rendered event height, expressed in minutes (so the overlap layout
+  // can reason in the same units as start/end). A block is never shorter than
+  // MIN_EVENT_PX; that visual floor means two back-to-back short events would
+  // otherwise paint on top of each other. We treat each event's END as at least
+  // start + this many minutes for overlap detection, so such pairs get packed
+  // into side-by-side columns instead of colliding vertically. (v4.86 FIX)
+  MIN_EVENT_PX: 44,
+  _minEventMin() { return (this.MIN_EVENT_PX / HOUR_PX) * 60; },
   // Assigns _col (column index) and _ncols (columns in the overlap cluster) to
-  // each timed item so the week grid can place side-by-side overlaps. (v4.72)
+  // each timed item so the week grid can place side-by-side overlaps. Overlap is
+  // computed against each event's EFFECTIVE end (max of its real end and its
+  // minimum rendered height) so short stacked events don't visually collide.
+  // (v4.72; v4.86 effective-height fix)
   layoutDayColumns(items) {
-    items.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
-    // Split into clusters where events transitively overlap.
+    const minMin = this._minEventMin();
+    const effEnd = (it) => Math.max(it.endMin, it.startMin + minMin);
+    items.sort((a, b) => a.startMin - b.startMin || effEnd(a) - effEnd(b));
+    // Split into clusters where events transitively overlap (by effective end).
     const clusters = [];
     let cluster = [], clusterEnd = -1;
     for (const it of items) {
       if (cluster.length && it.startMin >= clusterEnd) { clusters.push(cluster); cluster = []; clusterEnd = -1; }
       cluster.push(it);
-      clusterEnd = Math.max(clusterEnd, it.endMin);
+      clusterEnd = Math.max(clusterEnd, effEnd(it));
     }
     if (cluster.length) clusters.push(cluster);
-    // Greedy column packing within each cluster.
+    // Greedy column packing within each cluster (also by effective end).
     for (const cl of clusters) {
-      const colEnd = []; // end minute of the last event placed in each column
+      const colEnd = []; // effective end minute of the last event in each column
       for (const it of cl) {
         let col = colEnd.findIndex(end => end <= it.startMin);
-        if (col === -1) { col = colEnd.length; colEnd.push(it.endMin); }
-        else { colEnd[col] = it.endMin; }
+        if (col === -1) { col = colEnd.length; colEnd.push(effEnd(it)); }
+        else { colEnd[col] = effEnd(it); }
         it._col = col;
       }
       for (const it of cl) it._ncols = colEnd.length;
@@ -8627,10 +8640,13 @@ const CalendarView = {
     this.layoutDayColumns(items);
     items.forEach(it => {
       const top = ((it.startMin - WEEK_START_HOUR * 60) / 60) * HOUR_PX;
-      // Floor at 38px so short (e.g. 30-min) events still fit the time + title
-      // lines without clipping. Short blocks extend slightly past their slot,
-      // same as Google Calendar. (v4.85)
-      const height = Math.max(38, ((it.endMin - it.startMin) / 60) * HOUR_PX - 2);
+      // Floor at MIN_EVENT_PX so short events still fit time + title; the −2
+      // leaves a small vertical gap between stacked blocks. The overlap layout
+      // (layoutDayColumns) already reserved side-by-side columns for short
+      // events that would otherwise collide, so this floor can't overlap a
+      // neighbor in the same column. (v4.85; v4.86 gap+no-collide fix)
+      const rawHeight = ((it.endMin - it.startMin) / 60) * HOUR_PX;
+      const height = Math.max(this.MIN_EVENT_PX, rawHeight) - 2;
       const widthPct = 100 / it._ncols;
       const el = document.createElement('button');
       el.type = 'button';
@@ -8850,9 +8866,10 @@ const CalendarView = {
       <div class="gcal-menu-swatches" role="group" aria-label="Event color">
         <span class="gcal-swatch-label">Color</span>
         ${swatch('', '', 'Default')}
-        ${swatch('red', this.EVENT_COLORS.red, 'Red')}
-        ${swatch('yellow', this.EVENT_COLORS.yellow, 'Yellow')}
-        ${swatch('gray', this.EVENT_COLORS.gray, 'Gray')}
+        ${swatch('red', GoogleCalendar.EVENT_COLORS.red, 'Red')}
+        ${swatch('yellow', GoogleCalendar.EVENT_COLORS.yellow, 'Yellow')}
+        ${swatch('green', GoogleCalendar.EVENT_COLORS.green, 'Green')}
+        ${swatch('gray', GoogleCalendar.EVENT_COLORS.gray, 'Gray')}
       </div>
       <div class="gcal-menu-actions">
         <button type="button" class="btn small" data-act="rename">Save name</button>
@@ -11739,7 +11756,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.86';
+const APP_VERSION = '4.87';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {
