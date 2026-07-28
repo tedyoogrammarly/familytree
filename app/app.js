@@ -8165,6 +8165,42 @@ const CalendarView = {
     h = h % 12 || 12;
     return mm === '00' ? `${h}${ap}` : `${h}:${mm}${ap}`;
   },
+  // "13:00" → "1:00 PM" (long form, for the event detail popover). (v4.84)
+  fmtTime12Long(hhmm) {
+    if (!hhmm || typeof hhmm !== 'string') return '';
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+    if (!m) return '';
+    let h = +m[1]; const mm = m[2];
+    const ap = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${mm} ${ap}`;
+  },
+  // "1h", "30m", "1h 30m" from a minute count. (v4.84)
+  fmtDuration(mins) {
+    if (mins == null || mins <= 0) return '';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
+  },
+  // The "when" line for the event popover: date + from–to + (duration). Handles
+  // all-day events and events missing an end time. (v4.84)
+  eventWhenLine(ev) {
+    let dateLabel = '';
+    if (ev.date) {
+      const [y, mo, d] = ev.date.split('-').map(Number);
+      dateLabel = new Date(y, mo - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+    if (ev.allDay || !ev.startTime) return dateLabel ? `${dateLabel} · All day` : 'All day';
+    const from = this.fmtTime12Long(ev.startTime);
+    const to = ev.endTime ? this.fmtTime12Long(ev.endTime) : '';
+    let durMin = null;
+    if (ev.endTime) {
+      durMin = this.timeToMin(ev.endTime) - this.timeToMin(ev.startTime);
+      if (durMin < 0) durMin += 24 * 60; // wraps past midnight
+    }
+    const dur = this.fmtDuration(durMin);
+    const range = to ? `${from} – ${to}` : from;
+    return `${dateLabel ? dateLabel + ' · ' : ''}${range}${dur ? ` · ${dur}` : ''}`;
+  },
   // Assigns _col (column index) and _ncols (columns in the overlap cluster) to
   // each timed item so the week grid can place side-by-side overlaps. (v4.72)
   layoutDayColumns(items) {
@@ -8668,6 +8704,17 @@ const CalendarView = {
         try { all = all.concat(await GoogleCalendar.fetchEventsForMonth(y, m)); } catch {}
       }
       if (this._renderKey !== renderKey) return; // user navigated away
+      // v4.84 FIX (week duplicates): a boundary week spans two months, and each
+      // month's fetch buffers ±1 month — so an event in the overlap is returned
+      // by BOTH fetches and concatenated twice. Dedupe by id+date+startTime
+      // before laying out. (This was the real cause of every week event showing
+      // 2–3×, not a render race.)
+      const seen = new Set();
+      all = all.filter(ev => {
+        const k = `${ev.id}|${ev.date}|${ev.startTime || ''}`;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
       const byDay = new Map(days.map(d => [toIsoDate(d), []]));
       all.forEach(ev => {
         if (!weekIsos.has(ev.date)) return;
@@ -8678,18 +8725,23 @@ const CalendarView = {
         if (endMin == null || endMin <= startMin) endMin = startMin + 30;
         byDay.get(ev.date).push({ startMin, endMin, label: ev.summary, group: this.groupOf('google', ev.category), kind: 'google', htmlLink: ev.htmlLink, id: ev.id, gEvent: ev });
       });
-      // Merge into the shared per-day store (dedupe by id — guards against a
-      // re-resolved same-week fetch double-appending, e.g. after a manual
-      // refresh while a prior fetch is still in flight), then relayout each
-      // affected day so internal + Google items are packed together in one
-      // pass instead of two separate placeTimed() calls stacking. (v4.72 FIX B)
-      byDay.forEach((items, iso) => {
-        if (!items.length) return;
-        const existing = this._weekTimed[iso] || (this._weekTimed[iso] = []);
-        const seenIds = new Set(existing.map(it => it.id));
-        const fresh = items.filter(it => !seenIds.has(it.id));
-        if (!fresh.length) return;
-        existing.push(...fresh);
+      // Merge into the shared per-day store, then relayout each affected day so
+      // internal + Google items are packed together in one pass. (v4.72 FIX B)
+      //
+      // v4.84 FIX: REPLACE this day's Google items instead of appending. The old
+      // append+seenIds dedupe lost the race when renderGoogleEventsUnified() ran
+      // twice concurrently (view-entry + a hydrate/realtime tick): both awaited
+      // the fetch, both saw `existing` still empty, both pushed → every event 2–3×.
+      // Dropping all kind:'google' items for the day first makes re-renders
+      // idempotent regardless of concurrency. Internal (kind:'event') items are
+      // left untouched. We relayout EVERY week day (even now-empty ones) so a
+      // day that lost its Google events gets its leftovers repacked.
+      days.forEach(d => {
+        const iso = toIsoDate(d);
+        const store = this._weekTimed[iso] || (this._weekTimed[iso] = []);
+        const kept = store.filter(it => it.kind !== 'google');
+        kept.push(...(byDay.get(iso) || []));
+        this._weekTimed[iso] = kept;
         this.relayoutDay(iso);
       });
       return;
@@ -8708,6 +8760,14 @@ const CalendarView = {
     // Idempotent: clear any Google chips a prior (possibly still-in-flight)
     // render appended, so re-renders never stack duplicates. (v4.83 FIX)
     document.querySelectorAll('#cal-grid .cal-chip-google').forEach(c => c.remove());
+    // v4.84 FIX: order chips within each day by start time (all-day first, then
+    // ascending). The feed arrives in per-calendar order, so without this the
+    // month cells showed events out of chronological order.
+    events = events.slice().sort((a, b) => {
+      const am = a.allDay || a.startTime == null ? -1 : this.timeToMin(a.startTime);
+      const bm = b.allDay || b.startTime == null ? -1 : this.timeToMin(b.startTime);
+      return am - bm;
+    });
     events.forEach(ev => {
       if (!this.filterOn(this.groupOf('google', ev.category))) return; // v4.72 filter
       const cell = document.querySelector(`#cal-grid .cal-cell[data-date="${ev.date}"]`);
@@ -8748,8 +8808,10 @@ const CalendarView = {
     const menu = document.createElement('div');
     menu.id = 'gcal-event-menu';
     menu.className = 'gcal-event-menu';
+    const whenLine = this.eventWhenLine(ev);
     menu.innerHTML = `
       <div class="gcal-menu-title">${escape(ev.summary)}</div>
+      ${whenLine ? `<div class="gcal-menu-when">🕐 ${escape(whenLine)}</div>` : ''}
       <input type="text" class="gcal-menu-input" value="${escape(ev.summary)}" aria-label="Event name" />
       <div class="gcal-menu-actions">
         <button type="button" class="btn small" data-act="rename">Save name</button>
@@ -11625,7 +11687,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.84';
+const APP_VERSION = '4.85';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {

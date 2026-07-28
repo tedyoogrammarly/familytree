@@ -2988,7 +2988,7 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   transition: transform .16s var(--ease-spring), background-color .2s var(--ease-out);
 }
 .cal-filter-chip:hover { transform: translateY(-1px); }
-.cal-filter-chip.is-on[data-filter="work"]     { background: var(--brand-500);  color: #fff; border-color: var(--brand-500); }
+.cal-filter-chip.is-on[data-filter="work"]     { background: hsl(205 60% 48%);  color: #fff; border-color: hsl(205 60% 48%); }
 .cal-filter-chip.is-on[data-filter="personal"] { background: var(--accent-500); color: #fff; border-color: var(--accent-500); }
 .cal-filter-chip.is-on[data-filter="family"]   { background: var(--ink-700);    color: #fff; border-color: var(--ink-700); }
 
@@ -3162,7 +3162,9 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   box-shadow: var(--shadow-soft); display:flex; flex-direction:column; gap:1px; }
 .cal-wk-ev-time { font: 600 9px var(--font-sans); opacity:.9; }
 .cal-wk-ev-title { font: 600 11px var(--font-sans); line-height:1.1; overflow:hidden; }
-.cal-wk-work     { background: var(--brand-500); }
+/* v4.84: Work events are BLUE (matching the "Event" legend dot) so they don't
+   clash with the green Birthday color. */
+.cal-wk-work     { background: hsl(205 60% 48%); }
 .cal-wk-personal { background: var(--accent-500); }
 .cal-wk-family   { background: var(--ink-700); }
 .cal-wk-now { position:absolute; left:0; right:0; height:2px; background: var(--danger); z-index:5; }
@@ -3890,6 +3892,12 @@ body:not(.is-admin) .page-emoji-inline { display: none; }
   color: var(--brand-900);
   font-size: 13px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gcal-menu-when {
+  font-size: 12px;
+  color: var(--ink-600, #5a5348);
+  font-variant-numeric: tabular-nums;
+  margin: -2px 0 2px;
 }
 .gcal-menu-input {
   width: 100%;
