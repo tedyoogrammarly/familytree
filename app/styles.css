@@ -3156,6 +3156,10 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 /* ===== Weekly time-grid view + Month/Week toggle (v4.72) ===== */
 .cal-week { border: 1px solid var(--ink-200); border-radius: var(--radius); overflow: hidden; background: #fff; }
 .cal-wk-head, .cal-wk-allday { display: grid; grid-template-columns: 56px repeat(7, 1fr); }
+/* v4.89: reserve the timed-grid's scrollbar width on the non-scrolling header
+   and all-day rows so their 7 day columns line up with the scrolling grid's
+   columns (see renderWeek --cal-sbw). No-op where --cal-sbw is 0. */
+.cal-wk-head, .cal-wk-allday { padding-right: var(--cal-sbw, 0px); }
 .cal-wk-head { border-bottom: 1px solid var(--ink-200); }
 .cal-wk-daycol { text-align: center; padding: 6px 0; border-left: 1px solid var(--ink-100); }
 .cal-wk-daycol.is-today .cal-wk-daynum { background: var(--brand-500); color:#fff; border-radius:999px; padding:1px 8px; display:inline-block; }

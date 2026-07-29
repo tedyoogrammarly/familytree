@@ -8733,7 +8733,17 @@ const CalendarView = {
     this.drawNowLine(days);
     // Auto-scroll to 7am on first paint of the week.
     const scroller = host.querySelector('.cal-wk-scroll');
-    if (scroller) scroller.scrollTop = 7 * HOUR_PX;
+    if (scroller) {
+      scroller.scrollTop = 7 * HOUR_PX;
+      // v4.89 FIX: the timed grid scrolls, so on platforms with classic (space-
+      // consuming) scrollbars its 1fr day columns compute against a narrower
+      // width than the non-scrolling header + all-day rows — the columns drift
+      // right of the day headers. Measure the scrollbar and pad those two rows
+      // by the same amount so all three column tracks line up. (0 on overlay-
+      // scrollbar platforms, so it's a no-op there.)
+      const sbw = scroller.offsetWidth - scroller.clientWidth;
+      host.style.setProperty('--cal-sbw', `${sbw}px`);
+    }
   },
   hourLabel(h) { const am = h < 12; const hr = (h % 12) || 12; return `${hr} ${am ? 'AM' : 'PM'}`; },
   // Lays out and (re)renders ALL timed items for one day column from the
@@ -12003,7 +12013,7 @@ function expandReminder(r, today, horizon) {
 // changelog.json, fetched lazily the first time the History page renders.
 // Only the current version stays inline so the version chip always shows,
 // even if the fetch fails on a deploy with caching weirdness.
-const APP_VERSION = '4.89';
+const APP_VERSION = '4.90';
 let CHANGELOG = [];
 let _changelogPromise = null;
 function ensureChangelog() {

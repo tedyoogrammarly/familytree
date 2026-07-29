@@ -1,5 +1,13 @@
 [
   {
+    "version": "4.90",
+    "date": "2026-07-28",
+    "title": "Calendar — fix Week-view columns not lining up under the day headers",
+    "changes": [
+      "Fixed: in the Week view, the day columns could drift out from under their day-name headers (SUN/MON/…), most noticeably toward the right. The scrolling time-grid's scrollbar was taking up width that the header row didn't account for; the header and all-day rows now reserve the same space so everything lines up."
+    ]
+  },
+  {
     "version": "4.89",
     "date": "2026-07-28",
     "title": "Calendar events — edit time, show the emoji, and delete from the edit view",
