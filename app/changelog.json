@@ -1,5 +1,33 @@
 [
   {
+    "version": "4.90",
+    "date": "2026-07-28",
+    "title": "Calendar — fix Week-view columns not lining up under the day headers",
+    "changes": [
+      "Fixed: in the Week view, the day columns could drift out from under their day-name headers (SUN/MON/…), most noticeably toward the right. The scrolling time-grid's scrollbar was taking up width that the header row didn't account for; the header and all-day rows now reserve the same space so everything lines up."
+    ]
+  },
+  {
+    "version": "4.89",
+    "date": "2026-07-28",
+    "title": "Calendar events — edit time, show the emoji, and delete from the edit view",
+    "changes": [
+      "You can now set and edit an event's start and end time in the event editor (previously you could only set the date).",
+      "The emoji you pick for an event now shows next to its name in the Week view too (Month already showed it).",
+      "Added a Delete button in the event editor, so a calendar-only appointment (one that isn't on the Events page) can be removed. Deletes are undoable."
+    ]
+  },
+  {
+    "version": "4.88",
+    "date": "2026-07-28",
+    "title": "Calendar — Undo, restore deleted events, and calendar-only appointments",
+    "changes": [
+      "Undo for calendar changes: after you rename, delete, recolor, or add something on the Calendar, a toast appears with an 'Undo' button. You can also press Cmd/Ctrl+Z while the Calendar is open.",
+      "Restore deleted events: the 'Google · synced' settings now have a 'Deleted events' section listing everything you've deleted, each with a Restore button. (Deleting a Google event only hides it locally — your Google Calendar is never changed — so it's always recoverable.)",
+      "New Appointments can be calendar-only: the Add-appointment form has an 'Also add to the Events page' checkbox. Leave it off for something that should just show on the Calendar; turn it on to also create a full Event under the Events page."
+    ]
+  },
+  {
     "version": "4.87",
     "date": "2026-07-28",
     "title": "Calendar — fix clicking events, stacked-event spacing, clipped names + add Green",

@@ -2952,6 +2952,21 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
   z-index: 100;
 }
 .toast.is-show { opacity: 1; transform: translate(-50%, 0); }
+/* Toast with an action button (Undo). (v4.88) */
+.toast { display: flex; align-items: center; gap: 14px; }
+.toast-action {
+  background: none; border: none; padding: 2px 4px; margin: 0;
+  color: var(--accent-300); font: 600 14px var(--font-sans); cursor: pointer;
+  pointer-events: auto; text-decoration: underline; white-space: nowrap;
+}
+.toast-action:hover { color: #fff; }
+/* Appointment "add to Events" toggle (v4.88) */
+.appt-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-800, #2a2a2a); cursor: pointer; margin-top: 2px; }
+.appt-toggle input { width: 16px; height: 16px; }
+.appt-toggle-hint { margin: 2px 0 0; line-height: 1.4; }
+/* Deleted-events restore rows (v4.88) */
+.gcal-deleted-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gcal-deleted-row .gcal-cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Severity styling so a failed save no longer looks like a success.
    Dark warm/maroon grounds keep the toast aesthetic; the inset bar + glyph
    carry the meaning. Driven by toast(msg, 'warn' | 'error'). */
@@ -3141,6 +3156,10 @@ body.is-admin .rel-unlink { display: grid; place-items: center; }
 /* ===== Weekly time-grid view + Month/Week toggle (v4.72) ===== */
 .cal-week { border: 1px solid var(--ink-200); border-radius: var(--radius); overflow: hidden; background: #fff; }
 .cal-wk-head, .cal-wk-allday { display: grid; grid-template-columns: 56px repeat(7, 1fr); }
+/* v4.89: reserve the timed-grid's scrollbar width on the non-scrolling header
+   and all-day rows so their 7 day columns line up with the scrolling grid's
+   columns (see renderWeek --cal-sbw). No-op where --cal-sbw is 0. */
+.cal-wk-head, .cal-wk-allday { padding-right: var(--cal-sbw, 0px); }
 .cal-wk-head { border-bottom: 1px solid var(--ink-200); }
 .cal-wk-daycol { text-align: center; padding: 6px 0; border-left: 1px solid var(--ink-100); }
 .cal-wk-daycol.is-today .cal-wk-daynum { background: var(--brand-500); color:#fff; border-radius:999px; padding:1px 8px; display:inline-block; }
