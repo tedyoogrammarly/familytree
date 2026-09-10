@@ -373,36 +373,55 @@
 
     <!-- ===== TREE VIEW ===== -->
     <main id="view-tree" class="view view-tree">
-      <div class="tree-toolbar">
-        <div class="tree-toolbar-group">
-          <button class="icon-btn" id="btn-zoom-out" title="Zoom out (−)">
+      <header class="tree-page-head">
+        <div class="tree-page-intro">
+          <div class="tree-title-row">
+            <h1><span class="page-emoji page-emoji-inline" data-page-emoji="tree" title="Pick an emoji for Family Tree"></span>Family Tree</h1>
+            <span id="tree-member-count" class="tree-member-count" aria-live="polite"></span>
+          </div>
+          <p>Select a person to explore their parents, partners, and children.</p>
+        </div>
+        <div class="tree-search-wrap">
+          <svg class="tree-search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <input id="tree-search" class="tree-search" type="search" placeholder="Find someone in your family…" aria-label="Find a family member" role="combobox" aria-controls="tree-search-results" aria-autocomplete="list" aria-expanded="false" autocomplete="off" />
+          <div id="tree-search-results" class="tree-search-results" role="listbox" aria-label="Family members" hidden></div>
+        </div>
+      </header>
+      <div class="tree-toolbar" aria-label="Family tree controls">
+        <div class="tree-toolbar-group tree-view-tools" role="group" aria-label="Navigate the tree">
+          <button class="icon-btn" id="btn-tree-back" title="Back to previous person" aria-label="Back to previous person" disabled>
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="btn-zoom-out" title="Zoom out (−)" aria-label="Zoom out (−)">
             <svg viewBox="0 0 16 16"><path d="M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           </button>
-          <button class="icon-btn" id="btn-zoom-reset" title="Reset view">
+          <button class="icon-btn" id="btn-zoom-reset" title="Reset view" aria-label="Reset view">
             <span id="zoom-label">100%</span>
           </button>
-          <button class="icon-btn" id="btn-zoom-in" title="Zoom in (+)">
+          <button class="icon-btn" id="btn-zoom-in" title="Zoom in (+)" aria-label="Zoom in (+)">
             <svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           </button>
           <span class="divider" aria-hidden="true"></span>
-          <button class="icon-btn" id="btn-fit" title="Fit to screen">
-            <svg viewBox="0 0 16 16" fill="none"><path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <button class="icon-btn tree-labeled-btn" id="btn-fit" title="Fit to screen" aria-label="Fit to screen">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Fit tree</span>
           </button>
-          <button class="icon-btn" id="btn-auto-layout" title="Auto-arrange">
+          <span class="divider tree-layout-divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="btn-auto-layout" title="Auto-arrange" aria-label="Auto-arrange">
             <svg viewBox="0 0 16 16" fill="none"><path d="M8 2v4M8 10v4M2 8h4M10 8h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
           </button>
-          <button class="icon-btn" id="btn-toggle-edit-layout" data-admin-only title="Unlock layout — drag cards manually">
+          <button class="icon-btn" id="btn-toggle-edit-layout" data-admin-only title="Unlock layout — drag cards manually" aria-label="Unlock layout — drag cards manually">
             <svg id="edit-layout-icon-locked" viewBox="0 0 16 16" fill="none"><path d="M4 7V5a4 4 0 018 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="10.5" r="1" fill="currentColor"/></svg>
             <svg id="edit-layout-icon-unlocked" viewBox="0 0 16 16" fill="none" hidden><path d="M4 7V5a4 4 0 017.6-1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="10.5" r="1" fill="currentColor"/></svg>
           </button>
-          <button class="icon-btn" id="btn-expand-all" title="Expand all">
+          <button class="icon-btn" id="btn-expand-all" title="Expand all" aria-label="Expand all">
             <svg viewBox="0 0 16 16" fill="none"><path d="M3 6l5-3 5 3M3 10l5 3 5-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
-          <button class="icon-btn" id="btn-collapse-all" title="Collapse all">
+          <button class="icon-btn" id="btn-collapse-all" title="Collapse all" aria-label="Collapse all">
             <svg viewBox="0 0 16 16" fill="none"><path d="M3 5l5 3 5-3M3 11l5-3 5 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
           <span class="divider" aria-hidden="true"></span>
-          <button class="icon-btn" id="btn-theme" title="Theme colors" aria-haspopup="true" aria-expanded="false">
+          <button class="icon-btn" id="btn-theme" title="Theme colors" aria-haspopup="true" aria-expanded="false" aria-label="Theme colors">
             <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="1" opacity=".5"/></svg>
             <span class="theme-swatch" id="theme-swatch" aria-hidden="true"></span>
           </button>
@@ -421,20 +440,23 @@
             <div class="theme-preview" id="theme-preview"></div>
           </div>
         </div>
-        <div class="tree-toolbar-group">
-          <span class="page-emoji page-emoji-inline" data-page-emoji="tree" title="Pick an emoji for Family Tree"></span>
+        <div class="tree-toolbar-group tree-filter-tools" role="group" aria-label="Choose who to see">
+          <label class="tree-toolbar-label" for="tree-filter-group">Show</label>
           <select id="tree-filter-group" class="tree-filter" title="Show only members of one group" aria-label="Filter by group">
             <option value="">All groups</option>
           </select>
-          <button class="icon-btn tree-filter-btn" id="btn-filter-myfamily" title="Show just my family (parents, spouse, kids, siblings & their kids, grandparents, grandchildren)" aria-pressed="false">
+          <button class="icon-btn tree-filter-btn" id="btn-filter-myfamily" title="Show just my family (parents, spouse, kids, siblings & their kids, grandparents, grandchildren)" aria-pressed="false" aria-label="Show just my family (parents, spouse, kids, siblings & their kids, grandparents, grandchildren)">
             <svg viewBox="0 0 16 16" fill="none"><path d="M8 14s-5-3-5-7a3 3 0 0 1 5-2 3 3 0 0 1 5 2c0 4-5 7-5 7z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
             <span class="myfam-label">My family</span>
           </button>
-          <input id="tree-search" class="tree-search" type="search" placeholder="Search family…" />
+          <button class="icon-btn tree-labeled-btn tree-find-me" id="btn-find-me" title="Center the tree on you" aria-label="Find me in the tree">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>Find me</span>
+          </button>
         </div>
       </div>
 
-      <div id="tree-canvas" class="tree-canvas">
+      <div id="tree-canvas" class="tree-canvas" tabindex="0" aria-label="Interactive family tree. Use arrow keys to pan, plus and minus to zoom, and zero to fit the tree.">
+        <div class="tree-navigation-hint">Drag to explore <span>·</span> Scroll to zoom <span>·</span> Select a person to trace family</div>
         <div id="tree-world" class="tree-world">
           <svg id="tree-edges" class="tree-edges" xmlns="http://www.w3.org/2000/svg"></svg>
           <div id="tree-nodes" class="tree-nodes"></div>
@@ -446,17 +468,17 @@
             <button class="btn btn-primary" id="btn-add-first" data-admin-only>+ Add the first member</button>
           </div>
         </div>
-        <!-- v4.69: connection legend + spotlight hint. Pure presentation — the
-             lines mirror the .tree-edges stroke styles exactly. -->
-        <div class="tree-legend" aria-hidden="true">
-          <div class="tree-legend-hint">Hover a card to trace their connections</div>
+        <aside class="tree-legend" aria-label="How to read the family connections">
+          <div class="tree-legend-hint">Follow the family lines</div>
           <div class="tree-legend-rows">
-            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-family"/></svg>Parent → child</span>
-            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-spouse"/></svg>Married</span>
-            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-ex"/></svg>Past marriage</span>
-            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8"><path d="M1 4 H27" class="tll-sibling"/></svg>Siblings</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 32 12" width="32" height="12" aria-hidden="true"><path d="M2 2h14v8h14" class="tll-family"/><circle cx="16" cy="6" r="2" fill="var(--brand-600)"/></svg>Parent &amp; child</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8" aria-hidden="true"><path d="M1 4 H27" class="tll-spouse"/></svg>Married</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8" aria-hidden="true"><path d="M1 4 H27" class="tll-ex"/></svg>Past marriage</span>
+            <span class="tree-legend-item"><svg viewBox="0 0 28 8" width="28" height="8" aria-hidden="true"><path d="M1 4 H27" class="tll-sibling"/></svg>Siblings</span>
           </div>
-        </div>
+          <p class="tree-legend-note">One color follows a branch from parents to children.</p>
+        </aside>
+        <section id="tree-selection" class="tree-selection" aria-label="Selected family member and relatives" aria-live="polite" hidden></section>
       </div>
     </main>
 
@@ -2446,6 +2468,7 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
 
+  <script src="tree-explorer.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

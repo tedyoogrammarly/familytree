@@ -2662,18 +2662,19 @@ function heartMarker(x, y, divorced, ids = '') {
   const dataAttr = ids ? ` data-m="${ids}"` : '';
   // Heart path centered roughly on (0,0)
   const path = 'M 0 6 C 0 -1, -10 -1, -10 6 C -10 12, 0 16, 0 18 C 0 16, 10 12, 10 6 C 10 -1, 0 -1, 0 6 Z';
-  const halo = `<rect x="${x - w/2}" y="${y - h/2}" width="${w}" height="${h}" rx="5" fill="var(--paper-soft)" opacity=".95"/>`;
+  // Coordinates are local to the translated group, not canvas coordinates.
+  const halo = `<rect x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="5" fill="var(--paper-soft)" opacity=".95"/>`;
   if (!divorced) {
-    return `<g class="spouse-heart"${dataAttr} transform="translate(${x} ${y - 2}) scale(1.1)">
+    return `<g class="spouse-heart"${dataAttr} transform="translate(${x} ${y}) scale(1.1)">
       ${halo}
-      <path d="${path}" class="heart-fill"/>
+      <path d="${path}" transform="translate(0 -9)" class="heart-fill"/>
     </g>`;
   }
   // broken: heart fill + a jagged white line down the middle
-  return `<g class="spouse-heart broken"${dataAttr} transform="translate(${x} ${y - 2}) scale(1.1)">
+  return `<g class="spouse-heart broken"${dataAttr} transform="translate(${x} ${y}) scale(1.1)">
     ${halo}
-    <path d="${path}" class="heart-fill"/>
-    <path d="M -1.4 -0.5 L 1 4 L -1 8 L 1.4 13 L -0.5 17" class="heart-crack"/>
+    <path d="${path}" transform="translate(0 -9)" class="heart-fill"/>
+    <path d="M -1.4 -0.5 L 1 4 L -1 8 L 1.4 13 L -0.5 17" transform="translate(0 -9)" class="heart-crack"/>
   </g>`;
 }
 
@@ -2699,7 +2700,7 @@ function relatedIdsFor(id) {
 }
 
 // -------------------- LAYOUT --------------------
-const NODE_W = 200, NODE_H = 280, X_GAP = 40, Y_GAP = 80;
+const NODE_W = 200, NODE_H = 280, X_GAP = 40, Y_GAP = 112;
 
 function computeGenerations() {
   const members = Store.membersList();
@@ -2750,7 +2751,7 @@ function autoLayout(orientation = Store.state.orientation || 'vertical', opts = 
   const SIBLING_SIZE = isVertical ? NODE_W : NODE_H;
   const SIBLING_GAP  = isVertical ? X_GAP  : Y_GAP;
   const DEPTH_SIZE   = isVertical ? NODE_H : NODE_W;
-  const DEPTH_GAP    = isVertical ? Y_GAP  : X_GAP;
+  const DEPTH_GAP    = Y_GAP;
 
   const placed = new Set();
   const placeAt = (m, primary, depth) => {
@@ -2946,11 +2947,12 @@ const Canvas = {
   },
   apply() {
     this.world.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+    this.el.style.setProperty('--tree-zoom', this.scale);
     $('#zoom-label').textContent = Math.round(this.scale * 100) + '%';
     Store.state.view = { scale: this.scale, tx: this.tx, ty: this.ty };
   },
   zoomTo(newScale, anchorX, anchorY) {
-    newScale = clamp(newScale, 0.25, 2.5);
+    newScale = clamp(newScale, 0.1, 2.5);
     const rect = this.el.getBoundingClientRect();
     const cx = anchorX ?? rect.width / 2;
     const cy = anchorY ?? rect.height / 2;
@@ -2962,74 +2964,124 @@ const Canvas = {
     this.apply();
   },
   bindPanZoom() {
-    let dragging = false, sx = 0, sy = 0;
-    // v4.32: track whether the pan actually moved the view. A pointerdown +
-    // immediate pointerup (the user just clicked the empty canvas) used to
-    // call Store.save() unconditionally, which kicked a full archive write
-    // to Supabase for nothing. Now we save only if the view actually changed.
-    let startTx = 0, startTy = 0, moved = false;
-    this.el.addEventListener('pointerdown', (e) => {
-      // ignore if on a node or interactive child
-      if (e.target.closest('.node')) return;
-      dragging = true;
-      moved = false;
-      sx = e.clientX; sy = e.clientY;
-      startTx = this.tx; startTy = this.ty;
+    const pointers = new Map();
+    let previous = null;
+    const measure = () => {
+      const points = [...pointers.values()];
+      const a = points[0], b = points[1] || a;
+      return a ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2,
+        distance: Math.hypot(a.x - b.x, a.y - b.y), count: points.length } : null;
+    };
+    this.el.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || e.target.closest('.node, button, input, select, a, #tree-selection, .tree-legend')) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      previous = measure();
       this.el.classList.add('is-grabbing');
       this.el.setPointerCapture(e.pointerId);
+      this.el.focus({ preventScroll: true });
     });
-    this.el.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      this.tx += e.clientX - sx;
-      this.ty += e.clientY - sy;
-      sx = e.clientX; sy = e.clientY;
-      moved = true;
-      this.apply();
+    this.el.addEventListener('pointermove', e => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const next = measure();
+      if (previous && previous.count === next.count) {
+        this.tx += next.x - previous.x;
+        this.ty += next.y - previous.y;
+        if (next.count > 1 && previous.distance > 0) {
+          const rect = this.el.getBoundingClientRect();
+          this.zoomTo(this.scale * next.distance / previous.distance, next.x - rect.left, next.y - rect.top);
+        } else this.apply();
+      }
+      previous = next;
     });
-    const stop = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      this.el.classList.remove('is-grabbing');
+    const stop = e => {
+      pointers.delete(e.pointerId);
+      previous = measure();
+      if (!pointers.size) this.el.classList.remove('is-grabbing');
       try { this.el.releasePointerCapture(e.pointerId); } catch {}
-      if (moved && (this.tx !== startTx || this.ty !== startTy)) Store.save();
     };
     this.el.addEventListener('pointerup', stop);
     this.el.addEventListener('pointercancel', stop);
-
-    this.el.addEventListener('wheel', (e) => {
-      // pinch / mouse wheel
+    this.el.addEventListener('lostpointercapture', stop);
+    this.el.addEventListener('wheel', e => {
+      if (e.target.closest('#tree-selection, .tree-legend')) return;
       e.preventDefault();
       const rect = this.el.getBoundingClientRect();
-      const x = e.clientX - rect.left, y = e.clientY - rect.top;
-      const factor = Math.exp(-e.deltaY * 0.0015);
-      this.zoomTo(this.scale * factor, x, y);
+      this.zoomTo(this.scale * Math.exp(-e.deltaY * 0.0015), e.clientX - rect.left, e.clientY - rect.top);
     }, { passive: false });
+    this.el.addEventListener('keydown', e => {
+      if (e.target !== this.el) return;
+      const shifts = { ArrowLeft: [70, 0], ArrowRight: [-70, 0], ArrowUp: [0, 70], ArrowDown: [0, -70] };
+      if (shifts[e.key]) {
+        e.preventDefault();
+        this.tx += shifts[e.key][0]; this.ty += shifts[e.key][1]; this.apply();
+      } else if (['+', '=', '-'].includes(e.key)) {
+        e.preventDefault(); this.zoomTo(this.scale * (e.key === '-' ? 1 / 1.2 : 1.2));
+      } else if (e.key === '0' || e.key === 'Home') {
+        e.preventDefault(); this.fit();
+      } else if (e.key === 'Escape') TreeExplorer.clear();
+    });
+  },
+  viewport() {
+    const rect = this.el.getBoundingClientRect();
+    const pad = rect.width < 600 ? 24 : 48;
+    const legend = this.el.querySelector('.tree-legend');
+    let right = pad, bottom = Math.max(pad, (legend?.offsetHeight || 0) + 32);
+    const panel = document.getElementById('tree-selection');
+    if (panel && !panel.hidden) {
+      if (rect.width > 760) right += panel.offsetWidth + 20;
+      else bottom += panel.offsetHeight + 12;
+    }
+    return { left: pad, top: pad, width: Math.max(80, rect.width - pad - right),
+      height: Math.max(80, rect.height - pad - bottom), actualWidth: rect.width, actualHeight: rect.height };
+  },
+  focusMember(id) {
+    const member = Store.byId(id); if (!member) return;
+    const area = this.viewport();
+    if (!area.actualWidth || !area.actualHeight) return;
+    const family = area.actualWidth <= 760
+      ? new Set([id, member.spouseId].filter(Boolean))
+      : relatedIdsFor(id);
+    const visible = computeVisibleIds();
+    const members = Store.membersList().filter(m => family.has(m.id) && visible.has(m.id));
+    if (!members.length) members.push(member);
+    const minX = Math.min(...members.map(m => m.x));
+    const minY = Math.min(...members.map(m => m.y));
+    const maxX = Math.max(...members.map(m => m.x + NODE_W));
+    const maxY = Math.max(...members.map(m => m.y + (this._nodeHeights?.get(m.id) || NODE_H)));
+    this.scale = clamp(Math.min(.95, area.width / (maxX - minX + 32), area.height / (maxY - minY + 32)), 0.1, 1.15);
+    this.tx = area.left + area.width / 2 - (minX + maxX) / 2 * this.scale;
+    this.ty = area.top + area.height / 2 - (minY + maxY) / 2 * this.scale;
+    this.apply();
   },
   fit() {
-    const members = Store.membersList();
+    const area = this.viewport();
+    // App startup also renders hidden views; wait for real dimensions.
+    if (!area.actualWidth || !area.actualHeight) return;
+    const visible = computeVisibleIds();
+    const members = Store.membersList().filter(m => visible.has(m.id));
     if (!members.length) { this.tx = 100; this.ty = 60; this.scale = 1; this.apply(); return; }
     const minX = Math.min(...members.map(m => m.x));
     const minY = Math.min(...members.map(m => m.y));
     const maxX = Math.max(...members.map(m => m.x + NODE_W));
-    const maxY = Math.max(...members.map(m => m.y + NODE_H));
-    const rect = this.el.getBoundingClientRect();
-    const pad = 80;
-    const sx = (rect.width  - pad * 2) / (maxX - minX);
-    const sy = (rect.height - pad * 2) / (maxY - minY);
-    this.scale = clamp(Math.min(sx, sy), 0.25, 1.4);
-    this.tx = pad - minX * this.scale;
-    this.ty = pad - minY * this.scale;
+    const maxY = Math.max(...members.map(m => m.y + (this._nodeHeights?.get(m.id) || NODE_H)));
+    this.scale = clamp(Math.min(area.width / (maxX - minX), area.height / (maxY - minY)), 0.1, 1.15);
+    this.tx = area.left + (area.width - (maxX - minX) * this.scale) / 2 - minX * this.scale;
+    this.ty = area.top + (area.height - (maxY - minY) * this.scale) / 2 - minY * this.scale;
     this.apply();
+    this._hasFitted = true;
   },
   renderAll() {
     const visibleIds = computeVisibleIds();   // one BFS shared by both passes (v4.69)
-    this.renderEdges(visibleIds);
     this.renderNodes(visibleIds);
+    this._nodeHeights = new Map([...this.nodes.querySelectorAll('.node')].map(node => [node.dataset.id, node.offsetHeight]));
+    this.renderEdges(visibleIds);
     $('#tree-empty').toggleAttribute('hidden', Store.membersList().length > 0);
     // v4.69: a full re-render rebuilds nodes + edges, wiping any spotlight
     // classes. Re-apply the pinned spotlight (drawer open) or clear it.
     this._spotlightId = null;
     this.spotlight(this._pinnedId || null);
+    TreeExplorer.render();
   },
 
   // ---- Relationship spotlight (v4.69) ----
@@ -3069,250 +3121,229 @@ const Canvas = {
     });
   },
   renderEdges(visibleIdsIn) {
-    // v4.69: renderAll computes visibility once and passes it to both
-    // renderEdges and renderNodes — the BFS was previously run twice per
-    // full render. Standalone callers (edge repaint during card drag) still
-    // work: the parameter is optional.
     const visibleIds = visibleIdsIn || computeVisibleIds();
     const visibleMembers = Store.membersList().filter(m => visibleIds.has(m.id));
     if (!visibleMembers.length) { this.edges.innerHTML = ''; return; }
+    const cardHeight = m => this._nodeHeights?.get(m.id) || NODE_H;
     const pad = 200;
     const minX = Math.min(...visibleMembers.map(m => m.x)) - pad;
     const minY = Math.min(...visibleMembers.map(m => m.y)) - pad;
     const maxX = Math.max(...visibleMembers.map(m => m.x + NODE_W)) + pad;
-    const maxY = Math.max(...visibleMembers.map(m => m.y + NODE_H)) + pad;
+    const maxY = Math.max(...visibleMembers.map(m => m.y + cardHeight(m))) + pad;
     this.edges.setAttribute('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
     this.edges.style.left = minX + 'px';
-    this.edges.style.top  = minY + 'px';
-    this.edges.style.width  = (maxX - minX) + 'px';
+    this.edges.style.top = minY + 'px';
+    this.edges.style.width = (maxX - minX) + 'px';
     this.edges.style.height = (maxY - minY) + 'px';
 
-    const orientation = Store.state.orientation || 'vertical';
+    // Work in sibling (primary) / generation (depth) axes, then transpose
+    // once. Both tree orientations use exactly the same routing rules.
+    const vertical = (Store.state.orientation || 'vertical') === 'vertical';
+    const primary = m => vertical ? m.x : m.y;
+    const depth = m => vertical ? m.y : m.x;
+    const breadth = m => vertical ? NODE_W : cardHeight(m);
+    const height = m => vertical ? cardHeight(m) : NODE_W;
+    const depthEnd = m => depth(m) + height(m);
+    const center = m => primary(m) + breadth(m) / 2;
+    const point = (p, d) => vertical ? [p, d] : [d, p];
+    const path = points => points.map(([p, d], i) => `${i ? 'L' : 'M'} ${point(p, d).join(' ')}`).join(' ');
     const lines = [];
+    const pairKey = (a, b) => [a, b].sort().join('|');
+    const memberAttr = ids => `data-m="${escape(ids.join(' '))}"`;
+    const halo = (d, ids) => `<path class="edge-halo" ${memberAttr(ids)} d="${d}"/>`;
+    const edge = (d, ids, cls, color = '') => `<path class="edge ${cls}" ${memberAttr(ids)}${color ? ` style="stroke: ${color}"` : ''} d="${d}"/>`;
+    const dot = (p, d, ids, color) => {
+      const [x, y] = point(p, d);
+      return `<circle class="family-junction" ${memberAttr(ids)} cx="${x}" cy="${y}" r="3.5" style="fill: ${color}"/>`;
+    };
+    // A fixed palette keyed by the family itself keeps a branch recognizable
+    // when a filter or collapsed generation changes the visible families.
+    const palette = ['#356c86', '#397b6f', '#866088', '#997132', '#a36455', '#626f94'];
+    const branchColor = key => {
+      let hash = 2166136261;
+      for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+      return palette[(hash >>> 0) % palette.length];
+    };
 
-    const cx = (m) => m.x + NODE_W / 2;
-    const cy = (m) => m.y + NODE_H / 2;
+    // Spouse links share their anchor with the descendant trunk. Nearby
+    // partners connect directly; distant links take an outer lane instead
+    // of passing through the cards between them. Past partners use the
+    // upper lane, keeping their dotted links out of the descendant bars.
+    const pairs = new Map();
+    const outerLanes = new Map();
+    const addPair = (a, b, divorced) => {
+      const key = pairKey(a.id, b.id);
+      if (pairs.has(key)) return;
+      const [first, last] = [a, b].sort((m, n) => primary(m) - primary(n));
+      const directDepth = depth(first) + Math.min(height(first), height(last)) / 2;
+      const directStart = primary(first) + breadth(first);
+      const directEnd = primary(last);
+      const blocked = visibleMembers.some(m => m.id !== a.id && m.id !== b.id &&
+        primary(m) < directEnd && primary(m) + breadth(m) > directStart &&
+        depth(m) < directDepth + 6 && depthEnd(m) > directDepth - 6);
+      let points, anchorP, anchorD;
+      if (Math.abs(depth(a) - depth(b)) < 1 && directEnd > directStart && !blocked) {
+        points = [[directStart, directDepth], [directEnd, directDepth]];
+        anchorP = (directStart + directEnd) / 2;
+        anchorD = directDepth;
+      } else {
+        const row = divorced ? Math.min(depth(a), depth(b)) : Math.max(depthEnd(a), depthEnd(b));
+        const laneKey = `${divorced ? 'above' : 'below'}|${row}`;
+        const lane = outerLanes.get(laneKey) || 0;
+        outerLanes.set(laneKey, lane + 1);
+        anchorD = row + (divorced ? -1 : 1) * (20 + lane * 12);
+        anchorP = (center(first) + center(last)) / 2;
+        points = [
+          [center(first), divorced ? depth(first) : depthEnd(first)],
+          [center(first), anchorD], [center(last), anchorD],
+          [center(last), divorced ? depth(last) : depthEnd(last)]
+        ];
+      }
+      pairs.set(key, { a, b, divorced, d: path(points), anchorP, anchorD });
+    };
+    visibleMembers.forEach(m => {
+      const spouse = m.spouseId && visibleIds.has(m.spouseId) && Store.byId(m.spouseId);
+      if (spouse) addPair(m, spouse, false);
+    });
+    visibleMembers.forEach(m => (m.exSpouseIds || []).forEach(id => {
+      const ex = visibleIds.has(id) && Store.byId(id);
+      if (ex) addPair(m, ex, true);
+    }));
 
-    // Family grouping:
-    //   - If a child has two parents who are CURRENTLY married → group under
-    //     the couple (unified trunk anchored at spouse-line midpoint).
-    //   - Otherwise (single parent, or two parents who aren't currently
-    //     married — divorced co-parents, never-married co-parents, etc.) →
-    //     each parent gets its own solo line to that child. This avoids
-    //     drawing long horizontal connectors across the canvas between
-    //     ex-partners who may now sit far apart.
+    // Married parents share a trunk. Unmarried / former partners keep their
+    // own branches, so a marriage is never implied by a descent connector.
     const families = new Map();
-    const addToSolo = (parentId, child) => {
-      const key = 'solo|' + parentId;
-      if (!families.has(key)) families.set(key, { parentIds: [parentId], children: [], type: 'solo' });
-      families.get(key).children.push(child);
+    const addFamily = (parentIds, child) => {
+      const key = familyKey(parentIds);
+      if (!families.has(key)) families.set(key, { key, parentIds, children: [] });
+      const family = families.get(key);
+      if (!family.children.some(c => c.id === child.id)) family.children.push(child);
     };
     visibleMembers.forEach(child => {
-      const parents = (child.parentIds || []).filter(id => visibleIds.has(id));
+      const parents = unique(child.parentIds || []).filter(id => visibleIds.has(id) && Store.byId(id));
       if (!parents.length) return;
-      if (parents.length === 1) { addToSolo(parents[0], child); return; }
-      // Find a currently-married pair within the parents
       let couple = null;
-      outer:
-      for (let i = 0; i < parents.length; i++) {
+      for (let i = 0; i < parents.length && !couple; i++) {
         for (let j = i + 1; j < parents.length; j++) {
-          const a = Store.byId(parents[i]), b = Store.byId(parents[j]);
-          if (a && b && a.spouseId === b.id) { couple = [parents[i], parents[j]]; break outer; }
-        }
-      }
-      if (couple) {
-        const key = 'couple|' + couple.slice().sort().join('|');
-        if (!families.has(key)) families.set(key, { parentIds: couple, children: [], type: 'couple' });
-        families.get(key).children.push(child);
-        // Any remaining parents (rare — a third co-parent) get their own solo line.
-        parents.filter(p => !couple.includes(p)).forEach(p => addToSolo(p, child));
-      } else {
-        // No currently-married pair; render a separate solo line from each parent.
-        parents.forEach(p => addToSolo(p, child));
-      }
-    });
-
-    // Bucket families by depth axis so we can assign Y-stagger lanes per row,
-    // preventing adjacent couples' trunks from merging into a single visual line.
-    const familyArr = [...families.values()].map(f => {
-      const ps = f.parentIds.map(id => Store.byId(id)).filter(Boolean);
-      const depthCoord = orientation === 'vertical'
-        ? Math.max(...ps.map(p => p.y))
-        : Math.max(...ps.map(p => p.x));
-      const primaryCoord = orientation === 'vertical'
-        ? ps.reduce((s, p) => s + p.x + NODE_W / 2, 0) / ps.length
-        : ps.reduce((s, p) => s + p.y + NODE_H / 2, 0) / ps.length;
-      return { ...f, _ps: ps, _depth: depthCoord, _primary: primaryCoord, _key: familyKey(f.parentIds) };
-    });
-    const hueMap = buildFamilyHueMap(familyArr.map(f => f._key));
-    const lanesByDepth = new Map();
-    familyArr.sort((a, b) => a._depth - b._depth || a._primary - b._primary)
-      .forEach(f => {
-        const key = f._depth;
-        if (!lanesByDepth.has(key)) lanesByDepth.set(key, 0);
-        f._lane = lanesByDepth.get(key);
-        lanesByDepth.set(key, f._lane + 1);
-      });
-    const LANE_OFFSET = 14;
-
-    // Single unified trunk geometry for both single-parent and couple families.
-    familyArr.forEach(({ parentIds, children, _ps: ps, _lane, _key }) => {
-      if (!ps.length) return;
-      const areSpouses = ps.length === 2 && ps[0].spouseId === ps[1].id;
-      const hue = hueMap.get(_key) ?? 0;
-      const stroke = `hsl(${hue} 60% 38%)`;
-      // v4.69: every edge carries the member ids it connects (data-m) so the
-      // relationship spotlight (Canvas.spotlight) can light exactly the paths
-      // that touch the hovered / selected person and dim the rest.
-      const famIds = [...parentIds, ...children.map(c => c.id)].join(' ');
-      const styleAttr = `style="stroke: ${stroke}" data-m="${famIds}"`;
-      const childAttr = (c) => `style="stroke: ${stroke}" data-m="${[...parentIds, c.id].join(' ')}"`;
-      const fLane = (_lane % 3) * LANE_OFFSET;   // 0, 14, 28 → break visual continuity
-      let anchorX, anchorY;
-
-      if (orientation === 'vertical') {
-        if (ps.length === 1) {
-          anchorX = cx(ps[0]); anchorY = ps[0].y + NODE_H;
-        } else if (areSpouses) {
-          const sortedP = ps.slice().sort((a, b) => a.x - b.x);
-          anchorY = Math.max(...ps.map(p => p.y)) + NODE_H * 0.5;
-          anchorX = (sortedP[0].x + NODE_W + sortedP[1].x) / 2;
-        } else {
-          anchorY = Math.max(...ps.map(p => p.y)) + NODE_H;
-          anchorX = ps.reduce((s, p) => s + cx(p), 0) / ps.length;
-        }
-        const minChildTop = Math.min(...children.map(c => c.y));
-        const baseY = anchorY + Math.max(24, (minChildTop - anchorY) / 2);
-        const trunkY = baseY - 18 + fLane;
-        lines.push(`<path class="edge family" ${styleAttr} d="M ${anchorX} ${anchorY} V ${trunkY}"/>`);
-        const xs = [anchorX, ...children.map(cx)];
-        const trunkL = Math.min(...xs), trunkR = Math.max(...xs);
-        if (trunkR - trunkL > 0.5) lines.push(`<path class="edge family" ${styleAttr} d="M ${trunkL} ${trunkY} H ${trunkR}"/>`);
-        children.forEach(c => lines.push(`<path class="edge family" ${childAttr(c)} d="M ${cx(c)} ${trunkY} V ${c.y}"/>`));
-      } else {
-        if (ps.length === 1) {
-          anchorX = ps[0].x + NODE_W; anchorY = cy(ps[0]);
-        } else if (areSpouses) {
-          const sortedP = ps.slice().sort((a, b) => a.y - b.y);
-          anchorX = Math.max(...ps.map(p => p.x)) + NODE_W * 0.5;
-          anchorY = (sortedP[0].y + NODE_H + sortedP[1].y) / 2;
-        } else {
-          anchorX = Math.max(...ps.map(p => p.x)) + NODE_W;
-          anchorY = ps.reduce((s, p) => s + cy(p), 0) / ps.length;
-        }
-        const minChildLeft = Math.min(...children.map(c => c.x));
-        const baseX = anchorX + Math.max(24, (minChildLeft - anchorX) / 2);
-        const trunkX = baseX - 18 + fLane;
-        lines.push(`<path class="edge family" ${styleAttr} d="M ${anchorX} ${anchorY} H ${trunkX}"/>`);
-        const ys = [anchorY, ...children.map(cy)];
-        const trunkT = Math.min(...ys), trunkB = Math.max(...ys);
-        if (trunkB - trunkT > 0.5) lines.push(`<path class="edge family" ${styleAttr} d="M ${trunkX} ${trunkT} V ${trunkB}"/>`);
-        children.forEach(c => lines.push(`<path class="edge family" ${childAttr(c)} d="M ${trunkX} ${cy(c)} H ${c.x}"/>`));
-      }
-    });
-
-    // sibling bracket: connect sibling-linked groups that have no shared visible parent
-    const handled = new Set();
-    visibleMembers.forEach(m => {
-      if (handled.has(m.id)) return;
-      const groupIds = unique([m.id, ...(m.siblingLinkIds || [])]).filter(id => visibleIds.has(id));
-      if (groupIds.length < 2) return;
-      const groupMembers = groupIds.map(id => Store.byId(id)).filter(Boolean);
-      // skip if any pair already shares a visible parent — the family trunk handles them
-      let sharesParent = false;
-      outer:
-      for (let i = 0; i < groupMembers.length; i++) {
-        const ai = (groupMembers[i].parentIds || []).filter(p => visibleIds.has(p));
-        for (let j = i + 1; j < groupMembers.length; j++) {
-          const bj = (groupMembers[j].parentIds || []).filter(p => visibleIds.has(p));
-          if (ai.some(p => bj.includes(p))) { sharesParent = true; break outer; }
-        }
-      }
-      if (sharesParent) { groupIds.forEach(id => handled.add(id)); return; }
-
-      const sibAttr = `data-m="${groupIds.join(' ')}"`;
-      if (orientation === 'vertical') {
-        const sorted = groupMembers.slice().sort((a, b) => a.x - b.x);
-        const y = Math.min(...sorted.map(s => s.y)) - 26;
-        const xs = sorted.map(s => s.x + NODE_W / 2);
-        const xMin = Math.min(...xs), xMax = Math.max(...xs);
-        if (xMax - xMin > 0.5) lines.push(`<path class="edge sibling" ${sibAttr} d="M ${xMin} ${y} H ${xMax}"/>`);
-        sorted.forEach(s => lines.push(`<path class="edge sibling" ${sibAttr} d="M ${s.x + NODE_W / 2} ${y} V ${s.y}"/>`));
-        // small "siblings" tick at midpoint
-        const midX = (xMin + xMax) / 2;
-        lines.push(`<g class="sibling-badge" ${sibAttr} transform="translate(${midX} ${y - 10})"><rect x="-22" y="-9" width="44" height="18" rx="9" fill="var(--paper-soft)" stroke="var(--ink-300)" stroke-width="1"/><text x="0" y="3.5" font-family="Inter, system-ui" font-size="9" font-weight="600" fill="var(--ink-500)" text-anchor="middle" letter-spacing=".06em">SIBLINGS</text></g>`);
-      } else {
-        const sorted = groupMembers.slice().sort((a, b) => a.y - b.y);
-        const x = Math.min(...sorted.map(s => s.x)) - 26;
-        const ys = sorted.map(s => s.y + NODE_H / 2);
-        const yMin = Math.min(...ys), yMax = Math.max(...ys);
-        if (yMax - yMin > 0.5) lines.push(`<path class="edge sibling" ${sibAttr} d="M ${x} ${yMin} V ${yMax}"/>`);
-        sorted.forEach(s => lines.push(`<path class="edge sibling" ${sibAttr} d="M ${x} ${s.y + NODE_H / 2} H ${s.x}"/>`));
-      }
-      groupIds.forEach(id => handled.add(id));
-    });
-
-    // spouse + ex-spouse connectors. Pairs are drawn once each — keyed by
-    // the sorted (id, id) tuple — so multi-spouse clusters don't duplicate.
-    const drawnPair = new Set();
-    const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
-    const drawPair = (m, s, divorced) => {
-      let mx, my;
-      const pairAttr = `data-m="${m.id} ${s.id}"`;
-      if (orientation === 'vertical') {
-        const left = m.x < s.x ? m : s, right = m.x < s.x ? s : m;
-        const y = Math.max(left.y, right.y) + NODE_H * 0.5;
-        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
-        lines.push(`<path class="${cls}" ${pairAttr} d="M ${left.x + NODE_W} ${y} H ${right.x}"/>`);
-        mx = (left.x + NODE_W + right.x) / 2;
-        my = y;
-      } else {
-        const top = m.y < s.y ? m : s, bot = m.y < s.y ? s : m;
-        const x = Math.max(top.x, bot.x) + NODE_W * 0.5;
-        const cls = divorced ? 'edge spouse ex' : 'edge spouse';
-        lines.push(`<path class="${cls}" ${pairAttr} d="M ${x} ${top.y + NODE_H} V ${bot.y}"/>`);
-        mx = x;
-        my = (top.y + NODE_H + bot.y) / 2;
-      }
-      lines.push(heartMarker(mx, my, divorced, `${m.id} ${s.id}`));
-      return { mx, my };
-    };
-
-    visibleMembers.forEach(m => {
-      // current spouse (solid heart)
-      if (m.spouseId && visibleIds.has(m.spouseId)) {
-        const s = Store.byId(m.spouseId);
-        const key = pairKey(m.id, m.spouseId);
-        if (s && !drawnPair.has(key)) {
-          drawnPair.add(key);
-          const { mx, my } = drawPair(m, s, false);
-          // "X yrs" chip near the heart for current couples with an anniversary on file.
-          const aniso = m.anniversary || s.anniversary || '';
-          if (aniso) {
-            const yrs = yearsTogether(aniso);
-            if (yrs != null) {
-              const isVertical = orientation === 'vertical';
-              const lx = isVertical ? mx + 16 : mx;
-              const ly = isVertical ? my + 4  : my + 22;
-              const anchor = isVertical ? 'start' : 'middle';
-              lines.push(
-                `<text class="spouse-years" data-m="${m.id} ${s.id}" x="${lx}" y="${ly}" text-anchor="${anchor}">${yrs} yr${yrs === 1 ? '' : 's'}</text>`
-              );
-            }
+          if (Store.byId(parents[i]).spouseId === parents[j] || Store.byId(parents[j]).spouseId === parents[i]) {
+            couple = [parents[i], parents[j]]; break;
           }
         }
       }
-      // ex-spouses (broken heart, one per pair)
-      (m.exSpouseIds || []).forEach(eid => {
-        if (!visibleIds.has(eid)) return;
-        const ex = Store.byId(eid); if (!ex) return;
-        const key = pairKey(m.id, eid);
-        if (drawnPair.has(key)) return;
-        drawnPair.add(key);
-        drawPair(m, ex, true);
+      if (couple) addFamily(couple, child);
+      parents.filter(id => !couple || !couple.includes(id)).forEach(id => addFamily([id], child));
+    });
+
+    const familyArr = [...families.values()].map(f => {
+      const ps = f.parentIds.map(id => Store.byId(id));
+      const pair = ps.length === 2 && pairs.get(pairKey(ps[0].id, ps[1].id));
+      const parentBottom = Math.max(...ps.map(depthEnd));
+      const parentRow = Math.max(...ps.map(depth));
+      const anchorP = pair ? pair.anchorP : center(ps[0]);
+      const anchorD = pair ? pair.anchorD : parentBottom;
+      const childTop = Math.min(...f.children.map(depth));
+      // The routing bar belongs BETWEEN generations, even for couples whose
+      // heart sits halfway down the parent cards.
+      const low = Math.max(parentBottom, anchorD) + 12;
+      const high = childTop - 12;
+      const span = [anchorP, ...f.children.map(center)];
+      return { ...f, anchorP, anchorD, parentBottom, parentRow, low, high,
+        left: Math.min(...span) - 12, right: Math.max(...span) + 12 };
+    });
+
+    // Allocate lanes only to overlapping sibling bars. Unrelated families
+    // can reuse a lane; intersecting families never wrap after three lanes.
+    const rows = new Map();
+    familyArr.sort((a, b) => a.parentRow - b.parentRow || a.left - b.left || a.key.localeCompare(b.key))
+      .forEach(f => {
+        const rowKey = Math.round(f.parentRow);
+        if (!rows.has(rowKey)) rows.set(rowKey, []);
+        rows.get(rowKey).push(f);
+      });
+    rows.forEach(row => {
+      const laneEnds = [];
+      row.forEach(f => {
+        let lane = laneEnds.findIndex(end => end + 16 < f.left);
+        if (lane === -1) lane = laneEnds.length;
+        laneEnds[lane] = f.right;
+        f.lane = lane;
+      });
+      // Use a common safe corridor so two families with children at different
+      // depths do not accidentally receive the same physical routing lane.
+      const low = Math.max(...row.map(f => f.low));
+      const high = Math.min(...row.map(f => f.high));
+      const count = laneEnds.length;
+      row.forEach(f => {
+        f.bar = high >= low ? low + (high - low) * (f.lane + 1) / (count + 1)
+          : f.low + f.lane * 10;
       });
     });
 
+    // Separate entry ports for co-parent branches. Without this offset their
+    // final segments overlap and appear to merge into a shared marriage.
+    const childFamilies = new Map();
+    familyArr.forEach(f => f.children.forEach(c => {
+      if (!childFamilies.has(c.id)) childFamilies.set(c.id, []);
+      childFamilies.get(c.id).push(f.key);
+    }));
+    childFamilies.forEach(keys => keys.sort());
+    const childPort = (child, key) => {
+      const keys = childFamilies.get(child.id);
+      const step = Math.min(14, breadth(child) / (keys.length + 1));
+      return center(child) + (keys.indexOf(key) - (keys.length - 1) / 2) * step;
+    };
+
+    familyArr.forEach(f => {
+      const color = branchColor(f.key);
+      const ids = [...f.parentIds, ...f.children.map(c => c.id)];
+      const ports = f.children.map(c => childPort(c, f.key));
+      const parts = [
+        { d: path([[f.anchorP, f.anchorD], [f.anchorP, f.bar]]), ids },
+        { d: path([[Math.min(f.anchorP, ...ports), f.bar], [Math.max(f.anchorP, ...ports), f.bar]]), ids },
+        ...f.children.map((c, i) => ({ d: path([[ports[i], f.bar], [ports[i], depth(c)]]), ids: [...f.parentIds, c.id] }))
+      ];
+      // Paint each entire family's paper underlay before its color. At a
+      // crossing the upper branch stays continuous and the lower has a gap;
+      // only real connections receive a junction dot.
+      lines.push(...parts.map(p => halo(p.d, p.ids)));
+      lines.push(...parts.map(p => edge(p.d, p.ids, 'family', color)));
+      const junctions = new Map([[f.anchorP, ids]]);
+      ports.forEach((p, i) => junctions.set(p, [...f.parentIds, f.children[i].id]));
+      junctions.forEach((memberIds, p) => lines.push(dot(p, f.bar, memberIds, color)));
+    });
+
+    // Explicit sibling groups without visible parents keep their distinct
+    // dashed bracket; a descent trunk already covers groups sharing parents.
+    const handled = new Set();
+    visibleMembers.forEach(m => {
+      if (handled.has(m.id)) return;
+      const ids = unique([m.id, ...(m.siblingLinkIds || [])]).filter(id => visibleIds.has(id));
+      const siblings = ids.map(id => Store.byId(id)).filter(Boolean);
+      if (siblings.length < 2) return;
+      const sharesParent = siblings.some((a, i) => siblings.slice(i + 1).some(b =>
+        (a.parentIds || []).some(id => visibleIds.has(id) && (b.parentIds || []).includes(id))));
+      ids.forEach(id => handled.add(id));
+      if (sharesParent) return;
+      const bar = Math.min(...siblings.map(depth)) - 26;
+      const left = Math.min(...siblings.map(center)), right = Math.max(...siblings.map(center));
+      const parts = [path([[left, bar], [right, bar]]),
+        ...siblings.map(s => path([[center(s), bar], [center(s), depth(s)]]))];
+      lines.push(...parts.map(d => halo(d, ids)), ...parts.map(d => edge(d, ids, 'sibling')));
+      const [x, y] = point((left + right) / 2, bar - 12);
+      lines.push(`<g class="sibling-badge" ${memberAttr(ids)} transform="translate(${x} ${y})"><rect x="-31" y="-9" width="62" height="18" rx="9" fill="var(--paper-soft)" stroke="var(--ink-300)" stroke-width="1"/><text x="0" y="3.5" font-family="Inter, system-ui" font-size="9" font-weight="600" fill="var(--ink-500)" text-anchor="middle" letter-spacing=".06em">SIBLINGS</text></g>`);
+    });
+
+    pairs.forEach(({ a, b, divorced, d, anchorP, anchorD }) => {
+      const ids = [a.id, b.id];
+      lines.push(halo(d, ids), edge(d, ids, divorced ? 'spouse ex' : 'spouse'));
+      const [mx, my] = point(anchorP, anchorD);
+      lines.push(heartMarker(mx, my, divorced, ids.join(' ')));
+      const aniso = !divorced && (a.anniversary || b.anniversary);
+      if (aniso) {
+        const years = yearsTogether(aniso);
+        if (years != null) lines.push(`<text class="spouse-years" ${memberAttr(ids)} x="${vertical ? mx + 20 : mx}" y="${vertical ? my + 4 : my + 25}" text-anchor="${vertical ? 'start' : 'middle'}">${years} yr${years === 1 ? '' : 's'}</text>`);
+      }
+    });
     this.edges.innerHTML = lines.join('');
   },
   renderNodes(visibleIdsIn) {
@@ -3329,6 +3360,19 @@ const Canvas = {
   bindNodes() {
     this.nodes.querySelectorAll('.node').forEach(node => {
       const id = node.dataset.id;
+      node.tabIndex = 0;
+      node.setAttribute('role', 'group');
+      node.setAttribute('aria-label', `${displayName(Store.byId(id))}. Press Enter to trace family connections.`);
+      node.addEventListener('keydown', e => {
+        if (e.target !== node) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault(); TreeExplorer.select(id);
+          Canvas.el.focus({ preventScroll: true });
+        }
+        if (e.key === 'Escape') TreeExplorer.clear();
+      });
+      node.addEventListener('focusin', () => Canvas.spotlight(id));
+      node.addEventListener('focusout', () => Canvas.spotlight(Canvas._pinnedId || null));
 
       // contextual "+" button → add relative linked to this person
       const addBtn = node.querySelector('.node-add');
@@ -3381,13 +3425,12 @@ const Canvas = {
         // Quick-links inside the card (e.g. the 529 chip) should open in a
         // new tab without also triggering the drawer.
         if (e.target.closest('[data-stop-node-click]')) return;
-        // Admins and the Family role can open any card. Plain Users can't
-        // browse the tree drawer-by-drawer (they use My Family for that).
-        if (!Auth.canOpenTreeDrawer()) return;
+        // All viewers can trace relationships. Profile access remains gated
+        // separately on the selection panel's View profile action.
         // Skip the drawer if the click followed a drag (>4px movement).
         const dx = Math.abs(e.clientX - pressX), dy = Math.abs(e.clientY - pressY);
         if (Store.state.editLayout && (moved || dx > 4 || dy > 4)) return;
-        Drawer.open(id);
+        TreeExplorer.select(id);
       });
       // Expose pointer-move tracking to the drag module so it can flip
       // the local `moved` flag for the click guard above.
@@ -3662,8 +3705,9 @@ const Drawer = {
     // Release the relationship spotlight pin (v4.69).
     document.querySelectorAll('.node.is-selected').forEach(n => n.classList.remove('is-selected'));
     if (typeof Canvas !== 'undefined') {
-      Canvas._pinnedId = null;
-      Canvas.spotlight(null);
+      Canvas._pinnedId = TreeExplorer.selectedId || null;
+      Canvas.spotlight(Canvas._pinnedId);
+      TreeExplorer.render();
     }
   },
   renderView() {
@@ -4252,7 +4296,10 @@ const Views = {
       if (name === 'chat')      ChatView.render();
       if (name === 'timecapsule') TimeCapsuleView.render();
       if (name === 'stories')   StoriesView.render();
-      if (name === 'tree')      Canvas.renderAll();
+      if (name === 'tree') {
+        Canvas.renderAll();
+        if (!Canvas._hasFitted) Canvas.fit();
+      }
     }, 0);
   },
 };
@@ -10561,7 +10608,7 @@ async function syncAdminFlagsFromState() {
 function bindTreeToolbar() {
   on($('#btn-zoom-in'),    'click', () => Canvas.zoomTo(Canvas.scale * 1.2));
   on($('#btn-zoom-out'),   'click', () => Canvas.zoomTo(Canvas.scale / 1.2));
-  on($('#btn-zoom-reset'), 'click', () => { Canvas.scale = 1; Canvas.tx = 100; Canvas.ty = 60; Canvas.apply(); });
+  on($('#btn-zoom-reset'), 'click', () => Canvas.zoomTo(1));
   on($('#btn-fit'),        'click', () => Canvas.fit());
   on($('#btn-auto-layout'),'click', () => {
     // Explicit "Auto-arrange" wipes any manual positioning so the tree
@@ -10615,22 +10662,7 @@ function bindTreeToolbar() {
   on($('#btn-add-first'),  'click', () => MemberModal.open());
   $$('.nav-tab').forEach(tab => on(tab, 'click', () => Views.show(tab.dataset.view)));
 
-  on($('#tree-search'), 'input', (e) => {
-    const q = e.target.value.toLowerCase().trim();
-    const matches = new Set();
-    if (q) {
-      Store.membersList().forEach(m => {
-        if ((`${m.firstName} ${m.middleName || ''} ${m.lastName} ${m.displayName || ''}`).toLowerCase().includes(q)) {
-          matches.add(m.id);
-        }
-      });
-    }
-    $$('.tree-nodes .node').forEach(n => {
-      const id = n.dataset.id;
-      n.classList.toggle('is-search-match', q && matches.has(id));
-      n.classList.toggle('is-faded', q && !matches.has(id));
-    });
-  });
+  TreeExplorer.init();
 
   TreeFilters.init();
 }
