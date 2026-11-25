@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    { "source": "/sky", "destination": "/sky/", "permanent": true }
+  ],
+  "rewrites": [
+    { "source": "/sky/", "destination": "https://skyhatch-godot.vercel.app/" },
+    { "source": "/sky/:path*", "destination": "https://skyhatch-godot.vercel.app/:path*" }
+  ]
+}
